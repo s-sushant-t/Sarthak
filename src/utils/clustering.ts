@@ -1,4 +1,4 @@
-import * as turf from '@turf/turf';
+import clustersDbscan from '@turf/clusters-dbscan';
 import { point, featureCollection } from '@turf/helpers';
 import { Customer, ClusteredCustomer } from '../types';
 
@@ -10,10 +10,7 @@ export const clusterCustomers = (
   const TARGET_SIZE = 195;
   
   let optimalDistance = 2; // Start with 2km
-  let bestClustering: ClusteredCustomer[] = customers.map(customer => ({
-    ...customer,
-    clusterId: 0
-  })); // Initialize with default clustering
+  let bestClustering: ClusteredCustomer[] = [];
   let bestScore = Infinity;
   
   // Binary search for optimal distance
@@ -30,7 +27,7 @@ export const clusterCustomers = (
     );
     
     const pointCollection = featureCollection(points);
-    const clustered = turf.clustersDbscan(pointCollection, optimalDistance, {
+    const clustered = clustersDbscan(pointCollection, optimalDistance, {
       minPoints: MIN_CLUSTER_SIZE,
       units: 'kilometers'
     });
@@ -83,8 +80,8 @@ export const clusterCustomers = (
   }
   
   // If no valid clustering found, create balanced clusters manually
-  if (bestScore === Infinity) {
-    console.log('Could not achieve ideal cluster sizes, using manual balancing');
+  if (bestClustering.length === 0 || bestScore === Infinity) {
+    console.warn('Could not achieve ideal cluster sizes, using manual balancing');
     return customers.map((customer, index) => ({
       ...customer,
       clusterId: Math.floor(index / TARGET_SIZE)
