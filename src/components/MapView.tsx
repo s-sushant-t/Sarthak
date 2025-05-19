@@ -37,6 +37,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
   const [selectedCluster, setSelectedCluster] = useState<number | null>(null);
   const [selectedSalesman, setSelectedSalesman] = useState<number | null>(null);
   const [clusterStats, setClusterStats] = useState<Record<number, { count: number; distance: number }>>({});
+  const [clusterPolygons, setClusterPolygons] = useState<L.Polygon[]>([]);
 
   const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
     const R = 6371;
@@ -133,6 +134,96 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       return CLUSTER_COLORS[0];
     }
     return CLUSTER_COLORS[route.clusterIds[0] % CLUSTER_COLORS.length];
+  };
+
+  const createClusterPolygons = () => {
+    if (!mapRef.current) return;
+
+    // Remove existing polygons
+    clusterPolygons.forEach(polygon => polygon.remove());
+
+    // Group stops by cluster
+    const clusterStops: Record<number, [number, number][]> = {};
+    routes.forEach(route => {
+      route.stops.forEach(stop => {
+        if (!clusterStops[stop.clusterId]) {
+          clusterStops[stop.clusterId] = [];
+        }
+        clusterStops[stop.clusterId].push([stop.latitude, stop.longitude]);
+      });
+    });
+
+    // Create convex hull for each cluster
+    const newPolygons: L.Polygon[] = [];
+    Object.entries(clusterStops).forEach(([clusterId, stops]) => {
+      if (stops.length < 3) return; // Need at least 3 points for a polygon
+
+      // Create a simple convex hull using the Graham scan algorithm
+      const hull = grahamScan(stops);
+      if (!hull || hull.length < 3) return;
+
+      const color = CLUSTER_COLORS[Number(clusterId) % CLUSTER_COLORS.length];
+      const polygon = L.polygon(hull, {
+        color,
+        fillColor: color,
+        fillOpacity: 0.1,
+        weight: 2,
+        opacity: 0.8
+      }).addTo(mapRef.current);
+
+      polygon.bindTooltip(`Cluster ${clusterId} - ${stops.length} outlets`, {
+        permanent: false,
+        direction: 'center'
+      });
+
+      newPolygons.push(polygon);
+    });
+
+    setClusterPolygons(newPolygons);
+  };
+
+  // Graham Scan algorithm for convex hull
+  const grahamScan = (points: [number, number][]): [number, number][] => {
+    if (points.length < 3) return points;
+
+    // Find the point with the lowest y-coordinate (and leftmost if tied)
+    let bottomPoint = points[0];
+    for (let i = 1; i < points.length; i++) {
+      if (points[i][1] < bottomPoint[1] || 
+         (points[i][1] === bottomPoint[1] && points[i][0] < bottomPoint[0])) {
+        bottomPoint = points[i];
+      }
+    }
+
+    // Sort points by polar angle with respect to bottom point
+    const sortedPoints = points
+      .filter(p => p !== bottomPoint)
+      .sort((a, b) => {
+        const angleA = Math.atan2(a[1] - bottomPoint[1], a[0] - bottomPoint[0]);
+        const angleB = Math.atan2(b[1] - bottomPoint[1], b[0] - bottomPoint[0]);
+        return angleA - angleB;
+      });
+
+    // Initialize stack with first three points
+    const stack: [number, number][] = [bottomPoint, sortedPoints[0]];
+
+    // Process remaining points
+    for (let i = 1; i < sortedPoints.length; i++) {
+      while (stack.length > 1 && !isLeftTurn(
+        stack[stack.length - 2],
+        stack[stack.length - 1],
+        sortedPoints[i]
+      )) {
+        stack.pop();
+      }
+      stack.push(sortedPoints[i]);
+    }
+
+    return stack;
+  };
+
+  const isLeftTurn = (p1: [number, number], p2: [number, number], p3: [number, number]): boolean => {
+    return ((p2[0] - p1[0]) * (p3[1] - p1[1]) - (p2[1] - p1[1]) * (p3[0] - p1[0])) > 0;
   };
 
   useEffect(() => {
@@ -368,6 +459,12 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       routeLayersRef.current = [];
     };
   }, [locationData, routes, selectedCluster, selectedSalesman]);
+
+  useEffect(() => {
+    if (mapRef.current && routes.length > 0) {
+      createClusterPolygons();
+    }
+  }, [routes, selectedCluster]);
 
   return (
     <div className="flex flex-col h-full">
