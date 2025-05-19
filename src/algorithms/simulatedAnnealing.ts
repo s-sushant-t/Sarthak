@@ -9,14 +9,15 @@ const TRAVEL_SPEED = 30;
 export const simulatedAnnealing = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  // Group customers by cluster
-  const customersByCluster = customers.reduce((acc, customer) => {
-    if (!acc[customer.clusterId]) {
-      acc[customer.clusterId] = [];
+  // Group customers by cluster with type safety
+  const customersByCluster = customers.reduce<Record<number, ClusteredCustomer[]>>((acc, customer) => {
+    const clusterId = customer.clusterId;
+    if (!acc[clusterId]) {
+      acc[clusterId] = [];
     }
-    acc[customer.clusterId].push(customer);
+    acc[clusterId].push(customer);
     return acc;
-  }, {} as Record<number, ClusteredCustomer[]>);
+  }, {});
   
   // Parameters for simulated annealing
   const INITIAL_TEMPERATURE = 100;
@@ -76,9 +77,13 @@ function createInitialSolution(
   const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
   
-  // Iterate over cluster IDs using Object.keys
-  for (const clusterId of Object.keys(customersByCluster)) {
-    const clusterCustomers = [...customersByCluster[Number(clusterId)]];
+  // Get cluster IDs and ensure they're sorted numerically
+  const clusterIds = Object.keys(customersByCluster)
+    .map(Number)
+    .sort((a, b) => a - b);
+  
+  for (const clusterId of clusterIds) {
+    const clusterCustomers = [...customersByCluster[clusterId]];
     
     while (clusterCustomers.length > 0) {
       const route: SalesmanRoute = {
@@ -86,7 +91,7 @@ function createInitialSolution(
         stops: [],
         totalDistance: 0,
         totalTime: 0,
-        clusterIds: [Number(clusterId)]
+        clusterIds: [clusterId]
       };
       
       let currentLat = distributor.latitude;
