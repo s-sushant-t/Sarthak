@@ -35,7 +35,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
   const [dragEndPosition, setDragEndPosition] = useState<{ lat: number; lng: number } | null>(null);
   const [originalPosition, setOriginalPosition] = useState<{ lat: number; lng: number } | null>(null);
   const [selectedCluster, setSelectedCluster] = useState<number | null>(null);
-  const [selectedSalesman, setSelectedSalesman] = useState<number | null>(null);
+  const [selectedBeat, setSelectedBeat] = useState<number | null>(null);
   const [clusterStats, setClusterStats] = useState<Record<number, { count: number; distance: number }>>({});
   const [clusterPolygons, setClusterPolygons] = useState<L.Polygon[]>([]);
 
@@ -139,10 +139,8 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
   const createClusterPolygons = () => {
     if (!mapRef.current) return;
 
-    // Remove existing polygons
     clusterPolygons.forEach(polygon => polygon.remove());
 
-    // Group stops by cluster
     const clusterStops: Record<number, [number, number][]> = {};
     routes.forEach(route => {
       route.stops.forEach(stop => {
@@ -153,12 +151,10 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       });
     });
 
-    // Create convex hull for each cluster
     const newPolygons: L.Polygon[] = [];
     Object.entries(clusterStops).forEach(([clusterId, stops]) => {
-      if (stops.length < 3) return; // Need at least 3 points for a polygon
+      if (stops.length < 3) return;
 
-      // Create a simple convex hull using the Graham scan algorithm
       const hull = grahamScan(stops);
       if (!hull || hull.length < 3) return;
 
@@ -182,11 +178,9 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
     setClusterPolygons(newPolygons);
   };
 
-  // Graham Scan algorithm for convex hull
   const grahamScan = (points: [number, number][]): [number, number][] => {
     if (points.length < 3) return points;
 
-    // Find the point with the lowest y-coordinate (and leftmost if tied)
     let bottomPoint = points[0];
     for (let i = 1; i < points.length; i++) {
       if (points[i][1] < bottomPoint[1] || 
@@ -195,7 +189,6 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       }
     }
 
-    // Sort points by polar angle with respect to bottom point
     const sortedPoints = points
       .filter(p => p !== bottomPoint)
       .sort((a, b) => {
@@ -204,10 +197,8 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
         return angleA - angleB;
       });
 
-    // Initialize stack with first three points
     const stack: [number, number][] = [bottomPoint, sortedPoints[0]];
 
-    // Process remaining points
     for (let i = 1; i < sortedPoints.length; i++) {
       while (stack.length > 1 && !isLeftTurn(
         stack[stack.length - 2],
@@ -227,7 +218,6 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
   };
 
   useEffect(() => {
-    // Calculate cluster statistics
     const stats: Record<number, { count: number; distance: number }> = {};
     routes.forEach(route => {
       route.stops.forEach(stop => {
@@ -251,9 +241,9 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       marker.setOpacity(0);
     });
 
-    routes.forEach((route, routeIndex) => {
+    routes.forEach((route) => {
       const shouldShowRoute = (selectedCluster === null || route.stops.some(stop => stop.clusterId === selectedCluster)) &&
-                            (selectedSalesman === null || route.salesmanId === selectedSalesman);
+                            (selectedBeat === null || route.salesmanId === selectedBeat);
 
       if (!shouldShowRoute) return;
 
@@ -266,7 +256,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
 
       route.stops.forEach(stop => {
         if ((selectedCluster === null || stop.clusterId === selectedCluster) &&
-            (selectedSalesman === null || route.salesmanId === selectedSalesman)) {
+            (selectedBeat === null || route.salesmanId === selectedBeat)) {
           const marker = markersRef.current[stop.customerId];
           if (marker) marker.setOpacity(1);
         }
@@ -279,7 +269,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       }).addTo(mapRef.current);
 
       routePath.bindTooltip(
-        `Salesman ${route.salesmanId} Route<br>` +
+        `Beat ${route.salesmanId} Route<br>` +
         `Cluster ${route.clusterIds?.join(', ') || 'N/A'}<br>` +
         `Total Distance: ${route.totalDistance.toFixed(2)} km<br>` +
         `Total Time: ${Math.round(route.totalTime)} min`,
@@ -356,7 +346,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
           markersRef.current[stop.customerId] = marker;
 
           marker.on('dragstart', () => {
-            setDraggedStop({ stop, routeIndex });
+            setDraggedStop({ stop, routeIndex: routes.indexOf(route) });
             setIsDragging(true);
             setOriginalPosition({ lat: stop.latitude, lng: stop.longitude });
           });
@@ -369,7 +359,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
             let minDistance = Infinity;
 
             routes.forEach((r, idx) => {
-              if (idx === routeIndex) return;
+              if (idx === routes.indexOf(route)) return;
 
               const routePoints = r.stops.map(s => L.latLng(s.latitude, s.longitude));
               routePoints.forEach((point, i) => {
@@ -398,9 +388,9 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
             const markerLatLng = e.target.getLatLng();
             setDragEndPosition(markerLatLng);
 
-            if (highlightedRoute !== null && highlightedRoute !== routeIndex) {
+            if (highlightedRoute !== null && highlightedRoute !== routes.indexOf(route)) {
               const newRoutes = [...routes];
-              newRoutes[routeIndex].stops = newRoutes[routeIndex].stops.filter(
+              newRoutes[routes.indexOf(route)].stops = newRoutes[routes.indexOf(route)].stops.filter(
                 s => s.customerId !== draggedStop.stop.customerId
               );
 
@@ -416,13 +406,13 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
               setShowConfirmation(true);
             } else {
               const newRoutes = [...routes];
-              const stopIndex = newRoutes[routeIndex].stops.findIndex(
+              const stopIndex = newRoutes[routes.indexOf(route)].stops.findIndex(
                 s => s.customerId === draggedStop.stop.customerId
               );
               
               if (stopIndex !== -1) {
-                newRoutes[routeIndex].stops[stopIndex] = {
-                  ...newRoutes[routeIndex].stops[stopIndex],
+                newRoutes[routes.indexOf(route)].stops[stopIndex] = {
+                  ...newRoutes[routes.indexOf(route)].stops[stopIndex],
                   latitude: markerLatLng.lat,
                   longitude: markerLatLng.lng
                 };
@@ -438,7 +428,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
 
           marker.bindTooltip(
             `Customer: ${stop.customerId}<br>` +
-            `Stop #${stopIndex + 1} for Salesman ${route.salesmanId}<br>` +
+            `Stop #${stopIndex + 1} for Beat ${route.salesmanId}<br>` +
             `Cluster: ${stop.clusterId}`,
             { direction: 'top' }
           );
@@ -458,7 +448,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       routeLayersRef.current.forEach(layer => layer.remove());
       routeLayersRef.current = [];
     };
-  }, [locationData, routes, selectedCluster, selectedSalesman]);
+  }, [locationData, routes, selectedCluster, selectedBeat]);
 
   useEffect(() => {
     if (mapRef.current && routes.length > 0) {
@@ -470,7 +460,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
     <div className="flex flex-col h-full">
       <div className="mb-4">
         <h2 className="text-xl font-semibold text-gray-800">Route Visualization</h2>
-        <p className="text-gray-600 text-sm">Filter routes by cluster and salesman</p>
+        <p className="text-gray-600 text-sm">Filter routes by cluster and beat</p>
       </div>
 
       <div className="mb-4 space-y-4">
@@ -517,35 +507,35 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
         </div>
 
         <div>
-          <h3 className="text-sm font-medium text-gray-700 mb-2">Filter by Salesman</h3>
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Filter by Beat</h3>
           <div className="flex flex-wrap gap-2">
             <button
               className={`px-3 py-1.5 rounded-full text-sm transition-all ${
-                selectedSalesman === null 
+                selectedBeat === null 
                   ? 'bg-gray-800 text-white' 
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
               onClick={() => {
-                setSelectedSalesman(null);
+                setSelectedBeat(null);
                 updateRouteDisplay();
               }}
             >
-              All Salesmen
+              All Beats
             </button>
             {routes.map((route) => (
               <button
                 key={route.salesmanId}
                 className={`px-3 py-1.5 rounded-full text-sm transition-all flex items-center gap-2 ${
-                  selectedSalesman === route.salesmanId 
+                  selectedBeat === route.salesmanId 
                     ? 'bg-gray-800 text-white' 
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
                 onClick={() => {
-                  setSelectedSalesman(route.salesmanId);
+                  setSelectedBeat(route.salesmanId);
                   updateRouteDisplay();
                 }}
               >
-                <span>Salesman {route.salesmanId}</span>
+                <span>Beat {route.salesmanId}</span>
                 <span className="text-xs opacity-75">
                   ({route.stops.length} stops)
                 </span>

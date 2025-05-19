@@ -81,7 +81,7 @@ const ResultsView: React.FC<ResultsViewProps> = ({
                   <div>
                     <h3 className="font-medium text-gray-800">{result.name}</h3>
                     <p className="text-sm text-gray-500">
-                      {result.totalSalesmen} salesmen • {result.processingTime.toFixed(2)}ms
+                      {result.totalSalesmen} beats • {result.processingTime.toFixed(2)}ms
                     </p>
                   </div>
                   {isBest && (
@@ -106,7 +106,7 @@ const ResultsView: React.FC<ResultsViewProps> = ({
                 
                 <div className="mt-4 flex justify-between items-center">
                   <div className="text-sm text-gray-500">
-                    Average per salesman: {(result.totalDistance / result.totalSalesmen).toFixed(2)} km
+                    Average per beat: {(result.totalDistance / result.totalSalesmen).toFixed(2)} km
                   </div>
                   {isSelected && (
                     <button 
@@ -140,7 +140,7 @@ const ResultsView: React.FC<ResultsViewProps> = ({
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50">
-                      <th className="px-4 py-2 text-left text-gray-500 font-medium">Salesman</th>
+                      <th className="px-4 py-2 text-left text-gray-500 font-medium">Beat</th>
                       <th className="px-4 py-2 text-left text-gray-500 font-medium">Customers</th>
                       <th className="px-4 py-2 text-left text-gray-500 font-medium">Distance</th>
                       <th className="px-4 py-2 text-left text-gray-500 font-medium">Working Time</th>
@@ -166,14 +166,11 @@ const ResultsView: React.FC<ResultsViewProps> = ({
                 {selectedAlgorithm === 'nearest-neighbor' && (
                   "Nearest Neighbor is a greedy algorithm that starts at the distributor and repeatedly selects the nearest unvisited customer until all customers are visited. It's simple but can lead to suboptimal routes."
                 )}
-                {selectedAlgorithm === 'christofides' && (
-                  "Christofides Algorithm provides a solution guaranteed to be at most 1.5 times the optimal solution length for TSP instances that satisfy the triangle inequality. It works by creating a minimum spanning tree, finding a minimum-weight perfect matching, and then forming an Eulerian circuit."
-                )}
                 {selectedAlgorithm === 'simulated-annealing' && (
                   "Simulated Annealing is a probabilistic technique that mimics the physical process of annealing in metallurgy. It starts with a random solution and gradually 'cools' the system, decreasing the probability of accepting worse solutions as it explores the solution space."
                 )}
-                {selectedAlgorithm === 'ant-colony' && (
-                  "Ant Colony Optimization is inspired by the foraging behavior of ants. It works by simulating 'ants' laying down pheromones on promising paths between nodes. Over time, the algorithm converges to high-quality solutions through collective feedback."
+                {selectedAlgorithm === 'custom' && (
+                  "Custom Route is a manually optimized solution created through interactive adjustments to the generated routes. It allows for fine-tuning based on specific requirements or local knowledge."
                 )}
               </p>
             </div>
