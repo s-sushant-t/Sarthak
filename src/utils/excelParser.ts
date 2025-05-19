@@ -8,24 +8,44 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
     
     reader.onload = async (e) => {
       try {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        console.log('Starting Excel file processing...');
+        
+        if (!e.target?.result) {
+          throw new Error('Failed to read file content');
+        }
+        
+        const data = new Uint8Array(e.target.result as ArrayBuffer);
         const workbook = read(data, { type: 'array' });
         
+        console.log('Workbook loaded, sheets:', workbook.SheetNames);
+        
+        if (workbook.SheetNames.length === 0) {
+          throw new Error('Excel file contains no sheets');
+        }
+        
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        console.log('Processing first sheet:', workbook.SheetNames[0]);
         
         const jsonData = utils.sheet_to_json(worksheet, { 
           raw: false,
-          defval: ''
+          defval: '',
+          header: 1
         });
         
-        if (jsonData.length === 0) {
-          throw new Error('No data found in the Excel file');
-        }
-
-        const firstRow = jsonData[0] as any;
-        const requiredColumns = ['WD_Latitude', 'WD_Longitude', 'OL_Latitude', 'OL_Longitude', 'DMS Customer ID'];
-        const missingColumns = requiredColumns.filter(col => !(col in firstRow));
+        console.log('Converted to JSON, rows:', jsonData.length);
         
+        if (jsonData.length <= 1) {
+          throw new Error('Excel file is empty or contains only headers');
+        }
+        
+        // Get headers from first row
+        const headers = jsonData[0] as string[];
+        console.log('Headers found:', headers);
+        
+        const requiredColumns = ['WD_Latitude', 'WD_Longitude', 'OL_Latitude', 'OL_Longitude', 'DMS Customer ID'];
+        const headerMap = new Map(headers.map((header, index) => [header.trim(), index]));
+        
+        const missingColumns = requiredColumns.filter(col => !headerMap.has(col));
         if (missingColumns.length > 0) {
           throw new Error(
             `Missing required columns: ${missingColumns.join(', ')}. \n` +
@@ -38,49 +58,40 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           );
         }
         
-        const distributorRow = jsonData.find((row: any) => {
-          const lat = parseFloat(row['WD_Latitude'] || '');
-          const lng = parseFloat(row['WD_Longitude'] || '');
-          return !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
-        });
+        // Process data rows
+        const dataRows = jsonData.slice(1) as any[];
+        console.log('Processing', dataRows.length, 'data rows');
         
-        if (!distributorRow) {
-          const hasInvalidCoords = jsonData.some((row: any) => {
-            const lat = row['WD_Latitude'];
-            const lng = row['WD_Longitude'];
-            return (lat !== '' || lng !== '') && 
-                   (isNaN(parseFloat(lat)) || isNaN(parseFloat(lng)) || 
-                    parseFloat(lat) === 0 || parseFloat(lng) === 0);
-          });
-
-          if (hasInvalidCoords) {
-            throw new Error(
-              'Invalid distributor coordinates found. Please ensure:\n' +
-              '- WD_Latitude and WD_Longitude contain valid numbers\n' +
-              '- Coordinates are not zero (0)\n' +
-              '- Decimal numbers use a period (.) as decimal separator'
-            );
-          } else {
-            throw new Error(
-              'No distributor coordinates found. Please ensure:\n' +
-              '- The Excel file contains WD_Latitude and WD_Longitude columns\n' +
-              '- At least one row has valid distributor coordinates'
-            );
+        let distributorFound = false;
+        let distributor = { latitude: 0, longitude: 0 };
+        
+        for (const row of dataRows) {
+          const wdLat = parseFloat(row[headerMap.get('WD_Latitude')] || '');
+          const wdLng = parseFloat(row[headerMap.get('WD_Longitude')] || '');
+          
+          if (!isNaN(wdLat) && !isNaN(wdLng) && wdLat !== 0 && wdLng !== 0) {
+            distributor = { latitude: wdLat, longitude: wdLng };
+            distributorFound = true;
+            console.log('Found distributor coordinates:', distributor);
+            break;
           }
         }
         
-        const distributor = {
-          latitude: parseFloat(distributorRow['WD_Latitude']),
-          longitude: parseFloat(distributorRow['WD_Longitude'])
-        };
+        if (!distributorFound) {
+          throw new Error(
+            'No valid distributor coordinates found. Please ensure:\n' +
+            '- The Excel file contains WD_Latitude and WD_Longitude columns\n' +
+            '- At least one row has valid non-zero coordinates'
+          );
+        }
         
         const customers: Customer[] = [];
         const invalidCustomers: string[] = [];
         
-        for (const row of jsonData) {
-          const lat = parseFloat(row['OL_Latitude'] || '');
-          const lng = parseFloat(row['OL_Longitude'] || '');
-          const id = row['DMS Customer ID']?.toString();
+        for (const row of dataRows) {
+          const lat = parseFloat(row[headerMap.get('OL_Latitude')] || '');
+          const lng = parseFloat(row[headerMap.get('OL_Longitude')] || '');
+          const id = row[headerMap.get('DMS Customer ID')]?.toString();
           
           if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0 && id) {
             customers.push({
@@ -88,10 +99,17 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
               latitude: lat,
               longitude: lng
             });
+            
+            if (customers.length % 100 === 0) {
+              console.log(`Processed ${customers.length} valid customers...`);
+            }
           } else if (id) {
             invalidCustomers.push(id);
           }
         }
+        
+        console.log('Total valid customers:', customers.length);
+        console.log('Invalid customers:', invalidCustomers.length);
         
         if (customers.length === 0) {
           throw new Error(
@@ -102,26 +120,29 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           );
         }
         
-        if (invalidCustomers.length > 0) {
-          console.warn(`Warning: ${invalidCustomers.length} customers had invalid coordinates and were skipped.`);
-        }
-        
         // Perform DBSCAN clustering on customers
+        console.log('Starting customer clustering...');
         const clusteredCustomers = clusterCustomers(customers);
         
-        console.log(`Processed ${clusteredCustomers.length} valid customers in ${new Set(clusteredCustomers.map(c => c.clusterId)).size} clusters`);
+        const clusters = new Set(clusteredCustomers.map(c => c.clusterId));
+        console.log(`Clustering complete: ${clusteredCustomers.length} customers in ${clusters.size} clusters`);
         
-        resolve({ distributor, customers: clusteredCustomers });
+        const result = { distributor, customers: clusteredCustomers };
+        console.log('Data processing complete');
+        resolve(result);
+        
       } catch (error) {
         console.error('Excel processing error:', error);
         reject(error instanceof Error ? error : new Error('Unknown error processing Excel file'));
       }
     };
     
-    reader.onerror = () => {
+    reader.onerror = (error) => {
+      console.error('FileReader error:', error);
       reject(new Error('Error reading the file'));
     };
     
+    console.log('Starting file read...');
     reader.readAsArrayBuffer(file);
   });
 };

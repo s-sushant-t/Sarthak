@@ -9,8 +9,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const handleFileSelected = (files: FileList | null) => {
+  const handleFileSelected = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     
     const file = files[0];
@@ -22,7 +23,16 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
     }
     
     setFileName(file.name);
-    onFileUpload(file);
+    setIsProcessing(true);
+    
+    try {
+      await onFileUpload(file);
+    } catch (error) {
+      console.error('Error processing file:', error);
+      alert(error instanceof Error ? error.message : 'Error processing file');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -77,7 +87,12 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
             <Upload size={24} className="text-blue-600" />
           </div>
           
-          {fileName ? (
+          {isProcessing ? (
+            <div className="flex flex-col items-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-2"></div>
+              <p className="text-blue-600">Processing file...</p>
+            </div>
+          ) : fileName ? (
             <>
               <div className="flex items-center">
                 <File size={16} className="mr-2 text-blue-600" />
