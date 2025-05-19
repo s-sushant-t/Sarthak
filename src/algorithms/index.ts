@@ -1,6 +1,5 @@
 import { LocationData, AlgorithmType, AlgorithmResult } from '../types';
 import { nearestNeighbor } from './nearestNeighbor';
-import { simulatedAnnealing } from './simulatedAnnealing';
 
 export const executeAlgorithm = async (
   algorithmType: AlgorithmType,
@@ -13,9 +12,6 @@ export const executeAlgorithm = async (
   switch (algorithmType) {
     case 'nearest-neighbor':
       result = await nearestNeighbor(locationData);
-      break;
-    case 'simulated-annealing':
-      result = await simulatedAnnealing(locationData);
       break;
     default:
       throw new Error(`Unknown algorithm type: ${algorithmType}`);
