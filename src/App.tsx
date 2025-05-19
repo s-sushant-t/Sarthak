@@ -10,22 +10,33 @@ import { RouteData, LocationData, AlgorithmType, AlgorithmResult } from './types
 import { executeAlgorithm } from './algorithms';
 
 function App() {
+  // Initialize state from sessionStorage
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    const auth = sessionStorage.getItem('isAuthenticated');
-    return auth === 'true';
+    return sessionStorage.getItem('isAuthenticated') === 'true';
   });
-  
+
+  const [locationData, setLocationData] = useState<LocationData | null>(() => {
+    const stored = sessionStorage.getItem('locationData');
+    return stored ? JSON.parse(stored) : null;
+  });
+
+  const [algorithmResults, setAlgorithmResults] = useState<Record<AlgorithmType, AlgorithmResult | null>>(() => {
+    const stored = sessionStorage.getItem('algorithmResults');
+    return stored ? JSON.parse(stored) : {
+      'nearest-neighbor': null,
+      'simulated-annealing': null,
+      'custom': null
+    };
+  });
+
+  const [selectedAlgorithm, setSelectedAlgorithm] = useState<AlgorithmType | null>(() => {
+    return (sessionStorage.getItem('selectedAlgorithm') as AlgorithmType | null) || null;
+  });
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'upload' | 'map' | 'results'>('upload');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [locationData, setLocationData] = useState<LocationData | null>(null);
-  const [algorithmResults, setAlgorithmResults] = useState<Record<AlgorithmType, AlgorithmResult | null>>({
-    'nearest-neighbor': null,
-    'simulated-annealing': null,
-    'custom': null
-  });
-  const [selectedAlgorithm, setSelectedAlgorithm] = useState<AlgorithmType | null>(null);
 
   const handleLogin = useCallback(() => {
     setIsAuthenticated(true);
@@ -35,6 +46,9 @@ function App() {
   const handleLogout = useCallback(() => {
     setIsAuthenticated(false);
     sessionStorage.removeItem('isAuthenticated');
+    sessionStorage.removeItem('locationData');
+    sessionStorage.removeItem('algorithmResults');
+    sessionStorage.removeItem('selectedAlgorithm');
     setLocationData(null);
     setAlgorithmResults({
       'nearest-neighbor': null,
@@ -42,6 +56,7 @@ function App() {
       'custom': null
     });
     setSelectedAlgorithm(null);
+    setActiveTab('upload');
   }, []);
 
   const handleFileUpload = async (file: File) => {
