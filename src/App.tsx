@@ -49,7 +49,13 @@ function App() {
     setError(null);
     
     try {
+      console.log('Starting file processing...');
       const data = await processExcelFile(file);
+      console.log('File processed successfully:', data);
+      
+      if (!data || !data.customers || data.customers.length === 0) {
+        throw new Error('No valid customer data found in the file');
+      }
       
       if (data.customers.length > 1000) {
         throw new Error('Dataset too large. Maximum 1000 customers supported.');
@@ -60,23 +66,25 @@ function App() {
       setActiveTab('map');
       
       const algorithms: AlgorithmType[] = ['nearest-neighbor', 'simulated-annealing'];
-      const results: Record<AlgorithmType, AlgorithmResult> = {} as Record<AlgorithmType, AlgorithmResult>;
       
       for (const algorithm of algorithms) {
         try {
-          results[algorithm] = await executeAlgorithm(algorithm, data);
+          console.log(`Processing algorithm: ${algorithm}`);
+          const result = await executeAlgorithm(algorithm, data);
+          console.log(`Algorithm ${algorithm} completed:`, result);
           
           setAlgorithmResults(prev => {
-            const updated = { ...prev, [algorithm]: results[algorithm] };
+            const updated = { ...prev, [algorithm]: result };
             sessionStorage.setItem('algorithmResults', JSON.stringify(updated));
             return updated;
           });
           
         } catch (algorithmError) {
           console.error(`Error processing ${algorithm}:`, algorithmError);
-          results[algorithm] = null;
+          setError(`Error processing ${algorithm}: ${algorithmError instanceof Error ? algorithmError.message : 'Unknown error'}`);
         }
         
+        // Allow UI to update between algorithms
         await new Promise(resolve => setTimeout(resolve, 0));
       }
       
