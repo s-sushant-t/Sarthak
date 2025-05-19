@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { ChevronDown } from 'lucide-react';
 import { LocationData, RouteData, RouteStop, SalesmanRoute } from '../types';
 
 interface MapViewProps {
@@ -458,96 +459,62 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="mb-4">
-        <h2 className="text-xl font-semibold text-gray-800">Route Visualization</h2>
-        <p className="text-gray-600 text-sm">Filter routes by cluster and beat</p>
-      </div>
-
-      <div className="mb-4 space-y-4">
+      <div className="mb-4 flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 mb-2">Filter by Cluster</h3>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className={`px-3 py-1.5 rounded-full text-sm transition-all ${
-                selectedCluster === null 
-                  ? 'bg-gray-800 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-              onClick={() => {
-                setSelectedCluster(null);
-                updateRouteDisplay();
-              }}
-            >
-              All Clusters
-            </button>
-            {Object.entries(clusterStats).map(([clusterId, stats]) => (
-              <button
-                key={clusterId}
-                className={`px-3 py-1.5 rounded-full text-sm transition-all flex items-center gap-2 ${
-                  selectedCluster === Number(clusterId)
-                    ? 'bg-gray-800 text-white' 
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-                onClick={() => {
-                  setSelectedCluster(Number(clusterId));
-                  updateRouteDisplay();
-                }}
-              >
-                <div 
-                  className="w-3 h-3 rounded-full" 
-                  style={{ backgroundColor: CLUSTER_COLORS[Number(clusterId) % CLUSTER_COLORS.length] }}
-                ></div>
-                <span>Cluster {clusterId}</span>
-                <span className="text-xs opacity-75">
-                  ({stats.count} outlets, {stats.distance.toFixed(1)} km)
-                </span>
-              </button>
-            ))}
-          </div>
+          <h2 className="text-xl font-semibold text-gray-800">Route Visualization</h2>
+          <p className="text-gray-600 text-sm">Filter routes by cluster and beat</p>
         </div>
-
-        <div>
-          <h3 className="text-sm font-medium text-gray-700 mb-2">Filter by Beat</h3>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className={`px-3 py-1.5 rounded-full text-sm transition-all ${
-                selectedBeat === null 
-                  ? 'bg-gray-800 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-              onClick={() => {
-                setSelectedBeat(null);
+        
+        <div className="flex gap-4">
+          <div className="relative">
+            <select
+              className="appearance-none bg-white border border-gray-300 rounded-lg px-4 py-2 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              value={selectedCluster === null ? '' : selectedCluster}
+              onChange={(e) => {
+                setSelectedCluster(e.target.value === '' ? null : Number(e.target.value));
                 updateRouteDisplay();
               }}
             >
-              All Beats
-            </button>
-            {routes.map((route) => (
-              <button
-                key={route.salesmanId}
-                className={`px-3 py-1.5 rounded-full text-sm transition-all flex items-center gap-2 ${
-                  selectedBeat === route.salesmanId 
-                    ? 'bg-gray-800 text-white' 
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-                onClick={() => {
-                  setSelectedBeat(route.salesmanId);
-                  updateRouteDisplay();
-                }}
-              >
-                <span>Beat {route.salesmanId}</span>
-                <span className="text-xs opacity-75">
-                  ({route.stops.length} stops)
-                </span>
-              </button>
-            ))}
+              <option value="">All Clusters</option>
+              {Object.entries(clusterStats).map(([clusterId, stats]) => (
+                <option key={clusterId} value={clusterId}>
+                  Cluster {clusterId} ({stats.count} outlets)
+                </option>
+              ))}
+            </select>
+            <ChevronDown 
+              size={16} 
+              className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-500 pointer-events-none" 
+            />
+          </div>
+
+          <div className="relative">
+            <select
+              className="appearance-none bg-white border border-gray-300 rounded-lg px-4 py-2 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              value={selectedBeat === null ? '' : selectedBeat}
+              onChange={(e) => {
+                setSelectedBeat(e.target.value === '' ? null : Number(e.target.value));
+                updateRouteDisplay();
+              }}
+            >
+              <option value="">All Beats</option>
+              {routes.map((route) => (
+                <option key={route.salesmanId} value={route.salesmanId}>
+                  Beat {route.salesmanId} ({route.stops.length} stops)
+                </option>
+              ))}
+            </select>
+            <ChevronDown 
+              size={16} 
+              className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-500 pointer-events-none" 
+            />
           </div>
         </div>
       </div>
 
       <div 
         ref={mapContainerRef} 
-        className="flex-grow rounded-lg shadow-md border border-gray-200 min-h-[500px]"
+        className="flex-grow rounded-lg shadow-md border border-gray-200 min-h-[600px]"
       ></div>
 
       {showConfirmation && pendingRouteUpdate && (
