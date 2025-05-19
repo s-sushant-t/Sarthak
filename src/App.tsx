@@ -24,6 +24,7 @@ function App() {
     const stored = sessionStorage.getItem('algorithmResults');
     return stored ? JSON.parse(stored) : {
       'nearest-neighbor': null,
+      'simulated-annealing': null,
       'custom': null
     };
   });
@@ -51,6 +52,7 @@ function App() {
     setLocationData(null);
     setAlgorithmResults({
       'nearest-neighbor': null,
+      'simulated-annealing': null,
       'custom': null
     });
     setSelectedAlgorithm(null);
@@ -78,24 +80,31 @@ function App() {
       sessionStorage.setItem('locationData', JSON.stringify(data));
       setActiveTab('map');
       
-      try {
-        console.log('Processing nearest neighbor algorithm');
-        const result = await executeAlgorithm('nearest-neighbor', data);
-        console.log('Algorithm completed:', result);
+      const algorithms: AlgorithmType[] = ['nearest-neighbor', 'simulated-annealing'];
+      
+      for (const algorithm of algorithms) {
+        try {
+          console.log(`Processing algorithm: ${algorithm}`);
+          const result = await executeAlgorithm(algorithm, data);
+          console.log(`Algorithm ${algorithm} completed:`, result);
+          
+          setAlgorithmResults(prev => {
+            const updated = { ...prev, [algorithm]: result };
+            sessionStorage.setItem('algorithmResults', JSON.stringify(updated));
+            return updated;
+          });
+          
+        } catch (algorithmError) {
+          console.error(`Error processing ${algorithm}:`, algorithmError);
+          setError(`Error processing ${algorithm}: ${algorithmError instanceof Error ? algorithmError.message : 'Unknown error'}`);
+        }
         
-        setAlgorithmResults(prev => {
-          const updated = { ...prev, 'nearest-neighbor': result };
-          sessionStorage.setItem('algorithmResults', JSON.stringify(updated));
-          return updated;
-        });
-        
-        setSelectedAlgorithm('nearest-neighbor');
-        sessionStorage.setItem('selectedAlgorithm', 'nearest-neighbor');
-        
-      } catch (algorithmError) {
-        console.error('Error processing algorithm:', algorithmError);
-        setError(`Error processing algorithm: ${algorithmError instanceof Error ? algorithmError.message : 'Unknown error'}`);
+        // Allow UI to update between algorithms
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
+      
+      setSelectedAlgorithm('nearest-neighbor');
+      sessionStorage.setItem('selectedAlgorithm', 'nearest-neighbor');
       
     } catch (error) {
       console.error("Error processing file:", error);
@@ -104,6 +113,7 @@ function App() {
       setLocationData(null);
       setAlgorithmResults({
         'nearest-neighbor': null,
+        'simulated-annealing': null,
         'custom': null
       });
       sessionStorage.removeItem('locationData');
