@@ -43,7 +43,7 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
         console.log('Headers found:', headers);
         
         const requiredColumns = ['WD_Latitude', 'WD_Longitude', 'OL_Latitude', 'OL_Longitude', 'DMS Customer ID'];
-        const headerMap = new Map(headers.map((header, index) => [header.trim(), index]));
+        const headerMap = new Map(headers.map((header, index) => [header?.trim() || '', index]));
         
         const missingColumns = requiredColumns.filter(col => !headerMap.has(col));
         if (missingColumns.length > 0) {
@@ -66,6 +66,8 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
         let distributor = { latitude: 0, longitude: 0 };
         
         for (const row of dataRows) {
+          if (!Array.isArray(row)) continue;
+          
           const wdLat = parseFloat(row[headerMap.get('WD_Latitude')] || '');
           const wdLng = parseFloat(row[headerMap.get('WD_Longitude')] || '');
           
@@ -89,6 +91,8 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
         const invalidCustomers: string[] = [];
         
         for (const row of dataRows) {
+          if (!Array.isArray(row)) continue;
+          
           const lat = parseFloat(row[headerMap.get('OL_Latitude')] || '');
           const lng = parseFloat(row[headerMap.get('OL_Longitude')] || '');
           const id = row[headerMap.get('DMS Customer ID')]?.toString();

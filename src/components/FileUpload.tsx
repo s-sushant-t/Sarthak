@@ -10,6 +10,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleFileSelected = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -18,18 +19,19 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
     const fileExtension = file.name.split('.').pop()?.toLowerCase();
     
     if (fileExtension !== 'xlsx' && fileExtension !== 'xls') {
-      alert('Please upload an Excel file (.xlsx or .xls)');
+      setError('Please upload an Excel file (.xlsx or .xls)');
       return;
     }
     
     setFileName(file.name);
+    setError(null);
     setIsProcessing(true);
     
     try {
       await onFileUpload(file);
     } catch (error) {
       console.error('Error processing file:', error);
-      alert(error instanceof Error ? error.message : 'Error processing file');
+      setError(error instanceof Error ? error.message : 'Error processing file');
     } finally {
       setIsProcessing(false);
     }
@@ -65,6 +67,12 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
           Upload an Excel file containing customer and distributor location data to generate optimized sales routes.
         </p>
       </div>
+      
+      {error && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+          {error}
+        </div>
+      )}
       
       <div 
         className={`border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors
