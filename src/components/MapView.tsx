@@ -34,7 +34,8 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
   const [pendingRouteUpdate, setPendingRouteUpdate] = useState<RouteData | null>(null);
   const [dragEndPosition, setDragEndPosition] = useState<{ lat: number; lng: number } | null>(null);
   const [originalPosition, setOriginalPosition] = useState<{ lat: number; lng: number } | null>(null);
-  const [selectedSalesman, setSelectedSalesman] = useState<number | null>(null);
+  const [selectedCluster, setSelectedCluster] = useState<number | null>(null);
+  const [clusterStats, setClusterStats] = useState<Record<number, { count: number; distance: number }>>({});
 
   const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
     const R = 6371;
@@ -133,6 +134,21 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
     return CLUSTER_COLORS[route.clusterIds[0] % CLUSTER_COLORS.length];
   };
 
+  useEffect(() => {
+    // Calculate cluster statistics
+    const stats: Record<number, { count: number; distance: number }> = {};
+    routes.forEach(route => {
+      route.stops.forEach(stop => {
+        if (!stats[stop.clusterId]) {
+          stats[stop.clusterId] = { count: 0, distance: 0 };
+        }
+        stats[stop.clusterId].count++;
+        stats[stop.clusterId].distance += stop.distanceToNext || 0;
+      });
+    });
+    setClusterStats(stats);
+  }, [routes]);
+
   const updateRouteDisplay = () => {
     if (!mapRef.current) return;
 
@@ -144,34 +160,37 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
     });
 
     routes.forEach((route, routeIndex) => {
-      if (selectedSalesman !== null && route.salesmanId !== selectedSalesman) {
-        return;
-      }
+      const shouldShowRoute = selectedCluster === null || 
+        route.stops.some(stop => stop.clusterId === selectedCluster);
+
+      if (!shouldShowRoute) return;
 
       const pathCoordinates: [number, number][] = [
         [locationData.distributor.latitude, locationData.distributor.longitude],
-        ...route.stops.map(stop => [stop.latitude, stop.longitude])
+        ...route.stops
+          .filter(stop => selectedCluster === null || stop.clusterId === selectedCluster)
+          .map(stop => [stop.latitude, stop.longitude])
       ];
 
-      route.stops.forEach((stop, stopIndex) => {
-        const marker = markersRef.current[stop.customerId];
-        if (marker) {
-          marker.setOpacity(1);
+      route.stops.forEach(stop => {
+        if (selectedCluster === null || stop.clusterId === selectedCluster) {
+          const marker = markersRef.current[stop.customerId];
+          if (marker) marker.setOpacity(1);
         }
       });
 
       const routePath = L.polyline(pathCoordinates, {
         color: getRouteColor(route),
         weight: 3,
-        opacity: 1
-      }).addTo(mapRef.current!);
+        opacity: selectedCluster === null || route.clusterIds.includes(selectedCluster) ? 1 : 0.2
+      }).addTo(mapRef.current);
 
       routePath.bindTooltip(
         `Salesman ${route.salesmanId} Route<br>` +
         `Cluster ${route.clusterIds?.join(', ') || 'N/A'}<br>` +
         `Total Distance: ${route.totalDistance.toFixed(2)} km<br>` +
         `Total Time: ${Math.round(route.totalTime)} min`,
-        { direction: 'top', className: 'route-tooltip' }
+        { direction: 'top' }
       );
 
       routeLayersRef.current.push(routePath);
@@ -238,7 +257,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
           const marker = L.marker([stop.latitude, stop.longitude], {
             icon: customerIcon,
             draggable: true,
-            opacity: selectedSalesman === null || route.salesmanId === selectedSalesman ? 1 : 0
+            opacity: selectedCluster === null || stop.clusterId === selectedCluster ? 1 : 0
           }).addTo(map);
 
           markersRef.current[stop.customerId] = marker;
@@ -346,61 +365,61 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       routeLayersRef.current.forEach(layer => layer.remove());
       routeLayersRef.current = [];
     };
-  }, [locationData, routes, selectedSalesman]);
+  }, [locationData, routes, selectedCluster]);
 
   return (
     <div className="flex flex-col h-full">
       <div className="mb-4">
         <h2 className="text-xl font-semibold text-gray-800">Route Visualization</h2>
-        <p className="text-gray-600 text-sm">Select a salesman to view their route or view all routes together</p>
+        <p className="text-gray-600 text-sm">Filter routes by cluster or view all routes together</p>
       </div>
-      
-      <div 
-        ref={mapContainerRef} 
-        className="flex-grow rounded-lg shadow-md border border-gray-200 min-h-[500px]"
-      ></div>
-      
-      <div className="mt-4">
-        <h3 className="text-sm font-medium text-gray-700 mb-2">Select Salesman Route</h3>
+
+      <div className="mb-4">
+        <h3 className="text-sm font-medium text-gray-700 mb-2">Filter by Cluster</h3>
         <div className="flex flex-wrap gap-2">
           <button
             className={`px-3 py-1.5 rounded-full text-sm transition-all ${
-              selectedSalesman === null 
+              selectedCluster === null 
                 ? 'bg-gray-800 text-white' 
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
             onClick={() => {
-              setSelectedSalesman(null);
+              setSelectedCluster(null);
               updateRouteDisplay();
             }}
           >
-            All Routes
+            All Clusters
           </button>
-          {routes.map((route) => (
+          {Object.entries(clusterStats).map(([clusterId, stats]) => (
             <button
-              key={route.salesmanId}
+              key={clusterId}
               className={`px-3 py-1.5 rounded-full text-sm transition-all flex items-center gap-2 ${
-                selectedSalesman === route.salesmanId 
+                selectedCluster === Number(clusterId)
                   ? 'bg-gray-800 text-white' 
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
               onClick={() => {
-                setSelectedSalesman(route.salesmanId);
+                setSelectedCluster(Number(clusterId));
                 updateRouteDisplay();
               }}
             >
               <div 
                 className="w-3 h-3 rounded-full" 
-                style={{ backgroundColor: getRouteColor(route) }}
+                style={{ backgroundColor: CLUSTER_COLORS[Number(clusterId) % CLUSTER_COLORS.length] }}
               ></div>
-              <span>Salesman {route.salesmanId}</span>
+              <span>Cluster {clusterId}</span>
               <span className="text-xs opacity-75">
-                ({route.stops.length} stops, Cluster {route.clusterIds?.join(', ') || 'N/A'})
+                ({stats.count} outlets, {stats.distance.toFixed(1)} km)
               </span>
             </button>
           ))}
         </div>
       </div>
+
+      <div 
+        ref={mapContainerRef} 
+        className="flex-grow rounded-lg shadow-md border border-gray-200 min-h-[500px]"
+      ></div>
 
       {showConfirmation && pendingRouteUpdate && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
