@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { ChevronRight, Upload, Map, BarChart2, Download, MenuIcon } from 'lucide-react';
 import FileUpload from './components/FileUpload';
 import MapView from './components/MapView';
@@ -10,7 +10,11 @@ import { RouteData, LocationData, AlgorithmType, AlgorithmResult } from './types
 import { executeAlgorithm } from './algorithms';
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    const auth = sessionStorage.getItem('isAuthenticated');
+    return auth === 'true';
+  });
+  
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'upload' | 'map' | 'results'>('upload');
   const [isLoading, setIsLoading] = useState(false);
@@ -26,6 +30,18 @@ function App() {
   const handleLogin = useCallback(() => {
     setIsAuthenticated(true);
     sessionStorage.setItem('isAuthenticated', 'true');
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    setIsAuthenticated(false);
+    sessionStorage.removeItem('isAuthenticated');
+    setLocationData(null);
+    setAlgorithmResults({
+      'nearest-neighbor': null,
+      'simulated-annealing': null,
+      'custom': null
+    });
+    setSelectedAlgorithm(null);
   }, []);
 
   const handleFileUpload = async (file: File) => {
@@ -121,13 +137,6 @@ function App() {
     const csvData = algorithmResults[selectedAlgorithm]?.routes || [];
   }, [selectedAlgorithm, algorithmResults]);
 
-  React.useEffect(() => {
-    const storedAuth = sessionStorage.getItem('isAuthenticated');
-    if (storedAuth === 'true') {
-      setIsAuthenticated(true);
-    }
-  }, []);
-
   if (!isAuthenticated) {
     return <Login onLogin={handleLogin} />;
   }
@@ -145,6 +154,12 @@ function App() {
           <h1 className="text-xl font-semibold text-gray-800">Sales Route Optimizer</h1>
         </div>
         <div className="flex items-center space-x-4">
+          <button
+            onClick={handleLogout}
+            className="text-gray-600 hover:text-gray-800 text-sm"
+          >
+            Logout
+          </button>
           {locationData && selectedAlgorithm && (
             <button 
               className="flex items-center gap-1 px-3 py-1.5 rounded bg-green-500 text-white text-sm hover:bg-green-600 transition-colors"
