@@ -76,6 +76,7 @@ function createInitialSolution(
   const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
   
+  // Iterate over cluster IDs using Object.keys
   for (const clusterId of Object.keys(customersByCluster)) {
     const clusterCustomers = [...customersByCluster[Number(clusterId)]];
     
