@@ -1,4 +1,4 @@
-import clustersDbscan from '@turf/turf';
+import * as turf from '@turf/turf';
 import { point, featureCollection } from '@turf/helpers';
 import { Customer, ClusteredCustomer } from '../types';
 
@@ -30,7 +30,7 @@ export const clusterCustomers = (
     );
     
     const pointCollection = featureCollection(points);
-    const clustered = clustersDbscan(pointCollection, optimalDistance, {
+    const clustered = turf.clustersDbscan(pointCollection, optimalDistance, {
       minPoints: MIN_CLUSTER_SIZE,
       units: 'kilometers'
     });
