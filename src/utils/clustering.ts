@@ -4,30 +4,78 @@ import { Customer, ClusteredCustomer } from '../types';
 
 export const clusterCustomers = (
   customers: Customer[],
-  distanceThreshold: number = 2, // 2km radius
-  minPoints: number = 3 // minimum points to form a cluster
+  targetClusterSize: number = 195 // Target size between 180-210
 ): ClusteredCustomer[] => {
-  // Convert customers to GeoJSON points
-  const points = customers.map(customer => 
-    point([customer.longitude, customer.latitude], { 
-      customerId: customer.id 
-    })
-  );
+  let optimalDistance = 2; // Start with 2km
+  let clusteredCustomers: ClusteredCustomer[] = [];
+  let attempts = 0;
+  const maxAttempts = 10;
   
-  const pointCollection = featureCollection(points);
+  // Binary search for optimal distance
+  let minDistance = 0.5;
+  let maxDistance = 10;
   
-  // Perform DBSCAN clustering
-  const clustered = clustersDbscan(pointCollection, distanceThreshold, {
-    minPoints,
-    units: 'kilometers'
-  });
+  while (attempts < maxAttempts) {
+    const points = customers.map(customer => 
+      point([customer.longitude, customer.latitude], { 
+        customerId: customer.id 
+      })
+    );
+    
+    const pointCollection = featureCollection(points);
+    const clustered = clustersDbscan(pointCollection, optimalDistance, {
+      minPoints: 3,
+      units: 'kilometers'
+    });
+    
+    // Convert to ClusteredCustomer format
+    const tempClustered = customers.map((customer, index) => {
+      const cluster = clustered.features[index].properties.cluster;
+      return {
+        ...customer,
+        clusterId: cluster !== null ? cluster : -1
+      };
+    });
+    
+    // Count customers per cluster
+    const clusterSizes = tempClustered.reduce((acc, customer) => {
+      if (customer.clusterId === -1) return acc;
+      acc[customer.clusterId] = (acc[customer.clusterId] || 0) + 1;
+      return acc;
+    }, {} as Record<number, number>);
+    
+    // Check if clusters are within desired range
+    const isValidClustering = Object.values(clusterSizes).every(size => 
+      size >= 180 && size <= 210
+    );
+    
+    if (isValidClustering) {
+      clusteredCustomers = tempClustered;
+      break;
+    }
+    
+    // Adjust distance based on cluster sizes
+    const avgClusterSize = Object.values(clusterSizes).reduce((a, b) => a + b, 0) / Object.keys(clusterSizes).length;
+    
+    if (avgClusterSize < targetClusterSize) {
+      minDistance = optimalDistance;
+      optimalDistance = (optimalDistance + maxDistance) / 2;
+    } else {
+      maxDistance = optimalDistance;
+      optimalDistance = (minDistance + optimalDistance) / 2;
+    }
+    
+    attempts++;
+  }
   
-  // Process clustering results
-  return customers.map((customer, index) => {
-    const cluster = clustered.features[index].properties.cluster;
-    return {
+  // If no valid clustering found, use best attempt
+  if (clusteredCustomers.length === 0) {
+    console.warn('Could not achieve ideal cluster sizes, using best attempt');
+    clusteredCustomers = customers.map((customer, index) => ({
       ...customer,
-      clusterId: cluster !== null ? cluster : -1 // -1 for noise points
-    };
-  });
+      clusterId: Math.floor(index / targetClusterSize)
+    }));
+  }
+  
+  return clusteredCustomers;
 };
