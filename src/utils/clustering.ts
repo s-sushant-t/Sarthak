@@ -3,17 +3,21 @@ import { point, featureCollection } from '@turf/helpers';
 import { Customer, ClusteredCustomer } from '../types';
 
 export const clusterCustomers = (
-  customers: Customer[],
-  targetClusterSize: number = 195 // Target size between 180-210
+  customers: Customer[]
 ): ClusteredCustomer[] => {
+  const MIN_CLUSTER_SIZE = 180;
+  const MAX_CLUSTER_SIZE = 210;
+  const TARGET_SIZE = 195;
+  
   let optimalDistance = 2; // Start with 2km
-  let clusteredCustomers: ClusteredCustomer[] = [];
-  let attempts = 0;
-  const maxAttempts = 10;
+  let bestClustering: ClusteredCustomer[] = [];
+  let bestScore = Infinity;
   
   // Binary search for optimal distance
   let minDistance = 0.5;
   let maxDistance = 10;
+  let attempts = 0;
+  const maxAttempts = 15;
   
   while (attempts < maxAttempts) {
     const points = customers.map(customer => 
@@ -24,7 +28,7 @@ export const clusterCustomers = (
     
     const pointCollection = featureCollection(points);
     const clustered = clustersDbscan(pointCollection, optimalDistance, {
-      minPoints: 3,
+      minPoints: MIN_CLUSTER_SIZE,
       units: 'kilometers'
     });
     
@@ -44,20 +48,27 @@ export const clusterCustomers = (
       return acc;
     }, {} as Record<number, number>);
     
-    // Check if clusters are within desired range
-    const isValidClustering = Object.values(clusterSizes).every(size => 
-      size >= 180 && size <= 210
-    );
+    // Calculate score based on how well clusters meet size constraints
+    const score = Object.values(clusterSizes).reduce((total, size) => {
+      if (size < MIN_CLUSTER_SIZE) {
+        return total + Math.pow(MIN_CLUSTER_SIZE - size, 2);
+      }
+      if (size > MAX_CLUSTER_SIZE) {
+        return total + Math.pow(size - MAX_CLUSTER_SIZE, 2);
+      }
+      return total + Math.abs(size - TARGET_SIZE);
+    }, 0);
     
-    if (isValidClustering) {
-      clusteredCustomers = tempClustered;
-      break;
+    // Update best clustering if current score is better
+    if (score < bestScore) {
+      bestScore = score;
+      bestClustering = tempClustered;
     }
     
-    // Adjust distance based on cluster sizes
+    // Adjust distance based on average cluster size
     const avgClusterSize = Object.values(clusterSizes).reduce((a, b) => a + b, 0) / Object.keys(clusterSizes).length;
     
-    if (avgClusterSize < targetClusterSize) {
+    if (avgClusterSize < TARGET_SIZE) {
       minDistance = optimalDistance;
       optimalDistance = (optimalDistance + maxDistance) / 2;
     } else {
@@ -68,14 +79,14 @@ export const clusterCustomers = (
     attempts++;
   }
   
-  // If no valid clustering found, use best attempt
-  if (clusteredCustomers.length === 0) {
-    console.warn('Could not achieve ideal cluster sizes, using best attempt');
-    clusteredCustomers = customers.map((customer, index) => ({
+  // If no valid clustering found, create balanced clusters manually
+  if (bestClustering.length === 0 || bestScore === Infinity) {
+    console.warn('Could not achieve ideal cluster sizes, using manual balancing');
+    return customers.map((customer, index) => ({
       ...customer,
-      clusterId: Math.floor(index / targetClusterSize)
+      clusterId: Math.floor(index / TARGET_SIZE)
     }));
   }
   
-  return clusteredCustomers;
+  return bestClustering;
 };

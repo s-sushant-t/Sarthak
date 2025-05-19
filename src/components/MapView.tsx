@@ -35,6 +35,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
   const [dragEndPosition, setDragEndPosition] = useState<{ lat: number; lng: number } | null>(null);
   const [originalPosition, setOriginalPosition] = useState<{ lat: number; lng: number } | null>(null);
   const [selectedCluster, setSelectedCluster] = useState<number | null>(null);
+  const [selectedSalesman, setSelectedSalesman] = useState<number | null>(null);
   const [clusterStats, setClusterStats] = useState<Record<number, { count: number; distance: number }>>({});
 
   const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -160,8 +161,8 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
     });
 
     routes.forEach((route, routeIndex) => {
-      const shouldShowRoute = selectedCluster === null || 
-        route.stops.some(stop => stop.clusterId === selectedCluster);
+      const shouldShowRoute = (selectedCluster === null || route.stops.some(stop => stop.clusterId === selectedCluster)) &&
+                            (selectedSalesman === null || route.salesmanId === selectedSalesman);
 
       if (!shouldShowRoute) return;
 
@@ -173,7 +174,8 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       ];
 
       route.stops.forEach(stop => {
-        if (selectedCluster === null || stop.clusterId === selectedCluster) {
+        if ((selectedCluster === null || stop.clusterId === selectedCluster) &&
+            (selectedSalesman === null || route.salesmanId === selectedSalesman)) {
           const marker = markersRef.current[stop.customerId];
           if (marker) marker.setOpacity(1);
         }
@@ -182,7 +184,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       const routePath = L.polyline(pathCoordinates, {
         color: getRouteColor(route),
         weight: 3,
-        opacity: selectedCluster === null || route.clusterIds.includes(selectedCluster) ? 1 : 0.2
+        opacity: shouldShowRoute ? 1 : 0.2
       }).addTo(mapRef.current);
 
       routePath.bindTooltip(
@@ -365,54 +367,94 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
       routeLayersRef.current.forEach(layer => layer.remove());
       routeLayersRef.current = [];
     };
-  }, [locationData, routes, selectedCluster]);
+  }, [locationData, routes, selectedCluster, selectedSalesman]);
 
   return (
     <div className="flex flex-col h-full">
       <div className="mb-4">
         <h2 className="text-xl font-semibold text-gray-800">Route Visualization</h2>
-        <p className="text-gray-600 text-sm">Filter routes by cluster or view all routes together</p>
+        <p className="text-gray-600 text-sm">Filter routes by cluster and salesman</p>
       </div>
 
-      <div className="mb-4">
-        <h3 className="text-sm font-medium text-gray-700 mb-2">Filter by Cluster</h3>
-        <div className="flex flex-wrap gap-2">
-          <button
-            className={`px-3 py-1.5 rounded-full text-sm transition-all ${
-              selectedCluster === null 
-                ? 'bg-gray-800 text-white' 
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-            onClick={() => {
-              setSelectedCluster(null);
-              updateRouteDisplay();
-            }}
-          >
-            All Clusters
-          </button>
-          {Object.entries(clusterStats).map(([clusterId, stats]) => (
+      <div className="mb-4 space-y-4">
+        <div>
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Filter by Cluster</h3>
+          <div className="flex flex-wrap gap-2">
             <button
-              key={clusterId}
-              className={`px-3 py-1.5 rounded-full text-sm transition-all flex items-center gap-2 ${
-                selectedCluster === Number(clusterId)
+              className={`px-3 py-1.5 rounded-full text-sm transition-all ${
+                selectedCluster === null 
                   ? 'bg-gray-800 text-white' 
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
               onClick={() => {
-                setSelectedCluster(Number(clusterId));
+                setSelectedCluster(null);
                 updateRouteDisplay();
               }}
             >
-              <div 
-                className="w-3 h-3 rounded-full" 
-                style={{ backgroundColor: CLUSTER_COLORS[Number(clusterId) % CLUSTER_COLORS.length] }}
-              ></div>
-              <span>Cluster {clusterId}</span>
-              <span className="text-xs opacity-75">
-                ({stats.count} outlets, {stats.distance.toFixed(1)} km)
-              </span>
+              All Clusters
             </button>
-          ))}
+            {Object.entries(clusterStats).map(([clusterId, stats]) => (
+              <button
+                key={clusterId}
+                className={`px-3 py-1.5 rounded-full text-sm transition-all flex items-center gap-2 ${
+                  selectedCluster === Number(clusterId)
+                    ? 'bg-gray-800 text-white' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+                onClick={() => {
+                  setSelectedCluster(Number(clusterId));
+                  updateRouteDisplay();
+                }}
+              >
+                <div 
+                  className="w-3 h-3 rounded-full" 
+                  style={{ backgroundColor: CLUSTER_COLORS[Number(clusterId) % CLUSTER_COLORS.length] }}
+                ></div>
+                <span>Cluster {clusterId}</span>
+                <span className="text-xs opacity-75">
+                  ({stats.count} outlets, {stats.distance.toFixed(1)} km)
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Filter by Salesman</h3>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={`px-3 py-1.5 rounded-full text-sm transition-all ${
+                selectedSalesman === null 
+                  ? 'bg-gray-800 text-white' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+              onClick={() => {
+                setSelectedSalesman(null);
+                updateRouteDisplay();
+              }}
+            >
+              All Salesmen
+            </button>
+            {routes.map((route) => (
+              <button
+                key={route.salesmanId}
+                className={`px-3 py-1.5 rounded-full text-sm transition-all flex items-center gap-2 ${
+                  selectedSalesman === route.salesmanId 
+                    ? 'bg-gray-800 text-white' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+                onClick={() => {
+                  setSelectedSalesman(route.salesmanId);
+                  updateRouteDisplay();
+                }}
+              >
+                <span>Salesman {route.salesmanId}</span>
+                <span className="text-xs opacity-75">
+                  ({route.stops.length} stops)
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
