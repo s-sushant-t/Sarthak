@@ -3,9 +3,9 @@ import { point, featureCollection } from '@turf/helpers';
 import { Customer, ClusteredCustomer } from '../types';
 import { calculateHaversineDistance } from './distanceCalculator';
 
-export const clusterCustomers = (
+export const clusterCustomers = async (
   customers: Customer[]
-): ClusteredCustomer[] => {
+): Promise<ClusteredCustomer[]> => {
   if (!customers || customers.length === 0) {
     return [];
   }
