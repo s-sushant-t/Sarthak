@@ -10,7 +10,6 @@ interface Point {
 
 const MAX_CLUSTER_RADIUS = 5; // Maximum radius in kilometers for a cluster
 const TARGET_CLUSTER_SIZE = 200; // Target number of customers per cluster
-const OUTLIER_THRESHOLD = 0.5; // 50% above median distance is considered an outlier
 
 export const clusterCustomers = async (
   customers: Customer[]
@@ -40,21 +39,6 @@ export const clusterCustomers = async (
       };
     });
 
-    // Calculate median distance between outlets
-    const distances: number[] = [];
-    for (let i = 0; i < points.length; i++) {
-      for (let j = i + 1; j < points.length; j++) {
-        const distance = calculateHaversineDistance(
-          points[i].y, points[i].x,
-          points[j].y, points[j].x
-        );
-        distances.push(distance);
-      }
-    }
-    distances.sort((a, b) => a - b);
-    const medianDistance = distances[Math.floor(distances.length / 2)];
-    const outlierThreshold = medianDistance * (1 + OUTLIER_THRESHOLD);
-
     // Sort points by distance from centroid
     points.sort((a, b) => a.distance - b.distance);
 
@@ -63,36 +47,8 @@ export const clusterCustomers = async (
     let currentCluster: Point[] = [];
     let currentCentroid = centroid;
 
-    // First pass: identify outliers and create initial clusters
-    const outliers: Point[] = [];
-    const nonOutliers: Point[] = [];
-
     for (const point of points) {
-      // Check if point is an outlier based on average distance to nearest neighbors
-      let avgDistance = 0;
-      const kNearest = 5; // Check 5 nearest neighbors
-      const distances = points
-        .filter(p => p !== point)
-        .map(p => calculateHaversineDistance(point.y, point.x, p.y, p.x))
-        .sort((a, b) => a - b)
-        .slice(0, kNearest);
-      
-      avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-
-      if (avgDistance > outlierThreshold) {
-        outliers.push(point);
-      } else {
-        nonOutliers.push(point);
-      }
-
-      // Allow UI to update
-      if ((outliers.length + nonOutliers.length) % 100 === 0) {
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
-    }
-
-    // Process non-outliers into clusters
-    for (const point of nonOutliers) {
+      // Check if point is within acceptable distance of current cluster centroid
       const distanceToCentroid = calculateHaversineDistance(
         currentCentroid.latitude,
         currentCentroid.longitude,
@@ -100,16 +56,25 @@ export const clusterCustomers = async (
         point.x
       );
 
+      // Start a new cluster if:
+      // 1. Current cluster is full (reached target size)
+      // 2. Point is too far from current cluster centroid
       if (currentCluster.length >= TARGET_CLUSTER_SIZE || 
           (currentCluster.length > 0 && distanceToCentroid > MAX_CLUSTER_RADIUS)) {
         if (currentCluster.length > 0) {
           clusters.push(currentCluster);
           currentCluster = [];
+          // Update centroid for new cluster
           currentCentroid = findCentroid(points.slice(clusters.length * TARGET_CLUSTER_SIZE));
         }
       }
 
       currentCluster.push(point);
+
+      // Allow UI to update between processing chunks
+      if (clusters.length % 5 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
     }
 
     // Add the last cluster if it has points
@@ -117,38 +82,31 @@ export const clusterCustomers = async (
       clusters.push(currentCluster);
     }
 
-    // Convert clusters and outliers to ClusteredCustomer format
+    // Convert clusters back to ClusteredCustomer format
     const clusteredCustomers: ClusteredCustomer[] = [];
-    
-    // Add clustered customers
     clusters.forEach((cluster, clusterId) => {
       cluster.forEach(point => {
         clusteredCustomers.push({
           ...point.customer,
-          clusterId,
-          isOutlier: false
+          clusterId
         });
       });
     });
 
-    // Add outliers with special cluster ID
-    outliers.forEach((point, index) => {
-      clusteredCustomers.push({
-        ...point.customer,
-        clusterId: clusters.length + Math.floor(index / TARGET_CLUSTER_SIZE),
-        isOutlier: true
-      });
-    });
-
-    return clusteredCustomers;
+    // Ensure all customers are assigned to a cluster
+    return clusteredCustomers.length === customers.length
+      ? clusteredCustomers
+      : customers.map((customer, index) => ({
+          ...customer,
+          clusterId: Math.floor(index / TARGET_CLUSTER_SIZE)
+        }));
 
   } catch (error) {
     console.error('Clustering error:', error);
     // Fallback: assign all customers to a single cluster
     return customers.map(customer => ({
       ...customer,
-      clusterId: 0,
-      isOutlier: false
+      clusterId: 0
     }));
   }
 };

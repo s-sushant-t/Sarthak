@@ -285,34 +285,6 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
     }
   };
 
-  const createMarkerIcon = (stop: RouteStop, index: number, color: string) => {
-    if (stop.isOutlier) {
-      return L.divIcon({
-        html: `
-          <div class="bg-red-100 rounded-lg w-6 h-6 flex items-center justify-center text-xs font-medium border-2 cursor-move transition-all hover:scale-110" 
-               style="border-color: ${color};">
-            ${index + 1}
-          </div>
-        `,
-        className: 'custom-div-icon',
-        iconSize: [24, 24],
-        iconAnchor: [12, 12]
-      });
-    }
-
-    return L.divIcon({
-      html: `
-        <div class="bg-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium border-2 cursor-move transition-all hover:scale-110" 
-             style="border-color: ${color}; color: ${color}">
-          ${index + 1}
-        </div>
-      `,
-      className: 'custom-div-icon',
-      iconSize: [24, 24],
-      iconAnchor: [12, 12]
-    });
-  };
-
   useEffect(() => {
     if (!mapRef.current && mapContainerRef.current) {
       mapRef.current = L.map(mapContainerRef.current).setView([0, 0], 13);
@@ -354,8 +326,20 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
           bounds.extend([stop.latitude, stop.longitude]);
 
           const color = CLUSTER_COLORS[stop.clusterId % CLUSTER_COLORS.length];
+          const customerIcon = L.divIcon({
+            html: `
+              <div class="bg-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-medium border-2 cursor-move transition-all hover:scale-110" 
+                   style="border-color: ${color}; color: ${color}">
+                ${stopIndex + 1}
+              </div>
+            `,
+            className: 'custom-div-icon',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          });
+
           const marker = L.marker([stop.latitude, stop.longitude], {
-            icon: createMarkerIcon(stop, stopIndex, color),
+            icon: customerIcon,
             draggable: true,
             opacity: selectedCluster === null || stop.clusterId === selectedCluster ? 1 : 0
           }).addTo(map);
@@ -446,8 +430,7 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
           marker.bindTooltip(
             `Customer: ${stop.customerId}<br>` +
             `Stop #${stopIndex + 1} for Beat ${route.salesmanId}<br>` +
-            `Cluster: ${stop.clusterId}` +
-            (stop.isOutlier ? '<br><span class="text-red-500">Outlier</span>' : ''),
+            `Cluster: ${stop.clusterId}`,
             { direction: 'top' }
           );
         });

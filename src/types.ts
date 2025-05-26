@@ -6,7 +6,6 @@ export interface Customer {
 
 export interface ClusteredCustomer extends Customer {
   clusterId: number;
-  isOutlier?: boolean;
 }
 
 export interface Distributor {
@@ -27,7 +26,6 @@ export interface RouteStop {
   timeToNext: number;
   visitTime: number;
   clusterId: number;
-  isOutlier?: boolean;
 }
 
 export interface SalesmanRoute {
