@@ -1,7 +1,11 @@
-import clustersDbscan from '@turf/clusters-dbscan';
-import { point, featureCollection } from '@turf/helpers';
 import { Customer, ClusteredCustomer } from '../types';
 import { calculateHaversineDistance } from './distanceCalculator';
+
+interface Point {
+  x: number;
+  y: number;
+  customer: Customer;
+}
 
 export const clusterCustomers = async (
   customers: Customer[]
@@ -11,100 +15,65 @@ export const clusterCustomers = async (
       return [];
     }
 
-    const MIN_CLUSTER_SIZE = 210;
-    
-    // Calculate distances from distributor
-    const distributorDistances = customers.map((customer, index) => ({
-      customer,
-      index,
-      distanceFromDistributor: calculateHaversineDistance(
-        customer.latitude,
-        customer.longitude,
-        customers[0].latitude,
-        customers[0].longitude
-      )
+    // Convert lat/lng to x/y coordinates using Mercator projection
+    const points: Point[] = customers.map(customer => ({
+      x: longitudeToX(customer.longitude),
+      y: latitudeToY(customer.latitude),
+      customer
     }));
 
-    // Sort customers by distance from distributor
-    distributorDistances.sort((a, b) => a.distanceFromDistributor - b.distanceFromDistributor);
+    // Find the centroid of all points
+    const centroid = findCentroid(points);
 
-    // Create clusters based on distance bands and proximity
-    const clusters: ClusteredCustomer[][] = [];
-    let currentCluster: ClusteredCustomer[] = [];
-    let currentDistanceBand = 0;
-    const DISTANCE_BAND_SIZE = 5; // 5km bands
-
-    // Process customers in chunks to handle large datasets
-    const CHUNK_SIZE = 500;
-    for (let i = 0; i < distributorDistances.length; i += CHUNK_SIZE) {
-      const chunk = distributorDistances.slice(i, i + CHUNK_SIZE);
-      
-      for (const { customer, distanceFromDistributor } of chunk) {
-        const distanceBand = Math.floor(distanceFromDistributor / DISTANCE_BAND_SIZE);
-        
-        // Check proximity to current cluster
-        let shouldStartNewCluster = currentCluster.length >= MIN_CLUSTER_SIZE;
-        
-        if (currentCluster.length > 0) {
-          const avgClusterLat = currentCluster.reduce((sum, c) => sum + c.latitude, 0) / currentCluster.length;
-          const avgClusterLng = currentCluster.reduce((sum, c) => sum + c.longitude, 0) / currentCluster.length;
-          
-          const distanceToCluster = calculateHaversineDistance(
-            customer.latitude,
-            customer.longitude,
-            avgClusterLat,
-            avgClusterLng
-          );
-          
-          // Start new cluster if too far from current cluster center
-          if (distanceToCluster > DISTANCE_BAND_SIZE * 2) {
-            shouldStartNewCluster = true;
-          }
-        }
-        
-        if (shouldStartNewCluster && currentCluster.length >= MIN_CLUSTER_SIZE) {
-          clusters.push(currentCluster);
-          currentCluster = [];
-          currentDistanceBand = distanceBand;
-        }
-        
-        currentCluster.push({
-          ...customer,
-          clusterId: clusters.length
-        });
+    // Sort points by angle and distance from centroid
+    const sortedPoints = points.sort((a, b) => {
+      const angleA = Math.atan2(a.y - centroid.y, a.x - centroid.x);
+      const angleB = Math.atan2(b.y - centroid.y, b.x - centroid.x);
+      if (angleA === angleB) {
+        const distA = distance(centroid, a);
+        const distB = distance(centroid, b);
+        return distA - distB;
       }
-      
-      // Allow UI to update between chunks
-      if (i + CHUNK_SIZE < distributorDistances.length) {
+      return angleA - angleB;
+    });
+
+    // Calculate optimal number of clusters based on dataset size
+    const numClusters = Math.ceil(customers.length / 200);
+    const sectorsPerCluster = Math.ceil(sortedPoints.length / numClusters);
+
+    // Create non-overlapping sectors
+    const clusters: Point[][] = [];
+    for (let i = 0; i < sortedPoints.length; i += sectorsPerCluster) {
+      const cluster = sortedPoints.slice(i, i + sectorsPerCluster);
+      if (cluster.length > 0) {
+        clusters.push(cluster);
+      }
+
+      // Allow UI to update between processing chunks
+      if (i % 500 === 0) {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
     }
 
-    // Add remaining customers to the last cluster
-    if (currentCluster.length > 0) {
-      if (clusters.length > 0 && currentCluster.length < MIN_CLUSTER_SIZE) {
-        // Add remaining customers to the last cluster if it's too small
-        clusters[clusters.length - 1].push(...currentCluster);
-      } else {
-        clusters.push(currentCluster);
-      }
-    }
+    // Convert back to clustered customers
+    const clusteredCustomers: ClusteredCustomer[] = [];
+    clusters.forEach((cluster, clusterId) => {
+      cluster.forEach(point => {
+        clusteredCustomers.push({
+          ...point.customer,
+          clusterId
+        });
+      });
+    });
 
-    // Flatten clusters back into a single array
-    const clusteredCustomers = clusters.flatMap((cluster, clusterId) =>
-      cluster.map(customer => ({
-        ...customer,
-        clusterId
-      }))
-    );
-
-    // Ensure all customers have a cluster ID
-    return clusteredCustomers.length > 0 
-      ? clusteredCustomers 
-      : customers.map((customer, index) => ({
+    // Ensure no customer is left without a cluster
+    return clusteredCustomers.length > 0
+      ? clusteredCustomers
+      : customers.map(customer => ({
           ...customer,
-          clusterId: 0 // All customers in same cluster if clustering fails
+          clusterId: 0
         }));
+
   } catch (error) {
     console.error('Clustering error:', error);
     // Fallback: assign all customers to a single cluster
@@ -113,4 +82,34 @@ export const clusterCustomers = async (
       clusterId: 0
     }));
   }
+};
+
+// Helper functions for coordinate conversion and geometric calculations
+function longitudeToX(longitude: number): number {
+  return longitude * Math.PI / 180;
+}
+
+function latitudeToY(latitude: number): number {
+  const lat = latitude * Math.PI / 180;
+  return Math.log(Math.tan(Math.PI / 4 + lat / 2));
+}
+
+function distance(p1: Point, p2: Point): number {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function findCentroid(points: Point[]): Point {
+  const sum = points.reduce((acc, point) => ({
+    x: acc.x + point.x,
+    y: acc.y + point.y,
+    customer: point.customer
+  }), { x: 0, y: 0, customer: points[0].customer });
+
+  return {
+    x: sum.x / points.length,
+    y: sum.y / points.length,
+    customer: sum.customer
+  };
 }
