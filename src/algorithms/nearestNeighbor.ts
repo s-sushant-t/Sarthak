@@ -2,7 +2,7 @@ import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmRes
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
 const MIN_OUTLETS_PER_BEAT = 30;
-const MAX_OUTLETS_PER_BEAT = 40;
+const MAX_OUTLETS_PER_BEAT = 50;
 const CUSTOMER_VISIT_TIME = 6; // 6 minutes per customer
 const MAX_WORKING_TIME = 360; // 6 hours in minutes
 const TRAVEL_SPEED = 30; // km/h
@@ -72,7 +72,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         
         // If no suitable customer found and we don't have minimum outlets, 
         // try to find any customer within reasonable distance
-        if (nearestIndex === -1) {
+        if (nearestIndex === -1 && assignedOutlets < MIN_OUTLETS_PER_BEAT) {
           for (let i = 0; i < unassignedCustomers.length; i++) {
             const customer = unassignedCustomers[i];
             const distance = calculateHaversineDistance(
@@ -80,9 +80,13 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
               customer.latitude, customer.longitude
             );
             
-            if (distance < shortestDistance) {
-              shortestDistance = distance;
-              nearestIndex = i;
+            // For minimum outlet requirement, be more lenient with time constraints
+            const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
+            if (travelTime + CUSTOMER_VISIT_TIME <= MAX_WORKING_TIME * 1.2) { // Allow 20% overtime for minimum requirement
+              if (distance < shortestDistance) {
+                shortestDistance = distance;
+                nearestIndex = i;
+              }
             }
           }
         }
@@ -127,8 +131,17 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         currentStop.timeToNext = time;
       }
       
-      if (currentRoute.stops.length > 0) {
+      // Only add routes that meet the minimum outlet requirement
+      if (currentRoute.stops.length >= MIN_OUTLETS_PER_BEAT) {
         routes.push(currentRoute);
+      } else {
+        // If route doesn't meet minimum, put customers back in unassigned pool
+        unassignedCustomers.push(...currentRoute.stops.map(stop => ({
+          id: stop.customerId,
+          latitude: stop.latitude,
+          longitude: stop.longitude,
+          clusterId: stop.clusterId
+        })));
       }
     }
   }
