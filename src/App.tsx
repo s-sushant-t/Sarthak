@@ -72,10 +72,6 @@ function App() {
         throw new Error('No valid customer data found in the file');
       }
       
-      if (data.customers.length > 1000) {
-        throw new Error('Dataset too large. Maximum 1000 customers supported.');
-      }
-      
       setLocationData(data);
       sessionStorage.setItem('locationData', JSON.stringify(data));
       setActiveTab('map');
