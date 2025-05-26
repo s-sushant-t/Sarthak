@@ -124,9 +124,14 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           );
         }
         
-        // Perform DBSCAN clustering on customers
+        // Perform DBSCAN clustering on customers and ensure we always return an array
         console.log('Starting customer clustering...');
-        const clusteredCustomers = clusterCustomers(customers);
+        const clusteredCustomers = clusterCustomers(customers) || [];
+        
+        if (!Array.isArray(clusteredCustomers)) {
+          console.error('Clustering returned invalid result:', clusteredCustomers);
+          throw new Error('Clustering failed: Invalid result format');
+        }
         
         const clusters = new Set(clusteredCustomers.map(c => c.clusterId));
         console.log(`Clustering complete: ${clusteredCustomers.length} customers in ${clusters.size} clusters`);
