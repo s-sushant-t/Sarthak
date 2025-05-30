@@ -1,8 +1,7 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const MIN_OUTLETS_PER_BEAT = 30;
-const MAX_OUTLETS_PER_BEAT = 40;
+const OUTLETS_PER_SALESMAN = 35;
 const CUSTOMER_VISIT_TIME = 6; // 6 minutes per customer
 const MAX_WORKING_TIME = 360; // 6 hours in minutes
 const TRAVEL_SPEED = 30; // km/h
@@ -43,11 +42,10 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       
       while (unassignedCustomers.length > 0 && 
              remainingTime > 0 && 
-             assignedOutlets < MAX_OUTLETS_PER_BEAT) {
+             assignedOutlets < OUTLETS_PER_SALESMAN) {
         let nearestIndex = -1;
         let shortestDistance = Infinity;
         
-        // Find the nearest customer within reasonable distance
         for (let i = 0; i < unassignedCustomers.length; i++) {
           const customer = unassignedCustomers[i];
           const distance = calculateHaversineDistance(
@@ -58,32 +56,9 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
           const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
           if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) continue;
           
-          // Skip if adding this customer would exceed max outlets
-          if (assignedOutlets >= MAX_OUTLETS_PER_BEAT) continue;
-          
           if (distance < shortestDistance) {
             shortestDistance = distance;
             nearestIndex = i;
-          }
-        }
-        
-        // If no suitable customer found and we have minimum required outlets, break
-        if (nearestIndex === -1 && assignedOutlets >= MIN_OUTLETS_PER_BEAT) break;
-        
-        // If no suitable customer found and we don't have minimum outlets, 
-        // try to find any customer within reasonable distance
-        if (nearestIndex === -1) {
-          for (let i = 0; i < unassignedCustomers.length; i++) {
-            const customer = unassignedCustomers[i];
-            const distance = calculateHaversineDistance(
-              currentLat, currentLng,
-              customer.latitude, customer.longitude
-            );
-            
-            if (distance < shortestDistance) {
-              shortestDistance = distance;
-              nearestIndex = i;
-            }
           }
         }
         
