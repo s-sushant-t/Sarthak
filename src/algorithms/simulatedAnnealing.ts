@@ -1,11 +1,10 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const MIN_OUTLETS = 30; // Strict minimum outlets per beat
-const MAX_OUTLETS = 40; // Maximum outlets per beat
+const OUTLETS_PER_SALESMAN = 35;
 const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
-const TRAVEL_SPEED = 20; // Updated from 30 to 20
+const TRAVEL_SPEED = 30;
 
 export const simulatedAnnealing = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
@@ -39,25 +38,21 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
   while (temperature > MIN_TEMPERATURE) {
     for (let i = 0; i < ITERATIONS_PER_TEMP; i++) {
       const neighborSolution = createNeighborSolution(currentSolution);
+      const neighborEnergy = calculateTotalDistance(neighborSolution);
       
-      // Only accept solutions where all routes meet the minimum outlet requirement
-      if (neighborSolution.every(route => route.stops.length >= MIN_OUTLETS)) {
-        const neighborEnergy = calculateTotalDistance(neighborSolution);
+      const acceptanceProbability = calculateAcceptanceProbability(
+        currentEnergy,
+        neighborEnergy,
+        temperature
+      );
+      
+      if (Math.random() < acceptanceProbability) {
+        currentSolution = neighborSolution;
+        currentEnergy = neighborEnergy;
         
-        const acceptanceProbability = calculateAcceptanceProbability(
-          currentEnergy,
-          neighborEnergy,
-          temperature
-        );
-        
-        if (Math.random() < acceptanceProbability) {
-          currentSolution = neighborSolution;
-          currentEnergy = neighborEnergy;
-          
-          if (currentEnergy < bestEnergy) {
-            bestSolution = JSON.parse(JSON.stringify(currentSolution));
-            bestEnergy = currentEnergy;
-          }
+        if (currentEnergy < bestEnergy) {
+          bestSolution = JSON.parse(JSON.stringify(currentSolution));
+          bestEnergy = currentEnergy;
         }
       }
     }
@@ -99,8 +94,8 @@ function createInitialSolution(
       let assignedOutlets = 0;
       
       while (clusterCustomers.length > 0 && 
-             remainingTime > CUSTOMER_VISIT_TIME &&
-             assignedOutlets < MAX_OUTLETS) {
+             remainingTime > 0 && 
+             assignedOutlets < OUTLETS_PER_SALESMAN) {
         let nearestIndex = -1;
         let shortestDistance = Infinity;
         
@@ -110,9 +105,6 @@ function createInitialSolution(
             currentLat, currentLng,
             customer.latitude, customer.longitude
           );
-          
-          const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
-          if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) continue;
           
           if (distance < shortestDistance) {
             shortestDistance = distance;
@@ -124,6 +116,8 @@ function createInitialSolution(
         
         const customer = clusterCustomers.splice(nearestIndex, 1)[0];
         const travelTime = calculateTravelTime(shortestDistance, TRAVEL_SPEED);
+        
+        if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) break;
         
         route.stops.push({
           customerId: customer.id,
@@ -144,18 +138,9 @@ function createInitialSolution(
         assignedOutlets++;
       }
       
-      // Only add routes that meet the minimum outlet requirement
-      if (route.stops.length >= MIN_OUTLETS) {
+      if (route.stops.length > 0) {
         updateRouteMetrics(route, distributor);
         routes.push(route);
-      } else if (route.stops.length > 0) {
-        // Put customers back in the pool if route is too small
-        clusterCustomers.push(...route.stops.map(stop => ({
-          id: stop.customerId,
-          latitude: stop.latitude,
-          longitude: stop.longitude,
-          clusterId: stop.clusterId
-        })));
       }
     }
   }
