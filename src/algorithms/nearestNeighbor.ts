@@ -5,7 +5,7 @@ const MIN_OUTLETS = 30; // Strict minimum outlets per beat
 const MAX_OUTLETS = 40; // Maximum outlets per beat
 const CUSTOMER_VISIT_TIME = 6; // 6 minutes per customer
 const MAX_WORKING_TIME = 360; // 6 hours in minutes
-const TRAVEL_SPEED = 30; // km/h
+const TRAVEL_SPEED = 20; // km/h - Updated from 30 to 20
 
 export const nearestNeighbor = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
