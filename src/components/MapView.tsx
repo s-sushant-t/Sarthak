@@ -39,6 +39,22 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
   const [selectedBeat, setSelectedBeat] = useState<number | null>(null);
   const [clusterStats, setClusterStats] = useState<Record<number, { count: number; distance: number }>>({});
   const [clusterPolygons, setClusterPolygons] = useState<L.Polygon[]>([]);
+  const [availableBeats, setAvailableBeats] = useState<number[]>([]);
+
+  useEffect(() => {
+    if (selectedCluster === null) {
+      setAvailableBeats(routes.map(route => route.salesmanId));
+    } else {
+      const beatsInCluster = routes
+        .filter(route => route.stops.some(stop => stop.clusterId === selectedCluster))
+        .map(route => route.salesmanId);
+      setAvailableBeats(beatsInCluster);
+      
+      if (selectedBeat !== null && !beatsInCluster.includes(selectedBeat)) {
+        setSelectedBeat(null);
+      }
+    }
+  }, [selectedCluster, routes]);
 
   const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
     const R = 6371;
@@ -471,7 +487,9 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
               className="appearance-none bg-white border border-gray-300 rounded-lg px-4 py-2 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
               value={selectedCluster === null ? '' : selectedCluster}
               onChange={(e) => {
-                setSelectedCluster(e.target.value === '' ? null : Number(e.target.value));
+                const value = e.target.value === '' ? null : Number(e.target.value);
+                setSelectedCluster(value);
+                setSelectedBeat(null);
                 updateRouteDisplay();
               }}
             >
@@ -498,11 +516,14 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
               }}
             >
               <option value="">All Beats</option>
-              {routes.map((route) => (
-                <option key={route.salesmanId} value={route.salesmanId}>
-                  Beat {route.salesmanId} ({route.stops.length} stops)
-                </option>
-              ))}
+              {availableBeats.map((beatId) => {
+                const route = routes.find(r => r.salesmanId === beatId);
+                return (
+                  <option key={beatId} value={beatId}>
+                    Beat {beatId} ({route?.stops.length || 0} stops)
+                  </option>
+                );
+              })}
             </select>
             <ChevronDown 
               size={16} 
