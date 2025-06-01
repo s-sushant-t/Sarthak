@@ -62,7 +62,7 @@ const AlgorithmCard: React.FC<AlgorithmCardProps> = ({
             <span className="font-medium">{result.totalDistance.toFixed(2)} km</span>
           </div>
           <div className="flex justify-between text-sm text-gray-600">
-            <span>Salesmen Required:</span>
+            <span>Beats Formed:</span>
             <span className="font-medium">{result.totalSalesmen}</span>
           </div>
           <div className="flex justify-between text-sm text-gray-600">
