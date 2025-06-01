@@ -36,12 +36,12 @@ export const calculateHaversineDistance = (
  * Calculate the travel time between two points based on distance and speed.
  * 
  * @param distance Distance in kilometers
- * @param speedKmPerHour Speed in kilometers per hour
+ * @param speedKmPerHour Speed in kilometers per hour (defaults to 20 km/h)
  * @returns Travel time in minutes
  */
 export const calculateTravelTime = (
   distance: number,
-  speedKmPerHour: number = 30
+  speedKmPerHour: number = 20 // Updated default speed from 30 to 20
 ): number => {
   // Time = Distance / Speed (in hours)
   const timeInHours = distance / speedKmPerHour;
