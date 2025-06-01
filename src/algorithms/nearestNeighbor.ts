@@ -1,7 +1,9 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const OUTLETS_PER_SALESMAN = 35;
+const OUTLETS_PER_BEAT = 35; // Target number of outlets per beat
+const MIN_OUTLETS = 30; // Minimum outlets per beat
+const MAX_OUTLETS = 40; // Maximum outlets per beat
 const CUSTOMER_VISIT_TIME = 6; // 6 minutes per customer
 const MAX_WORKING_TIME = 360; // 6 hours in minutes
 const TRAVEL_SPEED = 30; // km/h
@@ -42,7 +44,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       
       while (unassignedCustomers.length > 0 && 
              remainingTime > 0 && 
-             assignedOutlets < OUTLETS_PER_SALESMAN) {
+             assignedOutlets < MAX_OUTLETS) {
         let nearestIndex = -1;
         let shortestDistance = Infinity;
         
@@ -62,7 +64,8 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
           }
         }
         
-        if (nearestIndex === -1) break;
+        if (nearestIndex === -1 || 
+            (assignedOutlets >= MIN_OUTLETS && remainingTime < MAX_WORKING_TIME * 0.2)) break;
         
         const nearestCustomer = unassignedCustomers.splice(nearestIndex, 1)[0];
         const travelTime = calculateTravelTime(shortestDistance, TRAVEL_SPEED);
@@ -102,8 +105,19 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         currentStop.timeToNext = time;
       }
       
-      if (currentRoute.stops.length > 0) {
+      if (currentRoute.stops.length >= MIN_OUTLETS) {
         routes.push(currentRoute);
+      } else if (currentRoute.stops.length > 0) {
+        // If we have a partial route that's too small, try to merge it with the previous route
+        const lastRoute = routes[routes.length - 1];
+        if (lastRoute && lastRoute.clusterIds[0] === Number(clusterId) &&
+            lastRoute.stops.length + currentRoute.stops.length <= MAX_OUTLETS) {
+          lastRoute.stops.push(...currentRoute.stops);
+          lastRoute.totalDistance += currentRoute.totalDistance;
+          lastRoute.totalTime += currentRoute.totalTime;
+        } else {
+          routes.push(currentRoute);
+        }
       }
     }
   }
