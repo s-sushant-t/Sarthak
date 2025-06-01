@@ -10,118 +10,174 @@ export const clusterCustomers = async (
       return [];
     }
 
-    // Convert customers to GeoJSON points for DBSCAN
-    const points = customers.map(customer => 
-      point([customer.longitude, customer.latitude], { 
-        customerId: customer.id 
-      })
-    );
-    
-    const pointCollection = featureCollection(points);
+    const TARGET_MIN_SIZE = 180;
+    const TARGET_MAX_SIZE = 210;
+    let maxDistance = 5; // Start with 5km radius
+    let clusteredCustomers: ClusteredCustomer[] = [];
+    let attempts = 0;
+    const MAX_ATTEMPTS = 10;
 
-    // DBSCAN parameters
-    const options = {
-      minPoints: 5, // Minimum points to form a cluster
-      maxDistance: 2, // Maximum distance (in km) between points in the same cluster
-      units: 'kilometers'
-    };
-
-    // Perform DBSCAN clustering
-    const clustered = clustersDbscan(pointCollection, options.maxDistance, {
-      minPoints: options.minPoints,
-      units: options.units
-    });
-
-    // Process clustering results
-    const clusterMap = new Map<number, number>();
-    let nextClusterId = 0;
-
-    // Map DBSCAN cluster numbers to sequential cluster IDs
-    clustered.features.forEach(feature => {
-      const dbscanCluster = feature.properties?.cluster;
-      
-      if (dbscanCluster !== undefined && !clusterMap.has(dbscanCluster)) {
-        clusterMap.set(dbscanCluster, nextClusterId++);
-      }
-    });
-
-    // Convert back to ClusteredCustomer format
-    const clusteredCustomers: ClusteredCustomer[] = clustered.features.map((feature, index) => {
-      const dbscanCluster = feature.properties?.cluster;
-      const clusterId = dbscanCluster !== undefined 
-        ? clusterMap.get(dbscanCluster) || 0
-        : nextClusterId++; // Noise points get their own clusters
-
-      return {
-        id: customers[index].id,
-        latitude: feature.geometry.coordinates[1],
-        longitude: feature.geometry.coordinates[0],
-        clusterId
-      };
-    });
-
-    // Optimize small clusters
-    const MIN_CLUSTER_SIZE = 10;
-    const clusterSizes = new Map<number, number>();
-    
-    // Count customers in each cluster
-    clusteredCustomers.forEach(customer => {
-      clusterSizes.set(
-        customer.clusterId,
-        (clusterSizes.get(customer.clusterId) || 0) + 1
+    while (attempts < MAX_ATTEMPTS) {
+      // Convert customers to GeoJSON points for DBSCAN
+      const points = customers.map(customer => 
+        point([customer.longitude, customer.latitude], { 
+          customerId: customer.id 
+        })
       );
-    });
-
-    // Merge small clusters with nearest larger cluster
-    for (const customer of clusteredCustomers) {
-      const size = clusterSizes.get(customer.clusterId) || 0;
       
-      if (size < MIN_CLUSTER_SIZE) {
-        let nearestCluster = customer.clusterId;
-        let minDistance = Infinity;
+      const pointCollection = featureCollection(points);
 
-        // Find nearest larger cluster
-        clusteredCustomers.forEach(other => {
-          if (other.clusterId !== customer.clusterId && 
-              (clusterSizes.get(other.clusterId) || 0) >= MIN_CLUSTER_SIZE) {
-            const distance = calculateDistance(
-              customer.latitude,
-              customer.longitude,
-              other.latitude,
-              other.longitude
-            );
-            
-            if (distance < minDistance) {
-              minDistance = distance;
-              nearestCluster = other.clusterId;
-            }
+      // DBSCAN parameters
+      const options = {
+        minPoints: Math.floor(TARGET_MIN_SIZE * 0.1), // 10% of target minimum size
+        maxDistance: maxDistance,
+        units: 'kilometers'
+      };
+
+      // Perform DBSCAN clustering
+      const clustered = clustersDbscan(pointCollection, options.maxDistance, {
+        minPoints: options.minPoints,
+        units: options.units
+      });
+
+      // Process clustering results
+      const clusterSizes = new Map<number, number>();
+      const clusterMap = new Map<number, number>();
+      let nextClusterId = 0;
+
+      // Count points in each DBSCAN cluster
+      clustered.features.forEach(feature => {
+        const dbscanCluster = feature.properties?.cluster;
+        if (dbscanCluster !== undefined) {
+          clusterSizes.set(
+            dbscanCluster,
+            (clusterSizes.get(dbscanCluster) || 0) + 1
+          );
+        }
+      });
+
+      // Check if clusters are within desired size range
+      let validClusters = true;
+      clusterSizes.forEach((size, _) => {
+        if (size < TARGET_MIN_SIZE || size > TARGET_MAX_SIZE) {
+          validClusters = false;
+        }
+      });
+
+      if (validClusters && clusterSizes.size > 0) {
+        // Map DBSCAN cluster numbers to sequential cluster IDs
+        clustered.features.forEach(feature => {
+          const dbscanCluster = feature.properties?.cluster;
+          if (dbscanCluster !== undefined && !clusterMap.has(dbscanCluster)) {
+            clusterMap.set(dbscanCluster, nextClusterId++);
           }
         });
 
-        if (nearestCluster !== customer.clusterId) {
-          customer.clusterId = nearestCluster;
-          clusterSizes.set(
-            nearestCluster,
-            (clusterSizes.get(nearestCluster) || 0) + 1
+        // Convert to ClusteredCustomer format
+        clusteredCustomers = clustered.features.map((feature, index) => {
+          const dbscanCluster = feature.properties?.cluster;
+          const clusterId = dbscanCluster !== undefined 
+            ? clusterMap.get(dbscanCluster) || 0
+            : nextClusterId++; // Noise points get their own clusters
+
+          return {
+            id: customers[index].id,
+            latitude: feature.geometry.coordinates[1],
+            longitude: feature.geometry.coordinates[0],
+            clusterId
+          };
+        });
+
+        // Handle remaining unassigned customers
+        const unassignedCustomers = clusteredCustomers.filter(
+          customer => !clusterMap.has(customer.clusterId)
+        );
+
+        if (unassignedCustomers.length > 0) {
+          // Assign each unassigned customer to the nearest cluster
+          unassignedCustomers.forEach(customer => {
+            let nearestCluster = 0;
+            let minDistance = Infinity;
+
+            clusteredCustomers
+              .filter(c => clusterMap.has(c.clusterId))
+              .forEach(other => {
+                const distance = calculateDistance(
+                  customer.latitude,
+                  customer.longitude,
+                  other.latitude,
+                  other.longitude
+                );
+                
+                if (distance < minDistance) {
+                  minDistance = distance;
+                  nearestCluster = other.clusterId;
+                }
+              });
+
+            customer.clusterId = nearestCluster;
+          });
+        }
+
+        // Verify final cluster sizes
+        const finalClusterSizes = new Map<number, number>();
+        clusteredCustomers.forEach(customer => {
+          finalClusterSizes.set(
+            customer.clusterId,
+            (finalClusterSizes.get(customer.clusterId) || 0) + 1
           );
+        });
+
+        let allClustersValid = true;
+        finalClusterSizes.forEach((size, _) => {
+          if (size < TARGET_MIN_SIZE || size > TARGET_MAX_SIZE) {
+            allClustersValid = false;
+          }
+        });
+
+        if (allClustersValid) {
+          break;
         }
       }
+
+      // Adjust maxDistance based on cluster sizes
+      const avgClusterSize = Array.from(clusterSizes.values())
+        .reduce((sum, size) => sum + size, 0) / Math.max(clusterSizes.size, 1);
+
+      if (avgClusterSize < TARGET_MIN_SIZE) {
+        maxDistance *= 1.5; // Increase radius if clusters are too small
+      } else {
+        maxDistance *= 0.75; // Decrease radius if clusters are too large
+      }
+
+      attempts++;
     }
 
-    // Ensure we have valid clusters
-    return clusteredCustomers.length > 0 
-      ? clusteredCustomers 
-      : customers.map(customer => ({
-          ...customer,
-          clusterId: 0
-        }));
+    // If we couldn't create valid clusters, create them manually
+    if (clusteredCustomers.length === 0) {
+      const numClusters = Math.ceil(customers.length / TARGET_MAX_SIZE);
+      const customersPerCluster = Math.ceil(customers.length / numClusters);
+
+      // Sort customers by latitude to create geographical clusters
+      const sortedCustomers = [...customers].sort((a, b) => a.latitude - b.latitude);
+
+      clusteredCustomers = sortedCustomers.map((customer, index) => ({
+        ...customer,
+        clusterId: Math.floor(index / customersPerCluster)
+      }));
+    }
+
+    return clusteredCustomers;
 
   } catch (error) {
     console.error('Clustering error:', error);
-    // Fallback: assign all customers to a single cluster
-    return customers.map(customer => ({
+    // Fallback: create evenly sized clusters
+    const numClusters = Math.ceil(customers.length / TARGET_MAX_SIZE);
+    const customersPerCluster = Math.ceil(customers.length / numClusters);
+
+    return customers.map((customer, index) => ({
       ...customer,
-      clusterId: 0
+      clusterId: Math.floor(index / customersPerCluster)
     }));
   }
 };
