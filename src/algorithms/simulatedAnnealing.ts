@@ -1,7 +1,9 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const OUTLETS_PER_SALESMAN = 35;
+const OUTLETS_PER_BEAT = 35; // Target number of outlets per beat
+const MIN_OUTLETS = 30; // Minimum outlets per beat
+const MAX_OUTLETS = 40; // Maximum outlets per beat
 const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
 const TRAVEL_SPEED = 30;
@@ -95,7 +97,7 @@ function createInitialSolution(
       
       while (clusterCustomers.length > 0 && 
              remainingTime > 0 && 
-             assignedOutlets < OUTLETS_PER_SALESMAN) {
+             assignedOutlets < OUTLETS_PER_BEAT) {
         let nearestIndex = -1;
         let shortestDistance = Infinity;
         
