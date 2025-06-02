@@ -39,21 +39,17 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       let currentLat = distributor.latitude;
       let currentLng = distributor.longitude;
       let remainingTime = MAX_WORKING_TIME;
-      let assignedOutlets = 0;
       
       // Calculate target outlets for this route
       const remainingOutlets = unassignedCustomers.length;
       const targetOutlets = Math.max(
         MIN_OUTLETS_PER_BEAT,
-        Math.min(
-          MAX_OUTLETS_PER_BEAT,
-          remainingOutlets <= MIN_OUTLETS_PER_BEAT * 1.5 ? remainingOutlets : MAX_OUTLETS_PER_BEAT
-        )
+        Math.min(MAX_OUTLETS_PER_BEAT, remainingOutlets)
       );
       
       while (unassignedCustomers.length > 0 && 
              remainingTime > 0 && 
-             assignedOutlets < targetOutlets) {
+             currentRoute.stops.length < targetOutlets) {
         let nearestIndex = -1;
         let shortestDistance = Infinity;
         
@@ -94,16 +90,16 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         
         currentLat = nearestCustomer.latitude;
         currentLng = nearestCustomer.longitude;
-        assignedOutlets++;
       }
       
-      // If we have less than minimum outlets and there are other routes
-      if (currentRoute.stops.length < MIN_OUTLETS_PER_BEAT && routes.length > 0) {
+      // If we have less than minimum outlets, try to merge with an existing route
+      if (currentRoute.stops.length < MIN_OUTLETS_PER_BEAT) {
         // Find the nearest route to merge with
         let nearestRouteIndex = -1;
         let minDistance = Infinity;
         
         routes.forEach((route, index) => {
+          // Only consider routes from the same cluster that won't exceed max outlets when merged
           if (route.clusterIds[0] === Number(clusterId) && 
               route.stops.length + currentRoute.stops.length <= MAX_OUTLETS_PER_BEAT) {
             const lastStop = route.stops[route.stops.length - 1];
@@ -153,7 +149,19 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
             prevLng = stop.longitude;
           });
           
-          continue;
+          continue; // Skip adding current route since it was merged
+        }
+        
+        // If we can't merge and there are still unassigned customers,
+        // return customers to unassigned pool
+        if (unassignedCustomers.length > 0) {
+          unassignedCustomers.push(...currentRoute.stops.map(stop => ({
+            id: stop.customerId,
+            latitude: stop.latitude,
+            longitude: stop.longitude,
+            clusterId: stop.clusterId
+          })));
+          continue; // Skip adding current route
         }
       }
       
@@ -173,7 +181,8 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         currentStop.timeToNext = time;
       }
       
-      if (currentRoute.stops.length > 0) {
+      // Only add routes that meet the minimum outlet requirement
+      if (currentRoute.stops.length >= MIN_OUTLETS_PER_BEAT) {
         routes.push(currentRoute);
       }
     }
@@ -237,8 +246,6 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
           prevLat = stop.latitude;
           prevLng = stop.longitude;
         });
-      } else {
-        acc.push(route);
       }
     }
     return acc;
