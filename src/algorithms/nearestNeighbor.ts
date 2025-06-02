@@ -2,7 +2,7 @@ import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmRes
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
 const MIN_OUTLETS_PER_BEAT = 30; // Minimum outlets per beat
-const MAX_OUTLETS_PER_BEAT = 35; // Maximum outlets per beat
+const MAX_OUTLETS_PER_BEAT = 40; // Maximum outlets per beat
 const CUSTOMER_VISIT_TIME = 6; // 6 minutes per customer
 const MAX_WORKING_TIME = 360; // 6 hours in minutes
 const TRAVEL_SPEED = 30; // km/h
@@ -104,14 +104,15 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         let minDistance = Infinity;
         
         routes.forEach((route, index) => {
-          if (route.clusterIds[0] === Number(clusterId)) {
+          if (route.clusterIds[0] === Number(clusterId) && 
+              route.stops.length + currentRoute.stops.length <= MAX_OUTLETS_PER_BEAT) {
             const lastStop = route.stops[route.stops.length - 1];
             const distance = calculateHaversineDistance(
               lastStop.latitude, lastStop.longitude,
               currentRoute.stops[0].latitude, currentRoute.stops[0].longitude
             );
             
-            if (distance < minDistance && route.stops.length + currentRoute.stops.length <= MAX_OUTLETS_PER_BEAT) {
+            if (distance < minDistance) {
               minDistance = distance;
               nearestRouteIndex = index;
             }
