@@ -1,7 +1,8 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const OUTLETS_PER_SALESMAN = 35;
+const MIN_OUTLETS_PER_BEAT = 30;
+const MAX_OUTLETS_PER_BEAT = 40;
 const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
 const TRAVEL_SPEED = 30;
@@ -38,21 +39,25 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
   while (temperature > MIN_TEMPERATURE) {
     for (let i = 0; i < ITERATIONS_PER_TEMP; i++) {
       const neighborSolution = createNeighborSolution(currentSolution);
-      const neighborEnergy = calculateTotalDistance(neighborSolution);
       
-      const acceptanceProbability = calculateAcceptanceProbability(
-        currentEnergy,
-        neighborEnergy,
-        temperature
-      );
-      
-      if (Math.random() < acceptanceProbability) {
-        currentSolution = neighborSolution;
-        currentEnergy = neighborEnergy;
+      // Only accept solutions where all routes meet the minimum requirement
+      if (neighborSolution.every(route => route.stops.length >= MIN_OUTLETS_PER_BEAT)) {
+        const neighborEnergy = calculateTotalDistance(neighborSolution);
         
-        if (currentEnergy < bestEnergy) {
-          bestSolution = JSON.parse(JSON.stringify(currentSolution));
-          bestEnergy = currentEnergy;
+        const acceptanceProbability = calculateAcceptanceProbability(
+          currentEnergy,
+          neighborEnergy,
+          temperature
+        );
+        
+        if (Math.random() < acceptanceProbability) {
+          currentSolution = neighborSolution;
+          currentEnergy = neighborEnergy;
+          
+          if (currentEnergy < bestEnergy) {
+            bestSolution = JSON.parse(JSON.stringify(currentSolution));
+            bestEnergy = currentEnergy;
+          }
         }
       }
     }
@@ -60,12 +65,15 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
     temperature *= COOLING_RATE;
   }
   
+  // Ensure all routes in the best solution meet minimum requirements
+  const validRoutes = bestSolution.filter(route => route.stops.length >= MIN_OUTLETS_PER_BEAT);
+  
   return {
     name: 'Simulated Annealing (Clustered)',
-    totalDistance: bestEnergy,
-    totalSalesmen: bestSolution.length,
+    totalDistance: calculateTotalDistance(validRoutes),
+    totalSalesmen: validRoutes.length,
     processingTime: 0,
-    routes: bestSolution
+    routes: validRoutes
   };
 };
 
@@ -91,11 +99,17 @@ function createInitialSolution(
       let currentLat = distributor.latitude;
       let currentLng = distributor.longitude;
       let remainingTime = MAX_WORKING_TIME;
-      let assignedOutlets = 0;
+      
+      // Calculate target outlets for this route
+      const remainingOutlets = clusterCustomers.length;
+      const targetOutlets = Math.max(
+        MIN_OUTLETS_PER_BEAT,
+        Math.min(MAX_OUTLETS_PER_BEAT, remainingOutlets)
+      );
       
       while (clusterCustomers.length > 0 && 
              remainingTime > 0 && 
-             assignedOutlets < OUTLETS_PER_SALESMAN) {
+             route.stops.length < targetOutlets) {
         let nearestIndex = -1;
         let shortestDistance = Infinity;
         
@@ -105,6 +119,9 @@ function createInitialSolution(
             currentLat, currentLng,
             customer.latitude, customer.longitude
           );
+          
+          const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
+          if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) continue;
           
           if (distance < shortestDistance) {
             shortestDistance = distance;
@@ -116,8 +133,6 @@ function createInitialSolution(
         
         const customer = clusterCustomers.splice(nearestIndex, 1)[0];
         const travelTime = calculateTravelTime(shortestDistance, TRAVEL_SPEED);
-        
-        if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) break;
         
         route.stops.push({
           customerId: customer.id,
@@ -135,13 +150,21 @@ function createInitialSolution(
         
         currentLat = customer.latitude;
         currentLng = customer.longitude;
-        assignedOutlets++;
       }
       
-      if (route.stops.length > 0) {
-        updateRouteMetrics(route, distributor);
-        routes.push(route);
+      // If route doesn't meet minimum requirements, return customers to pool
+      if (route.stops.length < MIN_OUTLETS_PER_BEAT) {
+        clusterCustomers.push(...route.stops.map(stop => ({
+          id: stop.customerId,
+          latitude: stop.latitude,
+          longitude: stop.longitude,
+          clusterId: stop.clusterId
+        })));
+        continue;
       }
+      
+      updateRouteMetrics(route, distributor);
+      routes.push(route);
     }
   }
   
@@ -192,23 +215,27 @@ function createNeighborSolution(solution: SalesmanRoute[]): SalesmanRoute[] {
       }
       break;
       
-    case 2: // Move a stop to a different position within the same route
-      if (newSolution.length > 0) {
-        const routeIndex = Math.floor(Math.random() * newSolution.length);
-        const route = newSolution[routeIndex];
+    case 2: // Move stops between routes while maintaining minimum requirements
+      if (newSolution.length >= 2) {
+        const sourceIndex = Math.floor(Math.random() * newSolution.length);
+        let targetIndex = Math.floor(Math.random() * newSolution.length);
         
-        if (route.stops.length >= 2) {
-          const fromIndex = Math.floor(Math.random() * route.stops.length);
-          let toIndex = Math.floor(Math.random() * route.stops.length);
+        while (targetIndex === sourceIndex) {
+          targetIndex = Math.floor(Math.random() * newSolution.length);
+        }
+        
+        const sourceRoute = newSolution[sourceIndex];
+        const targetRoute = newSolution[targetIndex];
+        
+        // Only move stops if both routes will maintain minimum requirements
+        if (sourceRoute.stops.length > MIN_OUTLETS_PER_BEAT + 1 &&
+            targetRoute.stops.length < MAX_OUTLETS_PER_BEAT) {
+          const stopIndex = Math.floor(Math.random() * sourceRoute.stops.length);
+          const [stop] = sourceRoute.stops.splice(stopIndex, 1);
+          targetRoute.stops.push(stop);
           
-          while (fromIndex === toIndex) {
-            toIndex = Math.floor(Math.random() * route.stops.length);
-          }
-          
-          const [stop] = route.stops.splice(fromIndex, 1);
-          route.stops.splice(toIndex, 0, stop);
-          
-          updateRouteMetrics(route);
+          updateRouteMetrics(sourceRoute);
+          updateRouteMetrics(targetRoute);
         }
       }
       break;

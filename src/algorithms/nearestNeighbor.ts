@@ -152,17 +152,15 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
           continue; // Skip adding current route since it was merged
         }
         
-        // If we can't merge and there are still unassigned customers,
-        // return customers to unassigned pool
-        if (unassignedCustomers.length > 0) {
-          unassignedCustomers.push(...currentRoute.stops.map(stop => ({
-            id: stop.customerId,
-            latitude: stop.latitude,
-            longitude: stop.longitude,
-            clusterId: stop.clusterId
-          })));
-          continue; // Skip adding current route
-        }
+        // If we can't merge and have less than minimum required outlets,
+        // return customers to unassigned pool for redistribution
+        unassignedCustomers.push(...currentRoute.stops.map(stop => ({
+          id: stop.customerId,
+          latitude: stop.latitude,
+          longitude: stop.longitude,
+          clusterId: stop.clusterId
+        })));
+        continue; // Skip adding current route
       }
       
       // Update distanceToNext and timeToNext for each stop
@@ -192,62 +190,64 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   const finalRoutes = routes.reduce((acc, route) => {
     if (route.stops.length >= MIN_OUTLETS_PER_BEAT) {
       acc.push(route);
-    } else {
-      // Find best route to merge with
-      let bestRouteIndex = -1;
-      let minDistance = Infinity;
-      
-      acc.forEach((existingRoute, index) => {
-        if (existingRoute.clusterIds[0] === route.clusterIds[0] &&
-            existingRoute.stops.length + route.stops.length <= MAX_OUTLETS_PER_BEAT) {
-          const lastStop = existingRoute.stops[existingRoute.stops.length - 1];
-          const firstStop = route.stops[0];
-          const distance = calculateHaversineDistance(
-            lastStop.latitude, lastStop.longitude,
-            firstStop.latitude, firstStop.longitude
-          );
-          
-          if (distance < minDistance) {
-            minDistance = distance;
-            bestRouteIndex = index;
-          }
-        }
-      });
-      
-      if (bestRouteIndex !== -1) {
-        const targetRoute = acc[bestRouteIndex];
-        targetRoute.stops.push(...route.stops);
-        
-        // Recalculate metrics
-        let prevLat = distributor.latitude;
-        let prevLng = distributor.longitude;
-        targetRoute.totalDistance = 0;
-        targetRoute.totalTime = 0;
-        
-        targetRoute.stops.forEach((stop, index) => {
-          const distance = calculateHaversineDistance(prevLat, prevLng, stop.latitude, stop.longitude);
-          const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
-          
-          targetRoute.totalDistance += distance;
-          targetRoute.totalTime += travelTime + CUSTOMER_VISIT_TIME;
-          
-          if (index < targetRoute.stops.length - 1) {
-            const nextStop = targetRoute.stops[index + 1];
-            stop.distanceToNext = calculateHaversineDistance(
-              stop.latitude, stop.longitude,
-              nextStop.latitude, nextStop.longitude
-            );
-            stop.timeToNext = calculateTravelTime(stop.distanceToNext, TRAVEL_SPEED);
-          } else {
-            stop.distanceToNext = 0;
-            stop.timeToNext = 0;
-          }
-          
-          prevLat = stop.latitude;
-          prevLng = stop.longitude;
-        });
-      }
+      return acc;
     }
+    
+    // Find best route to merge with
+    let bestRouteIndex = -1;
+    let minDistance = Infinity;
+    
+    acc.forEach((existingRoute, index) => {
+      if (existingRoute.clusterIds[0] === route.clusterIds[0] &&
+          existingRoute.stops.length + route.stops.length <= MAX_OUTLETS_PER_BEAT) {
+        const lastStop = existingRoute.stops[existingRoute.stops.length - 1];
+        const firstStop = route.stops[0];
+        const distance = calculateHaversineDistance(
+          lastStop.latitude, lastStop.longitude,
+          firstStop.latitude, firstStop.longitude
+        );
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          bestRouteIndex = index;
+        }
+      }
+    });
+    
+    if (bestRouteIndex !== -1) {
+      const targetRoute = acc[bestRouteIndex];
+      targetRoute.stops.push(...route.stops);
+      
+      // Recalculate metrics
+      let prevLat = distributor.latitude;
+      let prevLng = distributor.longitude;
+      targetRoute.totalDistance = 0;
+      targetRoute.totalTime = 0;
+      
+      targetRoute.stops.forEach((stop, index) => {
+        const distance = calculateHaversineDistance(prevLat, prevLng, stop.latitude, stop.longitude);
+        const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
+        
+        targetRoute.totalDistance += distance;
+        targetRoute.totalTime += travelTime + CUSTOMER_VISIT_TIME;
+        
+        if (index < targetRoute.stops.length - 1) {
+          const nextStop = targetRoute.stops[index + 1];
+          stop.distanceToNext = calculateHaversineDistance(
+            stop.latitude, stop.longitude,
+            nextStop.latitude, nextStop.longitude
+          );
+          stop.timeToNext = calculateTravelTime(stop.distanceToNext, TRAVEL_SPEED);
+        } else {
+          stop.distanceToNext = 0;
+          stop.timeToNext = 0;
+        }
+        
+        prevLat = stop.latitude;
+        prevLng = stop.longitude;
+      });
+    }
+    
     return acc;
   }, [] as SalesmanRoute[]);
   
