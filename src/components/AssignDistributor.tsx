@@ -27,12 +27,11 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     setError(null);
 
     try {
-      // First, delete any existing routes for this distributor and wait for it to complete
-      const { error: deleteError, count } = await supabase
+      // First, delete any existing routes for this distributor
+      const { error: deleteError } = await supabase
         .from('distributor_routes')
         .delete()
-        .eq('distributor_code', distributorCode)
-        .select('count');
+        .eq('distributor_code', distributorCode);
 
       if (deleteError) throw deleteError;
 
