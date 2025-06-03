@@ -2,7 +2,7 @@ import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmRes
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
 const MIN_OUTLETS_PER_BEAT = 30;
-const MAX_OUTLETS_PER_BEAT = 50;
+const MAX_OUTLETS_PER_BEAT = 35;
 const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
 const TRAVEL_SPEED = 30;
