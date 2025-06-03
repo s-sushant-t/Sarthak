@@ -1,7 +1,8 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const OUTLETS_PER_SALESMAN = 35;
+const MIN_OUTLETS_PER_BEAT = 30;
+const MAX_OUTLETS_PER_BEAT = 50;
 const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
 const TRAVEL_SPEED = 30;
@@ -60,12 +61,16 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
     temperature *= COOLING_RATE;
   }
   
+  // Final pass to merge any small beats
+  const finalSolution = mergeSmallerBeats(bestSolution);
+  const finalEnergy = calculateTotalDistance(finalSolution);
+  
   return {
     name: 'Simulated Annealing (Clustered)',
-    totalDistance: bestEnergy,
-    totalSalesmen: bestSolution.length,
+    totalDistance: finalEnergy,
+    totalSalesmen: finalSolution.length,
     processingTime: 0,
-    routes: bestSolution
+    routes: finalSolution
   };
 };
 
@@ -93,9 +98,19 @@ function createInitialSolution(
       let remainingTime = MAX_WORKING_TIME;
       let assignedOutlets = 0;
       
+      // Calculate target outlets for this route
+      const remainingOutlets = clusterCustomers.length;
+      const targetOutlets = Math.max(
+        MIN_OUTLETS_PER_BEAT,
+        Math.min(
+          MAX_OUTLETS_PER_BEAT,
+          remainingOutlets <= MIN_OUTLETS_PER_BEAT * 1.5 ? remainingOutlets : MAX_OUTLETS_PER_BEAT
+        )
+      );
+      
       while (clusterCustomers.length > 0 && 
              remainingTime > 0 && 
-             assignedOutlets < OUTLETS_PER_SALESMAN) {
+             assignedOutlets < targetOutlets) {
         let nearestIndex = -1;
         let shortestDistance = Infinity;
         
@@ -145,7 +160,7 @@ function createInitialSolution(
     }
   }
   
-  return routes;
+  return mergeSmallerBeats(routes);
 }
 
 function createNeighborSolution(solution: SalesmanRoute[]): SalesmanRoute[] {
@@ -215,6 +230,44 @@ function createNeighborSolution(solution: SalesmanRoute[]): SalesmanRoute[] {
   }
   
   return newSolution;
+}
+
+function mergeSmallerBeats(routes: SalesmanRoute[]): SalesmanRoute[] {
+  return routes.reduce((acc, route) => {
+    if (route.stops.length >= MIN_OUTLETS_PER_BEAT) {
+      acc.push(route);
+    } else {
+      // Find best route to merge with
+      let bestRouteIndex = -1;
+      let minDistance = Infinity;
+      
+      acc.forEach((existingRoute, index) => {
+        if (existingRoute.clusterIds[0] === route.clusterIds[0] &&
+            existingRoute.stops.length + route.stops.length <= MAX_OUTLETS_PER_BEAT) {
+          const lastStop = existingRoute.stops[existingRoute.stops.length - 1];
+          const firstStop = route.stops[0];
+          const distance = calculateHaversineDistance(
+            lastStop.latitude, lastStop.longitude,
+            firstStop.latitude, firstStop.longitude
+          );
+          
+          if (distance < minDistance) {
+            minDistance = distance;
+            bestRouteIndex = index;
+          }
+        }
+      });
+      
+      if (bestRouteIndex !== -1) {
+        const targetRoute = acc[bestRouteIndex];
+        targetRoute.stops.push(...route.stops);
+        updateRouteMetrics(targetRoute);
+      } else {
+        acc.push(route);
+      }
+    }
+    return acc;
+  }, [] as SalesmanRoute[]);
 }
 
 function updateRouteMetrics(
