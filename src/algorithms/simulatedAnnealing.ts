@@ -7,6 +7,15 @@ const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
 const TRAVEL_SPEED = 30;
 
+// Parameters for simulated annealing
+const INITIAL_TEMPERATURE = 100;
+const COOLING_RATE = 0.95;
+const MIN_TEMPERATURE = 0.1;
+const ITERATIONS_PER_TEMP = 100;
+
+// Maximum allowed distance variance between beats (in km)
+const MAX_DISTANCE_VARIANCE = 5;
+
 export const simulatedAnnealing = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
@@ -19,18 +28,12 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
     return acc;
   }, {} as Record<number, ClusteredCustomer[]>);
   
-  // Parameters for simulated annealing
-  const INITIAL_TEMPERATURE = 100;
-  const COOLING_RATE = 0.95;
-  const MIN_TEMPERATURE = 0.1;
-  const ITERATIONS_PER_TEMP = 100;
-  
   // Create initial solution using nearest neighbor approach
   const initialSolution = createInitialSolution(distributor, customersByCluster);
   let currentSolution = JSON.parse(JSON.stringify(initialSolution));
   let bestSolution = JSON.parse(JSON.stringify(initialSolution));
   
-  let currentEnergy = calculateTotalDistance(currentSolution);
+  let currentEnergy = calculateEnergy(currentSolution);
   let bestEnergy = currentEnergy;
   
   // Simulated annealing process
@@ -39,7 +42,7 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
   while (temperature > MIN_TEMPERATURE) {
     for (let i = 0; i < ITERATIONS_PER_TEMP; i++) {
       const neighborSolution = createNeighborSolution(currentSolution);
-      const neighborEnergy = calculateTotalDistance(neighborSolution);
+      const neighborEnergy = calculateEnergy(neighborSolution);
       
       const acceptanceProbability = calculateAcceptanceProbability(
         currentEnergy,
@@ -334,6 +337,68 @@ function optimizeBeats(routes: SalesmanRoute[], distributor: { latitude: number;
     return acc;
   }, [] as SalesmanRoute[]);
   
+  // Balance distances between beats in the same cluster
+  const routesByCluster = optimizedRoutes.reduce((acc, route) => {
+    const clusterId = route.clusterIds[0];
+    if (!acc[clusterId]) acc[clusterId] = [];
+    acc[clusterId].push(route);
+    return acc;
+  }, {} as Record<number, SalesmanRoute[]>);
+  
+  for (const clusterId in routesByCluster) {
+    const clusterRoutes = routesByCluster[clusterId];
+    let iterations = 0;
+    const MAX_BALANCE_ITERATIONS = 100;
+    
+    while (iterations < MAX_BALANCE_ITERATIONS) {
+      const avgDistance = clusterRoutes.reduce((sum, r) => sum + r.totalDistance, 0) / clusterRoutes.length;
+      const maxVariance = Math.max(...clusterRoutes.map(r => Math.abs(r.totalDistance - avgDistance)));
+      
+      if (maxVariance <= MAX_DISTANCE_VARIANCE) break;
+      
+      // Find the most unbalanced pair of routes
+      let maxRoute = clusterRoutes[0];
+      let minRoute = clusterRoutes[0];
+      
+      for (const route of clusterRoutes) {
+        if (route.totalDistance > maxRoute.totalDistance) maxRoute = route;
+        if (route.totalDistance < minRoute.totalDistance) minRoute = route;
+      }
+      
+      // Try to move a stop from the longer route to the shorter one
+      if (maxRoute.stops.length > MIN_OUTLETS_PER_BEAT && 
+          minRoute.stops.length < MAX_OUTLETS_PER_BEAT) {
+        // Find the stop that would best balance the routes
+        let bestStop = null;
+        let bestImprovement = 0;
+        
+        for (let i = 0; i < maxRoute.stops.length; i++) {
+          const stop = maxRoute.stops[i];
+          const distanceContribution = calculateHaversineDistance(
+            maxRoute.stops[i-1]?.latitude || maxRoute.distributorLat,
+            maxRoute.stops[i-1]?.longitude || maxRoute.distributorLng,
+            stop.latitude,
+            stop.longitude
+          );
+          
+          if (Math.abs(maxRoute.totalDistance - minRoute.totalDistance - 2 * distanceContribution) < bestImprovement) {
+            bestStop = i;
+            bestImprovement = Math.abs(maxRoute.totalDistance - minRoute.totalDistance - 2 * distanceContribution);
+          }
+        }
+        
+        if (bestStop !== null) {
+          const [stop] = maxRoute.stops.splice(bestStop, 1);
+          minRoute.stops.push(stop);
+          updateRouteMetrics(maxRoute);
+          updateRouteMetrics(minRoute);
+        }
+      }
+      
+      iterations++;
+    }
+  }
+  
   // Reassign beat IDs sequentially
   return optimizedRoutes.map((route, index) => ({
     ...route,
@@ -341,6 +406,31 @@ function optimizeBeats(routes: SalesmanRoute[], distributor: { latitude: number;
     distributorLat: distributor.latitude,
     distributorLng: distributor.longitude
   }));
+}
+
+function calculateEnergy(solution: SalesmanRoute[]): number {
+  const totalDistance = calculateTotalDistance(solution);
+  
+  // Calculate distance variance penalty
+  let variancePenalty = 0;
+  const routesByCluster = solution.reduce((acc, route) => {
+    const clusterId = route.clusterIds[0];
+    if (!acc[clusterId]) acc[clusterId] = [];
+    acc[clusterId].push(route);
+    return acc;
+  }, {} as Record<number, SalesmanRoute[]>);
+  
+  for (const clusterId in routesByCluster) {
+    const clusterRoutes = routesByCluster[clusterId];
+    const avgDistance = clusterRoutes.reduce((sum, r) => sum + r.totalDistance, 0) / clusterRoutes.length;
+    
+    variancePenalty += clusterRoutes.reduce((sum, route) => {
+      const diff = Math.abs(route.totalDistance - avgDistance);
+      return sum + (diff > MAX_DISTANCE_VARIANCE ? diff - MAX_DISTANCE_VARIANCE : 0);
+    }, 0);
+  }
+  
+  return totalDistance + (variancePenalty * 2); // Weight variance penalty more heavily
 }
 
 function calculateTotalDistance(solution: SalesmanRoute[]): number {
