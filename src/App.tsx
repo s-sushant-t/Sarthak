@@ -9,12 +9,6 @@ import BeatHygieneCorrection from './components/BeatHygieneCorrection';
 import { processExcelFile } from './utils/excelParser';
 import { RouteData, LocationData, AlgorithmType, AlgorithmResult } from './types';
 import { executeAlgorithm } from './algorithms';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -31,68 +25,37 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        setIsAuthenticated(true);
-        setIsDistributor(session.user.email !== 'admin@itc.com');
-      }
-    };
-    
-    checkSession();
-  }, []);
-
-  const handleLogin = useCallback(async (loginId: string, password: string) => {
-    try {
-      let email: string;
-      if (loginId === 'EDIS') {
-        email = 'admin@itc.com';
-      } else if (loginId.includes('@')) {
-        // If loginId already contains @ symbol, use it as is
-        email = loginId;
-      } else {
-        // Otherwise, append @distributor.com
-        email = `${loginId}@distributor.com`;
-      }
-
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-
-      if (error) throw error;
-
+  const handleLogin = useCallback((loginId: string, password: string) => {
+    if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
       setIsAuthenticated(true);
-      setIsDistributor(loginId !== 'EDIS');
-      
-      if (loginId !== 'EDIS') {
-        // Store the distributor code without the email part
-        const distributorCode = loginId.includes('@') ? loginId.split('@')[0] : loginId;
-        sessionStorage.setItem('distributorCode', distributorCode);
-      }
-    } catch (error) {
-      console.error('Login error:', error);
-      throw error;
+      setIsDistributor(false);
+      sessionStorage.setItem('isAuthenticated', 'true');
+      sessionStorage.setItem('userType', 'admin');
+    } else {
+      throw new Error('Invalid credentials');
     }
   }, []);
 
-  const handleLogout = useCallback(async () => {
-    try {
-      await supabase.auth.signOut();
-      setIsAuthenticated(false);
-      setIsDistributor(false);
-      setLocationData(null);
-      setAlgorithmResults({
-        'nearest-neighbor': null,
-        'simulated-annealing': null,
-        'custom': null
-      });
-      setSelectedAlgorithm(null);
-      setActiveTab('upload');
-      sessionStorage.clear();
-    } catch (error) {
-      console.error('Logout error:', error);
+  const handleLogout = useCallback(() => {
+    setIsAuthenticated(false);
+    setIsDistributor(false);
+    setLocationData(null);
+    setAlgorithmResults({
+      'nearest-neighbor': null,
+      'simulated-annealing': null,
+      'custom': null
+    });
+    setSelectedAlgorithm(null);
+    setActiveTab('upload');
+    sessionStorage.clear();
+  }, []);
+
+  useEffect(() => {
+    const isAuth = sessionStorage.getItem('isAuthenticated') === 'true';
+    const userType = sessionStorage.getItem('userType');
+    if (isAuth) {
+      setIsAuthenticated(true);
+      setIsDistributor(userType === 'distributor');
     }
   }, []);
 
