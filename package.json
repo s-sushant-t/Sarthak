@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.39.7",
     "@turf/clusters-dbscan": "^6.5.0",
     "@turf/helpers": "^6.5.0",
     "leaflet": "^1.9.4",
