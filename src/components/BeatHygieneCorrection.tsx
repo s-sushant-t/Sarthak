@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
+import { Loader2 } from 'lucide-react';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -30,18 +31,20 @@ const BeatHygieneCorrection: React.FC = () => {
   const [selectedBeat, setSelectedBeat] = useState<number | null>(null);
   const [currentStop, setCurrentStop] = useState<Stop | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const { latitude, longitude, error: locationError } = useGeolocation();
 
   useEffect(() => {
     const fetchUser = async () => {
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError) {
-        setError('Error fetching user: ' + userError.message);
-        return;
+      try {
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError) throw userError;
+        setUserId(user?.id || null);
+      } catch (error) {
+        setError('Error fetching user: ' + (error instanceof Error ? error.message : 'Unknown error'));
       }
-      setUserId(user?.id || null);
     };
 
     fetchUser();
@@ -51,44 +54,53 @@ const BeatHygieneCorrection: React.FC = () => {
     const fetchBeats = async () => {
       if (!userId) return;
 
-      const { data, error } = await supabase
-        .from('distributor_routes')
-        .select('beat')
-        .eq('distributor_code', userId)
-        .order('beat');
+      try {
+        const { data, error } = await supabase
+          .from('distributor_routes')
+          .select('beat')
+          .eq('distributor_code', userId)
+          .order('beat');
 
-      if (error) {
-        setError('Error fetching beats: ' + error.message);
-        return;
+        if (error) throw error;
+
+        const uniqueBeats = [...new Set(data.map(d => d.beat))];
+        setBeats(uniqueBeats);
+      } catch (error) {
+        setError('Error fetching beats: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      } finally {
+        setIsLoading(false);
       }
-
-      const uniqueBeats = [...new Set(data.map(d => d.beat))];
-      setBeats(uniqueBeats);
-      setIsLoading(false);
     };
 
-    fetchBeats();
+    if (userId) {
+      fetchBeats();
+    }
   }, [userId]);
 
   const fetchNextStop = async () => {
     if (!selectedBeat || !userId) return;
 
-    const { data, error } = await supabase
-      .from('distributor_routes')
-      .select('*')
-      .eq('distributor_code', userId)
-      .eq('beat', selectedBeat)
-      .is('visit_time', null)
-      .order('stop_order')
-      .limit(1)
-      .single();
+    setIsProcessing(true);
+    try {
+      const { data, error } = await supabase
+        .from('distributor_routes')
+        .select('*')
+        .eq('distributor_code', userId)
+        .eq('beat', selectedBeat)
+        .is('visit_time', null)
+        .order('stop_order')
+        .limit(1)
+        .single();
 
-    if (error) {
-      setError('Error fetching next stop: ' + error.message);
-      return;
+      if (error) throw error;
+      setCurrentStop(data);
+      setError(null);
+    } catch (error) {
+      setError('Error fetching next stop: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setCurrentStop(null);
+    } finally {
+      setIsProcessing(false);
     }
-
-    setCurrentStop(data);
   };
 
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -113,42 +125,58 @@ const BeatHygieneCorrection: React.FC = () => {
   };
 
   const handleMarkVisit = async (formData: any) => {
-    if (!currentStop || !latitude || !longitude) return;
-
-    const distance = calculateDistance(
-      latitude,
-      longitude,
-      currentStop.latitude,
-      currentStop.longitude
-    );
-
-    if (distance > GEOFENCE_RADIUS && currentStop.stop_order !== 0) {
-      setError('You must be within 200 meters of the outlet to mark a visit');
+    if (!currentStop || (!latitude && currentStop.stop_order !== 0) || (!longitude && currentStop.stop_order !== 0)) {
+      setError('Location data is required to mark a visit');
       return;
     }
 
-    const { error } = await supabase
-      .from('distributor_routes')
-      .update({
-        visit_time: new Date().toISOString(),
-        market_work_remark: formData.marketWorkRemark,
-        updated_ol_name: formData.updatedOutletName,
-        owner_name: formData.ownerName,
-        owner_contact: formData.ownerContact,
-        ol_closure_time: formData.closureTime
-      })
-      .eq('id', currentStop.id);
+    if (currentStop.stop_order !== 0) {
+      const distance = calculateDistance(
+        latitude!,
+        longitude!,
+        currentStop.latitude,
+        currentStop.longitude
+      );
 
-    if (error) {
-      setError('Error updating visit: ' + error.message);
-      return;
+      if (distance > GEOFENCE_RADIUS) {
+        setError('You must be within 200 meters of the outlet to mark a visit');
+        return;
+      }
     }
 
-    await fetchNextStop();
+    setIsProcessing(true);
+    try {
+      const { error } = await supabase
+        .from('distributor_routes')
+        .update({
+          visit_time: new Date().toISOString(),
+          market_work_remark: formData.marketWorkRemark,
+          updated_ol_name: formData.updatedOutletName,
+          owner_name: formData.ownerName,
+          owner_contact: formData.ownerContact,
+          ol_closure_time: formData.closureTime
+        })
+        .eq('id', currentStop.id);
+
+      if (error) throw error;
+      setError(null);
+      await fetchNextStop();
+    } catch (error) {
+      setError('Error updating visit: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+          <p className="text-gray-600">Loading beat data...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -175,6 +203,7 @@ const BeatHygieneCorrection: React.FC = () => {
           className="w-full border-gray-300 rounded-lg shadow-sm"
           value={selectedBeat || ''}
           onChange={(e) => handleBeatSelect(Number(e.target.value))}
+          disabled={isProcessing}
         >
           <option value="">Select a beat</option>
           {beats.map((beat) => (
@@ -183,7 +212,16 @@ const BeatHygieneCorrection: React.FC = () => {
         </select>
       </div>
 
-      {currentStop && (
+      {isProcessing && (
+        <div className="flex justify-center my-8">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+            <p className="text-gray-600">Processing...</p>
+          </div>
+        </div>
+      )}
+
+      {!isProcessing && currentStop && (
         <div className="bg-white rounded-lg shadow-md p-6">
           <div className="mb-4">
             <h3 className="text-lg font-semibold mb-2">
@@ -207,9 +245,17 @@ const BeatHygieneCorrection: React.FC = () => {
           {currentStop.stop_order === 0 ? (
             <button
               onClick={() => handleMarkVisit({})}
-              className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700"
+              className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={isProcessing}
             >
-              Mark Distribution Point Visit
+              {isProcessing ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Processing...
+                </span>
+              ) : (
+                'Mark Distribution Point Visit'
+              )}
             </button>
           ) : (
             <form
@@ -234,6 +280,7 @@ const BeatHygieneCorrection: React.FC = () => {
                   name="marketWorkRemark"
                   required
                   className="w-full border-gray-300 rounded-lg shadow-sm"
+                  disabled={isProcessing}
                 >
                   <option value="">Select remark</option>
                   <option value="GR1BDS">GR1BDS</option>
@@ -253,6 +300,7 @@ const BeatHygieneCorrection: React.FC = () => {
                   type="text"
                   name="updatedOutletName"
                   className="w-full border-gray-300 rounded-lg shadow-sm"
+                  disabled={isProcessing}
                 />
               </div>
 
@@ -264,6 +312,7 @@ const BeatHygieneCorrection: React.FC = () => {
                   type="text"
                   name="ownerName"
                   className="w-full border-gray-300 rounded-lg shadow-sm"
+                  disabled={isProcessing}
                 />
               </div>
 
@@ -275,6 +324,7 @@ const BeatHygieneCorrection: React.FC = () => {
                   type="text"
                   name="ownerContact"
                   className="w-full border-gray-300 rounded-lg shadow-sm"
+                  disabled={isProcessing}
                 />
               </div>
 
@@ -286,15 +336,23 @@ const BeatHygieneCorrection: React.FC = () => {
                   type="time"
                   name="closureTime"
                   className="w-full border-gray-300 rounded-lg shadow-sm"
+                  disabled={isProcessing}
                 />
               </div>
 
               <button
                 type="submit"
-                className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700"
-                disabled={!latitude || !longitude}
+                className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isProcessing || !latitude || !longitude}
               >
-                Mark Visit
+                {isProcessing ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Processing...
+                  </span>
+                ) : (
+                  'Mark Visit'
+                )}
               </button>
             </form>
           )}
