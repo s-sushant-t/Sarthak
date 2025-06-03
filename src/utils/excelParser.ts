@@ -8,8 +8,6 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
     
     reader.onload = async (e) => {
       try {
-        console.log('Starting Excel file processing...');
-        
         if (!e.target?.result) {
           throw new Error('Failed to read file content');
         }
@@ -17,31 +15,22 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
         const data = new Uint8Array(e.target.result as ArrayBuffer);
         const workbook = read(data, { type: 'array' });
         
-        console.log('Workbook loaded, sheets:', workbook.SheetNames);
-        
         if (workbook.SheetNames.length === 0) {
           throw new Error('Excel file contains no sheets');
         }
         
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-        console.log('Processing first sheet:', workbook.SheetNames[0]);
-        
         const jsonData = utils.sheet_to_json(worksheet, { 
           raw: false,
           defval: '',
           header: 1
         });
         
-        console.log('Converted to JSON, rows:', jsonData.length);
-        
         if (jsonData.length <= 1) {
           throw new Error('Excel file is empty or contains only headers');
         }
         
-        // Get headers from first row
         const headers = jsonData[0] as string[];
-        console.log('Headers found:', headers);
-        
         const requiredColumns = [
           'WD_Latitude', 'WD_Longitude', 
           'OL_Latitude', 'OL_Longitude', 
@@ -65,10 +54,7 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           );
         }
         
-        // Process data rows
         const dataRows = jsonData.slice(1) as any[];
-        console.log('Processing', dataRows.length, 'data rows');
-        
         let distributorFound = false;
         let distributor = { latitude: 0, longitude: 0 };
         
@@ -81,7 +67,6 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           if (!isNaN(wdLat) && !isNaN(wdLng) && wdLat !== 0 && wdLng !== 0) {
             distributor = { latitude: wdLat, longitude: wdLng };
             distributorFound = true;
-            console.log('Found distributor coordinates:', distributor);
             break;
           }
         }
@@ -95,7 +80,6 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
         }
         
         const customers: Customer[] = [];
-        const invalidCustomers: string[] = [];
         
         for (const row of dataRows) {
           if (!Array.isArray(row)) continue;
@@ -112,17 +96,8 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
               longitude: lng,
               outletName
             });
-            
-            if (customers.length % 100 === 0) {
-              console.log(`Processed ${customers.length} valid customers...`);
-            }
-          } else if (id) {
-            invalidCustomers.push(id);
           }
         }
-        
-        console.log('Total valid customers:', customers.length);
-        console.log('Invalid customers:', invalidCustomers.length);
         
         if (customers.length === 0) {
           throw new Error(
@@ -133,48 +108,19 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           );
         }
         
-        // Perform clustering on customers with proper error handling
-        console.log('Starting customer clustering...');
-        let clusteredCustomers: Customer[] = [];
+        const clusteredCustomers = await clusterCustomers(customers);
         
-        try {
-          clusteredCustomers = await clusterCustomers(customers);
-          
-          if (!Array.isArray(clusteredCustomers) || clusteredCustomers.length === 0) {
-            console.warn('Clustering produced no results, using fallback');
-            clusteredCustomers = customers.map((customer, index) => ({
-              ...customer,
-              clusterId: 0
-            }));
-          }
-        } catch (error) {
-          console.error('Clustering error:', error);
-          // Fallback: assign all customers to a single cluster
-          clusteredCustomers = customers.map(customer => ({
-            ...customer,
-            clusterId: 0
-          }));
-        }
-        
-        const clusters = new Set(clusteredCustomers.map(c => c.clusterId));
-        console.log(`Clustering complete: ${clusteredCustomers.length} customers in ${clusters.size} clusters`);
-        
-        const result = { distributor, customers: clusteredCustomers };
-        console.log('Data processing complete');
-        resolve(result);
+        resolve({ distributor, customers: clusteredCustomers });
         
       } catch (error) {
-        console.error('Excel processing error:', error);
         reject(error instanceof Error ? error : new Error('Unknown error processing Excel file'));
       }
     };
     
-    reader.onerror = (error) => {
-      console.error('FileReader error:', error);
+    reader.onerror = () => {
       reject(new Error('Error reading the file'));
     };
     
-    console.log('Starting file read...');
     reader.readAsArrayBuffer(file);
   });
 };

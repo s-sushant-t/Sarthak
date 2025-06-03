@@ -10,22 +10,29 @@ export const executeAlgorithm = async (
   
   let result: AlgorithmResult;
   
-  switch (algorithmType) {
-    case 'nearest-neighbor':
-      result = await nearestNeighbor(locationData);
-      break;
-    case 'simulated-annealing':
-      result = await simulatedAnnealing(locationData);
-      break;
-    default:
-      throw new Error(`Unknown algorithm type: ${algorithmType}`);
+  try {
+    switch (algorithmType) {
+      case 'nearest-neighbor':
+        result = await nearestNeighbor(locationData);
+        break;
+      case 'simulated-annealing':
+        result = await simulatedAnnealing(locationData);
+        break;
+      case 'custom':
+        throw new Error('Custom algorithm cannot be executed directly');
+      default:
+        throw new Error(`Unknown algorithm type: ${algorithmType}`);
+    }
+    
+    const endTime = performance.now();
+    const processingTime = endTime - startTime;
+    
+    return {
+      ...result,
+      processingTime
+    };
+  } catch (error) {
+    console.error(`Error executing ${algorithmType}:`, error);
+    throw error;
   }
-  
-  const endTime = performance.now();
-  const processingTime = endTime - startTime;
-  
-  return {
-    ...result,
-    processingTime
-  };
 };
