@@ -201,7 +201,7 @@ const BeatHygieneCorrection: React.FC = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex items-center justify-center relative overflow-hidden">
         <div className="absolute inset-0 z-0">
-          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float" style={{ top: '15%', left: '10%' }} />
+          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float\" style={{ top: '15%', left: '10%' }} />
           <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed" style={{ top: '60%', right: '15%' }} />
           <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float" style={{ top: '30%', right: '25%' }} />
         </div>
