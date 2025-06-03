@@ -13,15 +13,28 @@ import { executeAlgorithm } from './algorithms';
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isDistributor, setIsDistributor] = useState(false);
-  const [locationData, setLocationData] = useState<LocationData | null>(null);
-  const [algorithmResults, setAlgorithmResults] = useState<Record<AlgorithmType, AlgorithmResult | null>>({
-    'nearest-neighbor': null,
-    'simulated-annealing': null,
-    'custom': null
+  const [locationData, setLocationData] = useState<LocationData | null>(() => {
+    const stored = localStorage.getItem('locationData');
+    return stored ? JSON.parse(stored) : null;
   });
-  const [selectedAlgorithm, setSelectedAlgorithm] = useState<AlgorithmType | null>(null);
+
+  const [algorithmResults, setAlgorithmResults] = useState<Record<AlgorithmType, AlgorithmResult | null>>(() => {
+    const stored = localStorage.getItem('algorithmResults');
+    return stored ? JSON.parse(stored) : {
+      'nearest-neighbor': null,
+      'simulated-annealing': null,
+      'custom': null
+    };
+  });
+
+  const [selectedAlgorithm, setSelectedAlgorithm] = useState<AlgorithmType | null>(() => {
+    return (localStorage.getItem('selectedAlgorithm') as AlgorithmType | null) || null;
+  });
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<'upload' | 'map' | 'results'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'map' | 'results'>(() => {
+    return (localStorage.getItem('activeTab') as 'upload' | 'map' | 'results') || 'upload';
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,8 +42,8 @@ function App() {
     if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
       setIsAuthenticated(true);
       setIsDistributor(false);
-      sessionStorage.setItem('isAuthenticated', 'true');
-      sessionStorage.setItem('userType', 'admin');
+      localStorage.setItem('isAuthenticated', 'true');
+      localStorage.setItem('userType', 'admin');
     } else {
       throw new Error('Invalid credentials');
     }
@@ -47,17 +60,21 @@ function App() {
     });
     setSelectedAlgorithm(null);
     setActiveTab('upload');
-    sessionStorage.clear();
+    localStorage.clear();
   }, []);
 
   useEffect(() => {
-    const isAuth = sessionStorage.getItem('isAuthenticated') === 'true';
-    const userType = sessionStorage.getItem('userType');
+    const isAuth = localStorage.getItem('isAuthenticated') === 'true';
+    const userType = localStorage.getItem('userType');
     if (isAuth) {
       setIsAuthenticated(true);
       setIsDistributor(userType === 'distributor');
     }
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem('activeTab', activeTab);
+  }, [activeTab]);
 
   const handleFileUpload = async (file: File) => {
     setIsLoading(true);
@@ -71,16 +88,18 @@ function App() {
       }
       
       setLocationData(data);
+      localStorage.setItem('locationData', JSON.stringify(data));
       
       const algorithms: AlgorithmType[] = ['nearest-neighbor', 'simulated-annealing'];
       
       for (const algorithm of algorithms) {
         try {
           const result = await executeAlgorithm(algorithm, data);
-          setAlgorithmResults(prev => ({
-            ...prev,
-            [algorithm]: result
-          }));
+          setAlgorithmResults(prev => {
+            const updated = { ...prev, [algorithm]: result };
+            localStorage.setItem('algorithmResults', JSON.stringify(updated));
+            return updated;
+          });
         } catch (algorithmError) {
           console.error(`Error processing ${algorithm}:`, algorithmError);
           setError(`Error processing ${algorithm}: ${algorithmError instanceof Error ? algorithmError.message : 'Unknown error'}`);
@@ -90,6 +109,7 @@ function App() {
       }
       
       setSelectedAlgorithm('nearest-neighbor');
+      localStorage.setItem('selectedAlgorithm', 'nearest-neighbor');
       setActiveTab('map');
       
     } catch (error) {
@@ -101,6 +121,9 @@ function App() {
         'simulated-annealing': null,
         'custom': null
       });
+      localStorage.removeItem('locationData');
+      localStorage.removeItem('algorithmResults');
+      localStorage.removeItem('selectedAlgorithm');
     } finally {
       setIsLoading(false);
     }
@@ -120,16 +143,19 @@ function App() {
       isCustom: true
     };
 
-    setAlgorithmResults(prev => ({
-      ...prev,
-      custom: customResult
-    }));
+    setAlgorithmResults(prev => {
+      const updated = { ...prev, custom: customResult };
+      localStorage.setItem('algorithmResults', JSON.stringify(updated));
+      return updated;
+    });
 
     setSelectedAlgorithm('custom');
+    localStorage.setItem('selectedAlgorithm', 'custom');
   }, [selectedAlgorithm, algorithmResults]);
 
   const handleSelectAlgorithm = useCallback((algorithm: AlgorithmType) => {
     setSelectedAlgorithm(algorithm);
+    localStorage.setItem('selectedAlgorithm', algorithm);
   }, []);
 
   const handleExportCSV = useCallback(() => {
