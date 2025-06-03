@@ -36,8 +36,7 @@ function App() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         setIsAuthenticated(true);
-        const distributorCode = sessionStorage.getItem('distributorCode');
-        setIsDistributor(session.user.id === distributorCode);
+        setIsDistributor(session.user.email !== 'admin@itc.com');
       }
     };
     
@@ -46,22 +45,24 @@ function App() {
 
   const handleLogin = useCallback(async (loginId: string, password: string) => {
     try {
+      let email: string;
       if (loginId === 'EDIS') {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: 'admin@itc.com',
-          password: password
-        });
-        if (error) throw error;
-        setIsAuthenticated(true);
-        setIsDistributor(false);
+        email = 'admin@itc.com';
       } else {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: `${loginId}@distributor.com`,
-          password: password
-        });
-        if (error) throw error;
-        setIsAuthenticated(true);
-        setIsDistributor(true);
+        email = `${loginId}@distributor.com`;
+      }
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) throw error;
+
+      setIsAuthenticated(true);
+      setIsDistributor(loginId !== 'EDIS');
+      
+      if (loginId !== 'EDIS') {
         sessionStorage.setItem('distributorCode', loginId);
       }
     } catch (error) {

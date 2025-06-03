@@ -63,7 +63,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   value={loginId}
                   onChange={(e) => setLoginId(e.target.value)}
                   className="appearance-none block w-full px-3 py-2 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                  placeholder="Enter your login ID"
+                  placeholder="Enter EDIS or distributor code"
                   disabled={isLoading}
                 />
               </div>
