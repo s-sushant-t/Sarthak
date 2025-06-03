@@ -27,22 +27,28 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     setError(null);
 
     try {
-      // First, delete any existing routes for this distributor
-      const { error: deleteError } = await supabase
+      // Get the highest beat number for this distributor
+      const { data: existingRoutes, error: fetchError } = await supabase
         .from('distributor_routes')
-        .delete()
-        .eq('distributor_code', distributorCode);
+        .select('beat')
+        .eq('distributor_code', distributorCode)
+        .order('beat', { ascending: false })
+        .limit(1);
 
-      if (deleteError) throw deleteError;
+      if (fetchError) throw fetchError;
 
-      // Wait a brief moment to ensure the delete has propagated
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Calculate the starting beat number for new routes
+      const lastBeat = existingRoutes && existingRoutes.length > 0 ? existingRoutes[0].beat : 0;
+      const beatOffset = lastBeat;
 
+      // Prepare new route data with adjusted beat numbers
       const routeData = routes.flatMap(route => {
+        const newBeat = route.salesmanId + beatOffset;
+        
         // Add distributor point as stop 0
         const stops = [
           {
-            beat: route.salesmanId,
+            beat: newBeat,
             stop_order: 0,
             dms_customer_id: 'DISTRIBUTOR',
             outlet_name: 'DISTRIBUTOR',
@@ -54,7 +60,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
             distributor_code: distributorCode
           },
           ...route.stops.map((stop, index) => ({
-            beat: route.salesmanId,
+            beat: newBeat,
             stop_order: index + 1,
             dms_customer_id: stop.customerId,
             outlet_name: stop.outletName || '',
@@ -70,7 +76,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         return stops;
       });
 
-      // Insert new routes in batches to avoid potential timeout issues
+      // Insert new routes in batches
       const batchSize = 100;
       for (let i = 0; i < routeData.length; i += batchSize) {
         const batch = routeData.slice(i, i + batchSize);
