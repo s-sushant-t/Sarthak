@@ -180,14 +180,20 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
     return acc;
   }, [] as SalesmanRoute[]);
   
+  // Reassign salesman IDs sequentially
+  const reindexedRoutes = finalRoutes.map((route, index) => ({
+    ...route,
+    salesmanId: index + 1
+  }));
+  
   // Calculate total distance
-  const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
+  const totalDistance = reindexedRoutes.reduce((total, route) => total + route.totalDistance, 0);
   
   return {
     name: 'Nearest Neighbor (Clustered)',
     totalDistance,
-    totalSalesmen: finalRoutes.length,
+    totalSalesmen: reindexedRoutes.length,
     processingTime: 0,
-    routes: finalRoutes
+    routes: reindexedRoutes
   };
 };

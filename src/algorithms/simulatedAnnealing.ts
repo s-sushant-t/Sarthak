@@ -63,14 +63,21 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
   
   // Final pass to merge any small beats
   const finalSolution = mergeSmallerBeats(bestSolution);
-  const finalEnergy = calculateTotalDistance(finalSolution);
+  
+  // Reassign salesman IDs sequentially
+  const reindexedSolution = finalSolution.map((route, index) => ({
+    ...route,
+    salesmanId: index + 1
+  }));
+  
+  const finalEnergy = calculateTotalDistance(reindexedSolution);
   
   return {
     name: 'Simulated Annealing (Clustered)',
     totalDistance: finalEnergy,
-    totalSalesmen: finalSolution.length,
+    totalSalesmen: reindexedSolution.length,
     processingTime: 0,
-    routes: finalSolution
+    routes: reindexedSolution
   };
 };
 
