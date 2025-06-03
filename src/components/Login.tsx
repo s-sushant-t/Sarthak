@@ -24,6 +24,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     
     try {
       if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
+        localStorage.setItem('isAuthenticated', 'true');
+        localStorage.setItem('userType', 'admin');
         await onLogin(loginId, password);
       } else {
         // Check if this is a valid distributor code
@@ -39,8 +41,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         }
 
         if (data && data.distributor_code === loginId && loginId === password) {
+          localStorage.setItem('isAuthenticated', 'true');
           localStorage.setItem('userType', 'distributor');
-          await onLogin(loginId, loginId);
+          localStorage.setItem('distributorCode', loginId);
+          window.location.reload(); // Trigger app re-render to pick up new auth state
         } else {
           throw new Error('Invalid credentials');
         }
