@@ -6,6 +6,7 @@ const MAX_OUTLETS_PER_BEAT = 35; // Maximum outlets per beat
 const CUSTOMER_VISIT_TIME = 6; // 6 minutes per customer
 const MAX_WORKING_TIME = 360; // 6 hours in minutes
 const TRAVEL_SPEED = 30; // km/h
+const MAX_DISTANCE_VARIANCE = 5; // Maximum allowed distance variance between beats (in km)
 
 export const nearestNeighbor = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
@@ -98,32 +99,82 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         currentLng = nearestCustomer.longitude;
       }
       
-      // Update distanceToNext and timeToNext for each stop
-      for (let i = 0; i < currentRoute.stops.length - 1; i++) {
-        const currentStop = currentRoute.stops[i];
-        const nextStop = currentRoute.stops[i + 1];
-        
-        const distance = calculateHaversineDistance(
-          currentStop.latitude, currentStop.longitude,
-          nextStop.latitude, nextStop.longitude
-        );
-        
-        const time = calculateTravelTime(distance, TRAVEL_SPEED);
-        
-        currentStop.distanceToNext = distance;
-        currentStop.timeToNext = time;
-      }
-      
       if (currentRoute.stops.length > 0) {
         routes.push(currentRoute);
       }
     }
   }
   
-  // Optimize beats to ensure they meet the size requirements
-  const optimizedRoutes = routes.reduce((acc, route) => {
+  // Balance routes within clusters
+  const routesByCluster = routes.reduce((acc, route) => {
+    const clusterId = route.clusterIds[0];
+    if (!acc[clusterId]) acc[clusterId] = [];
+    acc[clusterId].push(route);
+    return acc;
+  }, {} as Record<number, SalesmanRoute[]>);
+  
+  const balancedRoutes: SalesmanRoute[] = [];
+  
+  for (const clusterId in routesByCluster) {
+    const clusterRoutes = routesByCluster[clusterId];
+    let iterations = 0;
+    const MAX_BALANCE_ITERATIONS = 100;
+    
+    while (iterations < MAX_BALANCE_ITERATIONS) {
+      const avgDistance = clusterRoutes.reduce((sum, r) => sum + r.totalDistance, 0) / clusterRoutes.length;
+      const maxVariance = Math.max(...clusterRoutes.map(r => Math.abs(r.totalDistance - avgDistance)));
+      
+      if (maxVariance <= MAX_DISTANCE_VARIANCE) break;
+      
+      // Find the most unbalanced pair of routes
+      let maxRoute = clusterRoutes[0];
+      let minRoute = clusterRoutes[0];
+      
+      for (const route of clusterRoutes) {
+        if (route.totalDistance > maxRoute.totalDistance) maxRoute = route;
+        if (route.totalDistance < minRoute.totalDistance) minRoute = route;
+      }
+      
+      // Try to move a stop from the longer route to the shorter one
+      if (maxRoute.stops.length > MIN_OUTLETS_PER_BEAT && 
+          minRoute.stops.length < MAX_OUTLETS_PER_BEAT) {
+        // Find the stop that would best balance the routes
+        let bestStop = null;
+        let bestImprovement = 0;
+        
+        for (let i = 0; i < maxRoute.stops.length; i++) {
+          const stop = maxRoute.stops[i];
+          const distanceContribution = calculateHaversineDistance(
+            maxRoute.stops[i-1]?.latitude || maxRoute.distributorLat,
+            maxRoute.stops[i-1]?.longitude || maxRoute.distributorLng,
+            stop.latitude,
+            stop.longitude
+          );
+          
+          if (Math.abs(maxRoute.totalDistance - minRoute.totalDistance - 2 * distanceContribution) < bestImprovement) {
+            bestStop = i;
+            bestImprovement = Math.abs(maxRoute.totalDistance - minRoute.totalDistance - 2 * distanceContribution);
+          }
+        }
+        
+        if (bestStop !== null) {
+          const [stop] = maxRoute.stops.splice(bestStop, 1);
+          minRoute.stops.push(stop);
+          updateRouteMetrics(maxRoute, distributor);
+          updateRouteMetrics(minRoute, distributor);
+        }
+      }
+      
+      iterations++;
+    }
+    
+    balancedRoutes.push(...clusterRoutes);
+  }
+  
+  // Optimize beats to ensure they meet size requirements
+  const optimizedRoutes = balancedRoutes.reduce((acc, route) => {
     if (route.stops.length >= MIN_OUTLETS_PER_BEAT && route.stops.length <= MAX_OUTLETS_PER_BEAT) {
-      // Route is within acceptable range, keep as is
+      // Route is within acceptable range
       acc.push(route);
     } else if (route.stops.length < MIN_OUTLETS_PER_BEAT) {
       // Try to merge with another small route from the same cluster
@@ -134,91 +185,30 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       
       if (mergeCandidate) {
         mergeCandidate.stops.push(...route.stops);
-        
-        // Recalculate metrics
-        let prevLat = distributor.latitude;
-        let prevLng = distributor.longitude;
-        mergeCandidate.totalDistance = 0;
-        mergeCandidate.totalTime = 0;
-        
-        mergeCandidate.stops.forEach((stop, index) => {
-          const distance = calculateHaversineDistance(prevLat, prevLng, stop.latitude, stop.longitude);
-          const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
-          
-          mergeCandidate.totalDistance += distance;
-          mergeCandidate.totalTime += travelTime + CUSTOMER_VISIT_TIME;
-          
-          if (index < mergeCandidate.stops.length - 1) {
-            const nextStop = mergeCandidate.stops[index + 1];
-            stop.distanceToNext = calculateHaversineDistance(
-              stop.latitude, stop.longitude,
-              nextStop.latitude, nextStop.longitude
-            );
-            stop.timeToNext = calculateTravelTime(stop.distanceToNext, TRAVEL_SPEED);
-          } else {
-            stop.distanceToNext = 0;
-            stop.timeToNext = 0;
-          }
-          
-          prevLat = stop.latitude;
-          prevLng = stop.longitude;
-        });
+        updateRouteMetrics(mergeCandidate, distributor);
       } else {
-        // If we can't merge, keep the route
         acc.push(route);
       }
     } else {
-      // Route has too many stops, split it
+      // Split route that exceeds maximum size
       const midPoint = Math.ceil(route.stops.length / 2);
       
       const route1: SalesmanRoute = {
-        salesmanId: currentSalesmanId++,
+        ...route,
         stops: route.stops.slice(0, midPoint),
         totalDistance: 0,
-        totalTime: 0,
-        clusterIds: route.clusterIds,
-        distributorLat: distributor.latitude,
-        distributorLng: distributor.longitude
+        totalTime: 0
       };
       
       const route2: SalesmanRoute = {
-        salesmanId: currentSalesmanId++,
+        ...route,
         stops: route.stops.slice(midPoint),
         totalDistance: 0,
-        totalTime: 0,
-        clusterIds: route.clusterIds,
-        distributorLat: distributor.latitude,
-        distributorLng: distributor.longitude
+        totalTime: 0
       };
       
-      // Recalculate metrics for both routes
-      [route1, route2].forEach(newRoute => {
-        let prevLat = distributor.latitude;
-        let prevLng = distributor.longitude;
-        
-        newRoute.stops.forEach((stop, index) => {
-          const distance = calculateHaversineDistance(prevLat, prevLng, stop.latitude, stop.longitude);
-          const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
-          
-          newRoute.totalDistance += distance;
-          newRoute.totalTime += travelTime + CUSTOMER_VISIT_TIME;
-          
-          if (index < newRoute.stops.length - 1) {
-            const nextStop = newRoute.stops[index + 1];
-            stop.distanceToNext = calculateHaversineDistance(
-              stop.latitude, stop.longitude,
-              nextStop.latitude, nextStop.longitude
-            );
-            stop.timeToNext = calculateTravelTime(stop.distanceToNext, TRAVEL_SPEED);
-          } else {
-            stop.distanceToNext = 0;
-            stop.timeToNext = 0;
-          }
-          
-          prevLat = stop.latitude;
-          prevLng = stop.longitude;
-        });
-      });
+      updateRouteMetrics(route1, distributor);
+      updateRouteMetrics(route2, distributor);
       
       acc.push(route1);
       if (route2.stops.length > 0) {
@@ -232,9 +222,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   // Reassign beat IDs sequentially
   const finalRoutes = optimizedRoutes.map((route, index) => ({
     ...route,
-    salesmanId: index + 1,
-    distributorLat: distributor.latitude,
-    distributorLng: distributor.longitude
+    salesmanId: index + 1
   }));
   
   // Calculate total distance
@@ -248,3 +236,45 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
     routes: finalRoutes
   };
 };
+
+function updateRouteMetrics(route: SalesmanRoute, distributor: { latitude: number; longitude: number }): void {
+  route.totalDistance = 0;
+  route.totalTime = 0;
+  
+  if (route.stops.length === 0) return;
+  
+  let prevLat = distributor.latitude;
+  let prevLng = distributor.longitude;
+  
+  for (let i = 0; i < route.stops.length; i++) {
+    const stop = route.stops[i];
+    const distance = calculateHaversineDistance(
+      prevLat, prevLng,
+      stop.latitude, stop.longitude
+    );
+    
+    const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
+    
+    route.totalDistance += distance;
+    route.totalTime += travelTime + CUSTOMER_VISIT_TIME;
+    
+    if (i < route.stops.length - 1) {
+      const nextStop = route.stops[i + 1];
+      const nextDistance = calculateHaversineDistance(
+        stop.latitude, stop.longitude,
+        nextStop.latitude, nextStop.longitude
+      );
+      
+      const nextTime = calculateTravelTime(nextDistance, TRAVEL_SPEED);
+      
+      stop.distanceToNext = nextDistance;
+      stop.timeToNext = nextTime;
+    } else {
+      stop.distanceToNext = 0;
+      stop.timeToNext = 0;
+    }
+    
+    prevLat = stop.latitude;
+    prevLng = stop.longitude;
+  }
+}
