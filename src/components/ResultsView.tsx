@@ -16,7 +16,6 @@ const ResultsView: React.FC<ResultsViewProps> = ({
   onSelectAlgorithm,
   onExportCSV
 }) => {
-  // Find the best algorithm based on total distance
   const bestAlgorithm = Object.entries(results)
     .filter(([_, result]) => result !== null)
     .reduce<{ type: AlgorithmType; distance: number } | null>(
@@ -30,7 +29,6 @@ const ResultsView: React.FC<ResultsViewProps> = ({
       null
     );
 
-  // Calculate metrics for bar chart
   const getMaxDistance = () => {
     return Object.values(results)
       .filter(result => result !== null)
@@ -57,7 +55,6 @@ const ResultsView: React.FC<ResultsViewProps> = ({
         <p className="text-gray-600">Compare the performance of different routing algorithms</p>
       </div>
       
-      {/* Metrics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {Object.entries(results)
           .filter(([_, result]) => result !== null)
@@ -126,7 +123,6 @@ const ResultsView: React.FC<ResultsViewProps> = ({
           })}
       </div>
       
-      {/* Algorithm Details */}
       {selectedAlgorithm && results[selectedAlgorithm] && (
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <h3 className="font-medium text-gray-800 mb-3">
