@@ -100,12 +100,9 @@ function createInitialSolution(
       
       // Calculate target outlets for this route
       const remainingOutlets = clusterCustomers.length;
-      const targetOutlets = Math.max(
-        MIN_OUTLETS_PER_BEAT,
-        Math.min(
-          MAX_OUTLETS_PER_BEAT,
-          remainingOutlets <= MIN_OUTLETS_PER_BEAT * 1.5 ? remainingOutlets : MAX_OUTLETS_PER_BEAT
-        )
+      const targetOutlets = Math.min(
+        MAX_OUTLETS_PER_BEAT,
+        remainingOutlets <= MIN_OUTLETS_PER_BEAT * 1.5 ? remainingOutlets : MAX_OUTLETS_PER_BEAT
       );
       
       while (clusterCustomers.length > 0 && 
@@ -154,7 +151,7 @@ function createInitialSolution(
       }
       
       if (route.stops.length > 0) {
-        updateRouteMetrics(route, distributor);
+        updateRouteMetrics(route);
         routes.push(route);
       }
     }
@@ -237,13 +234,12 @@ function mergeSmallerBeats(routes: SalesmanRoute[]): SalesmanRoute[] {
     if (route.stops.length >= MIN_OUTLETS_PER_BEAT) {
       acc.push(route);
     } else {
-      // Find best route to merge with
+      // Find best route to merge with, even if it exceeds MAX_OUTLETS_PER_BEAT
       let bestRouteIndex = -1;
       let minDistance = Infinity;
       
       acc.forEach((existingRoute, index) => {
-        if (existingRoute.clusterIds[0] === route.clusterIds[0] &&
-            existingRoute.stops.length + route.stops.length <= MAX_OUTLETS_PER_BEAT) {
+        if (existingRoute.clusterIds[0] === route.clusterIds[0]) {
           const lastStop = existingRoute.stops[existingRoute.stops.length - 1];
           const firstStop = route.stops[0];
           const distance = calculateHaversineDistance(

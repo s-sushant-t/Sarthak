@@ -43,12 +43,9 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       
       // Calculate target outlets for this route
       const remainingOutlets = unassignedCustomers.length;
-      const targetOutlets = Math.max(
-        MIN_OUTLETS_PER_BEAT,
-        Math.min(
-          MAX_OUTLETS_PER_BEAT,
-          remainingOutlets <= MIN_OUTLETS_PER_BEAT * 1.5 ? remainingOutlets : MAX_OUTLETS_PER_BEAT
-        )
+      const targetOutlets = Math.min(
+        MAX_OUTLETS_PER_BEAT,
+        remainingOutlets <= MIN_OUTLETS_PER_BEAT * 1.5 ? remainingOutlets : MAX_OUTLETS_PER_BEAT
       );
       
       while (unassignedCustomers.length > 0 && 
@@ -97,65 +94,6 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         assignedOutlets++;
       }
       
-      // If we have less than minimum outlets and there are other routes
-      if (currentRoute.stops.length < MIN_OUTLETS_PER_BEAT && routes.length > 0) {
-        // Find the nearest route to merge with
-        let nearestRouteIndex = -1;
-        let minDistance = Infinity;
-        
-        routes.forEach((route, index) => {
-          if (route.clusterIds[0] === Number(clusterId)) {
-            const lastStop = route.stops[route.stops.length - 1];
-            const distance = calculateHaversineDistance(
-              lastStop.latitude, lastStop.longitude,
-              currentRoute.stops[0].latitude, currentRoute.stops[0].longitude
-            );
-            
-            if (distance < minDistance && route.stops.length + currentRoute.stops.length <= MAX_OUTLETS_PER_BEAT) {
-              minDistance = distance;
-              nearestRouteIndex = index;
-            }
-          }
-        });
-        
-        if (nearestRouteIndex !== -1) {
-          // Merge with nearest route
-          const targetRoute = routes[nearestRouteIndex];
-          targetRoute.stops.push(...currentRoute.stops);
-          
-          // Recalculate metrics
-          let prevLat = distributor.latitude;
-          let prevLng = distributor.longitude;
-          targetRoute.totalDistance = 0;
-          targetRoute.totalTime = 0;
-          
-          targetRoute.stops.forEach((stop, index) => {
-            const distance = calculateHaversineDistance(prevLat, prevLng, stop.latitude, stop.longitude);
-            const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
-            
-            targetRoute.totalDistance += distance;
-            targetRoute.totalTime += travelTime + CUSTOMER_VISIT_TIME;
-            
-            if (index < targetRoute.stops.length - 1) {
-              const nextStop = targetRoute.stops[index + 1];
-              stop.distanceToNext = calculateHaversineDistance(
-                stop.latitude, stop.longitude,
-                nextStop.latitude, nextStop.longitude
-              );
-              stop.timeToNext = calculateTravelTime(stop.distanceToNext, TRAVEL_SPEED);
-            } else {
-              stop.distanceToNext = 0;
-              stop.timeToNext = 0;
-            }
-            
-            prevLat = stop.latitude;
-            prevLng = stop.longitude;
-          });
-          
-          continue;
-        }
-      }
-      
       // Update distanceToNext and timeToNext for each stop
       for (let i = 0; i < currentRoute.stops.length - 1; i++) {
         const currentStop = currentRoute.stops[i];
@@ -178,18 +116,17 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
     }
   }
   
-  // Final pass to merge any remaining small beats
+  // Final pass to merge any small beats
   const finalRoutes = routes.reduce((acc, route) => {
     if (route.stops.length >= MIN_OUTLETS_PER_BEAT) {
       acc.push(route);
     } else {
-      // Find best route to merge with
+      // Find best route to merge with, even if it exceeds MAX_OUTLETS_PER_BEAT
       let bestRouteIndex = -1;
       let minDistance = Infinity;
       
       acc.forEach((existingRoute, index) => {
-        if (existingRoute.clusterIds[0] === route.clusterIds[0] &&
-            existingRoute.stops.length + route.stops.length <= MAX_OUTLETS_PER_BEAT) {
+        if (existingRoute.clusterIds[0] === route.clusterIds[0]) {
           const lastStop = existingRoute.stops[existingRoute.stops.length - 1];
           const firstStop = route.stops[0];
           const distance = calculateHaversineDistance(
