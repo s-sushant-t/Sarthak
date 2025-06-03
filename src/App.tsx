@@ -48,7 +48,11 @@ function App() {
       let email: string;
       if (loginId === 'EDIS') {
         email = 'admin@itc.com';
+      } else if (loginId.includes('@')) {
+        // If loginId already contains @ symbol, use it as is
+        email = loginId;
       } else {
+        // Otherwise, append @distributor.com
         email = `${loginId}@distributor.com`;
       }
 
@@ -63,7 +67,9 @@ function App() {
       setIsDistributor(loginId !== 'EDIS');
       
       if (loginId !== 'EDIS') {
-        sessionStorage.setItem('distributorCode', loginId);
+        // Store the distributor code without the email part
+        const distributorCode = loginId.includes('@') ? loginId.split('@')[0] : loginId;
+        sessionStorage.setItem('distributorCode', distributorCode);
       }
     } catch (error) {
       console.error('Login error:', error);
