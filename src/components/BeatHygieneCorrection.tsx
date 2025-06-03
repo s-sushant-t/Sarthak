@@ -45,13 +45,14 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('distributor_routes')
-          .select('distinct beat')
+          .select('beat', { count: 'exact' })
           .eq('distributor_code', distributorCode)
           .order('beat');
 
         if (error) throw error;
 
-        const uniqueBeats = data.map(d => d.beat);
+        // Filter unique beats
+        const uniqueBeats = [...new Set(data.map(d => d.beat))];
         setBeats(uniqueBeats);
         setHasData(uniqueBeats.length > 0);
       } catch (error) {
