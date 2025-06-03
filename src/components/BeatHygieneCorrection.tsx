@@ -53,8 +53,9 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('distributor_routes')
-          .select('*')
-          .eq('distributor_code', distributorCode);
+          .select('beat')
+          .eq('distributor_code', distributorCode)
+          .order('beat');
 
         if (error) throw error;
 
@@ -84,8 +85,13 @@ const BeatHygieneCorrection: React.FC = () => {
         .order('stop_order');
 
       if (error) throw error;
-      setStops(data);
-      setCurrentStop(data.find(stop => !stop.visit_time) || null);
+      
+      setStops(data || []);
+      
+      // Find the first unvisited stop
+      const nextUnvisitedStop = data?.find(stop => !stop.visit_time);
+      setCurrentStop(nextUnvisitedStop || null);
+      
       setError(null);
     } catch (error) {
       setError('Error fetching stops: ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -130,13 +136,16 @@ const BeatHygieneCorrection: React.FC = () => {
     await fetchStops(beat);
   };
 
-  const handleStopClick = (stopId: string) => {
-    const clicks = (bypassClicks[stopId] || 0) + 1;
-    setBypassClicks(prev => ({ ...prev, [stopId]: clicks }));
+  const handleStopClick = (stop: Stop) => {
+    if (stop.visit_time) return; // Don't allow selecting already visited stops
+    
+    setCurrentStop(stop);
+    const clicks = (bypassClicks[stop.id] || 0) + 1;
+    setBypassClicks(prev => ({ ...prev, [stop.id]: clicks }));
     
     if (clicks >= 3) {
       setBypassActive(true);
-      setBypassClicks(prev => ({ ...prev, [stopId]: 0 }));
+      setBypassClicks(prev => ({ ...prev, [stop.id]: 0 }));
       setError('Geofencing temporarily disabled for this stop');
       setTimeout(() => setError(null), 3000);
     }
@@ -194,7 +203,7 @@ const BeatHygieneCorrection: React.FC = () => {
         <div className="absolute inset-0 z-0">
           <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float\" style={{ top: '15%', left: '10%' }} />
           <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed\" style={{ top: '60%', right: '15%' }} />
-          <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float" style={{ top: '30%', right: '25%' }} />
+          <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float\" style={{ top: '30%', right: '25%' }} />
         </div>
         <div className="flex flex-col items-center gap-3 z-10">
           <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
@@ -277,7 +286,7 @@ const BeatHygieneCorrection: React.FC = () => {
                       ? 'bg-green-500/20 border border-green-400/30'
                       : 'bg-white/5 border border-white/10 hover:bg-white/10'
                   }`}
-                  onClick={() => handleStopClick(stop.id)}
+                  onClick={() => handleStopClick(stop)}
                 >
                   <div className="flex items-center justify-between">
                     <div>
@@ -487,3 +496,5 @@ const BeatHygieneCorrection: React.FC = () => {
 };
 
 export default BeatHygieneCorrection;
+
+export default BeatHygieneCorrection
