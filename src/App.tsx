@@ -5,12 +5,13 @@ import MapView from './components/MapView';
 import AlgorithmSelector from './components/AlgorithmSelector';
 import ResultsView from './components/ResultsView';
 import Login from './components/Login';
+import BeatHygieneCorrection from './components/BeatHygieneCorrection';
+import AssignDistributor from './components/AssignDistributor';
 import { processExcelFile } from './utils/excelParser';
 import { RouteData, LocationData, AlgorithmType, AlgorithmResult } from './types';
 import { executeAlgorithm } from './algorithms';
 
 function App() {
-  // Initialize state from sessionStorage
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return sessionStorage.getItem('isAuthenticated') === 'true';
   });
@@ -37,10 +38,22 @@ function App() {
   const [activeTab, setActiveTab] = useState<'upload' | 'map' | 'results'>('upload');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showBeatHygiene, setShowBeatHygiene] = useState(false);
 
-  const handleLogin = useCallback(() => {
+  useEffect(() => {
+    const isDistributorAccess = sessionStorage.getItem('isAuthenticated') === 'true' &&
+                               sessionStorage.getItem('loginId') === sessionStorage.getItem('distributorCode');
+    setShowBeatHygiene(isDistributorAccess);
+  }, []);
+
+  const handleLogin = useCallback((loginId: string) => {
     setIsAuthenticated(true);
     sessionStorage.setItem('isAuthenticated', 'true');
+    sessionStorage.setItem('loginId', loginId);
+    
+    if (loginId === sessionStorage.getItem('distributorCode')) {
+      setShowBeatHygiene(true);
+    }
   }, []);
 
   const handleLogout = useCallback(() => {
@@ -95,7 +108,6 @@ function App() {
           setError(`Error processing ${algorithm}: ${algorithmError instanceof Error ? algorithmError.message : 'Unknown error'}`);
         }
         
-        // Allow UI to update between algorithms
         await new Promise(resolve => setTimeout(resolve, 0));
       }
       
@@ -158,6 +170,10 @@ function App() {
 
   if (!isAuthenticated) {
     return <Login onLogin={handleLogin} />;
+  }
+
+  if (showBeatHygiene) {
+    return <BeatHygieneCorrection />;
   }
 
   return (
@@ -272,6 +288,10 @@ function App() {
               selectedAlgorithm={selectedAlgorithm}
               onSelectAlgorithm={handleSelectAlgorithm}
               onExportCSV={handleExportCSV}
+              showAssignDistributor={true}
+              onAssignDistributor={() => {
+                sessionStorage.setItem('distributorCode', selectedAlgorithm);
+              }}
             />
           )}
         </main>

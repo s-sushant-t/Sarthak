@@ -8,13 +8,17 @@ interface ResultsViewProps {
   selectedAlgorithm: AlgorithmType;
   onSelectAlgorithm: (algorithm: AlgorithmType) => void;
   onExportCSV: () => void;
+  showAssignDistributor?: boolean;
+  onAssignDistributor?: () => void;
 }
 
 const ResultsView: React.FC<ResultsViewProps> = ({ 
   results, 
   selectedAlgorithm,
   onSelectAlgorithm,
-  onExportCSV
+  onExportCSV,
+  showAssignDistributor,
+  onAssignDistributor
 }) => {
   const bestAlgorithm = Object.entries(results)
     .filter(([_, result]) => result !== null)
@@ -172,6 +176,13 @@ const ResultsView: React.FC<ResultsViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {showAssignDistributor && selectedAlgorithm && results[selectedAlgorithm] && (
+        <AssignDistributor
+          routes={results[selectedAlgorithm]!.routes}
+          onAssign={() => onAssignDistributor?.()}
+        />
       )}
     </div>
   );
