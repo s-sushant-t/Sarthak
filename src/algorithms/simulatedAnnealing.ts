@@ -1,8 +1,8 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const MIN_OUTLETS_PER_BEAT = 28; // Minimum outlets per beat
-const MAX_OUTLETS_PER_BEAT = 35; // Maximum outlets per beat
+const MIN_OUTLETS_PER_BEAT = 28;
+const MAX_OUTLETS_PER_BEAT = 35;
 const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
 const TRAVEL_SPEED = 30;
@@ -20,12 +20,12 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
   }, {} as Record<number, ClusteredCustomer[]>);
   
   // Parameters for simulated annealing
-  const INITIAL_TEMPERATURE = 100;
-  const COOLING_RATE = 0.95;
+  const INITIAL_TEMPERATURE = 1000;
+  const COOLING_RATE = 0.98;
   const MIN_TEMPERATURE = 0.1;
-  const ITERATIONS_PER_TEMP = 100;
+  const ITERATIONS_PER_TEMP = 200;
   
-  // Create initial solution using nearest neighbor approach
+  // Create initial solution using random assignment within clusters
   const initialSolution = createInitialSolution(distributor, customersByCluster);
   let currentSolution = JSON.parse(JSON.stringify(initialSolution));
   let bestSolution = JSON.parse(JSON.stringify(initialSolution));
@@ -55,6 +55,11 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
           bestSolution = JSON.parse(JSON.stringify(currentSolution));
           bestEnergy = currentEnergy;
         }
+      }
+      
+      // Allow UI to update
+      if (i % 50 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
     }
     
@@ -97,46 +102,15 @@ function createInitialSolution(
         distributorLng: distributor.longitude
       };
       
-      let currentLat = distributor.latitude;
-      let currentLng = distributor.longitude;
-      let remainingTime = MAX_WORKING_TIME;
+      // Randomly select customers for this route
+      const targetSize = Math.min(
+        MAX_OUTLETS_PER_BEAT,
+        Math.max(MIN_OUTLETS_PER_BEAT, clusterCustomers.length)
+      );
       
-      // Calculate target outlets for this route
-      const remainingOutlets = clusterCustomers.length;
-      let targetOutlets = MAX_OUTLETS_PER_BEAT;
-      
-      if (remainingOutlets <= MAX_OUTLETS_PER_BEAT) {
-        targetOutlets = remainingOutlets;
-      } else if (remainingOutlets < (MAX_OUTLETS_PER_BEAT * 2)) {
-        targetOutlets = Math.ceil(remainingOutlets / 2);
-      }
-      
-      while (clusterCustomers.length > 0 && 
-             remainingTime > 0 && 
-             route.stops.length < targetOutlets) {
-        let nearestIndex = -1;
-        let shortestDistance = Infinity;
-        
-        for (let i = 0; i < clusterCustomers.length; i++) {
-          const customer = clusterCustomers[i];
-          const distance = calculateHaversineDistance(
-            currentLat, currentLng,
-            customer.latitude, customer.longitude
-          );
-          
-          const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
-          if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) continue;
-          
-          if (distance < shortestDistance) {
-            shortestDistance = distance;
-            nearestIndex = i;
-          }
-        }
-        
-        if (nearestIndex === -1) break;
-        
-        const customer = clusterCustomers.splice(nearestIndex, 1)[0];
-        const travelTime = calculateTravelTime(shortestDistance, TRAVEL_SPEED);
+      while (route.stops.length < targetSize && clusterCustomers.length > 0) {
+        const randomIndex = Math.floor(Math.random() * clusterCustomers.length);
+        const customer = clusterCustomers.splice(randomIndex, 1)[0];
         
         route.stops.push({
           customerId: customer.id,
@@ -148,19 +122,10 @@ function createInitialSolution(
           clusterId: customer.clusterId,
           outletName: customer.outletName
         });
-        
-        route.totalDistance += shortestDistance;
-        route.totalTime += travelTime + CUSTOMER_VISIT_TIME;
-        remainingTime -= (travelTime + CUSTOMER_VISIT_TIME);
-        
-        currentLat = customer.latitude;
-        currentLng = customer.longitude;
       }
       
-      if (route.stops.length > 0) {
-        updateRouteMetrics(route);
-        routes.push(route);
-      }
+      updateRouteMetrics(route);
+      routes.push(route);
     }
   }
   
@@ -170,75 +135,98 @@ function createInitialSolution(
 function createNeighborSolution(solution: SalesmanRoute[]): SalesmanRoute[] {
   const newSolution = JSON.parse(JSON.stringify(solution));
   
-  // Apply one of several possible modifications
-  const operation = Math.floor(Math.random() * 3);
+  // Apply multiple modifications to create more diverse solutions
+  const numModifications = 1 + Math.floor(Math.random() * 3);
   
-  switch (operation) {
-    case 0: // Swap two stops within a route
-      if (newSolution.length > 0) {
-        const routeIndex = Math.floor(Math.random() * newSolution.length);
-        const route = newSolution[routeIndex];
-        
-        if (route.stops.length >= 2) {
-          const i = Math.floor(Math.random() * route.stops.length);
-          let j = Math.floor(Math.random() * route.stops.length);
+  for (let m = 0; m < numModifications; m++) {
+    const operation = Math.floor(Math.random() * 4);
+    
+    switch (operation) {
+      case 0: // Swap two stops within a route
+        if (newSolution.length > 0) {
+          const routeIndex = Math.floor(Math.random() * newSolution.length);
+          const route = newSolution[routeIndex];
           
-          while (i === j) {
-            j = Math.floor(Math.random() * route.stops.length);
-          }
-          
-          [route.stops[i], route.stops[j]] = [route.stops[j], route.stops[i]];
-          updateRouteMetrics(route);
-        }
-      }
-      break;
-      
-    case 1: // Reverse a segment within a route
-      if (newSolution.length > 0) {
-        const routeIndex = Math.floor(Math.random() * newSolution.length);
-        const route = newSolution[routeIndex];
-        
-        if (route.stops.length >= 3) {
-          const start = Math.floor(Math.random() * (route.stops.length - 2));
-          const end = start + 1 + Math.floor(Math.random() * (route.stops.length - start - 1));
-          
-          const segment = route.stops.slice(start, end + 1);
-          segment.reverse();
-          route.stops.splice(start, segment.length, ...segment);
-          
-          updateRouteMetrics(route);
-        }
-      }
-      break;
-      
-    case 2: // Move a stop between routes in the same cluster
-      if (newSolution.length >= 2) {
-        const fromRouteIndex = Math.floor(Math.random() * newSolution.length);
-        const fromRoute = newSolution[fromRouteIndex];
-        
-        // Find another route in the same cluster
-        const sameClusterRoutes = newSolution.filter((r, i) => 
-          i !== fromRouteIndex && r.clusterIds[0] === fromRoute.clusterIds[0]
-        );
-        
-        if (sameClusterRoutes.length > 0 && fromRoute.stops.length > MIN_OUTLETS_PER_BEAT) {
-          const toRoute = sameClusterRoutes[Math.floor(Math.random() * sameClusterRoutes.length)];
-          
-          if (toRoute.stops.length < MAX_OUTLETS_PER_BEAT) {
-            const stopIndex = Math.floor(Math.random() * fromRoute.stops.length);
-            const [stop] = fromRoute.stops.splice(stopIndex, 1);
+          if (route.stops.length >= 2) {
+            const i = Math.floor(Math.random() * route.stops.length);
+            let j = Math.floor(Math.random() * route.stops.length);
             
-            if (stop) {
+            while (i === j) {
+              j = Math.floor(Math.random() * route.stops.length);
+            }
+            
+            [route.stops[i], route.stops[j]] = [route.stops[j], route.stops[i]];
+            updateRouteMetrics(route);
+          }
+        }
+        break;
+      
+      case 1: // Reverse a segment within a route
+        if (newSolution.length > 0) {
+          const routeIndex = Math.floor(Math.random() * newSolution.length);
+          const route = newSolution[routeIndex];
+          
+          if (route.stops.length >= 3) {
+            const start = Math.floor(Math.random() * (route.stops.length - 2));
+            const end = start + 1 + Math.floor(Math.random() * (route.stops.length - start - 1));
+            
+            const segment = route.stops.slice(start, end + 1);
+            segment.reverse();
+            route.stops.splice(start, segment.length, ...segment);
+            
+            updateRouteMetrics(route);
+          }
+        }
+        break;
+      
+      case 2: // Move stops between routes in the same cluster
+        if (newSolution.length >= 2) {
+          const fromRouteIndex = Math.floor(Math.random() * newSolution.length);
+          const fromRoute = newSolution[fromRouteIndex];
+          
+          const sameClusterRoutes = newSolution.filter((r, i) => 
+            i !== fromRouteIndex && r.clusterIds[0] === fromRoute.clusterIds[0]
+          );
+          
+          if (sameClusterRoutes.length > 0 && fromRoute.stops.length > MIN_OUTLETS_PER_BEAT) {
+            const toRoute = sameClusterRoutes[Math.floor(Math.random() * sameClusterRoutes.length)];
+            
+            if (toRoute.stops.length < MAX_OUTLETS_PER_BEAT) {
+              const numStopsToMove = 1 + Math.floor(Math.random() * 3);
+              const startIndex = Math.floor(Math.random() * (fromRoute.stops.length - numStopsToMove));
+              
+              const stopsToMove = fromRoute.stops.splice(startIndex, numStopsToMove);
               const insertIndex = Math.floor(Math.random() * (toRoute.stops.length + 1));
-              toRoute.stops.splice(insertIndex, 0, stop);
+              toRoute.stops.splice(insertIndex, 0, ...stopsToMove);
               
               updateRouteMetrics(fromRoute);
               updateRouteMetrics(toRoute);
             }
           }
         }
-      }
-      break;
+        break;
+      
+      case 3: // Shuffle a random segment within a route
+        if (newSolution.length > 0) {
+          const routeIndex = Math.floor(Math.random() * newSolution.length);
+          const route = newSolution[routeIndex];
+          
+          if (route.stops.length >= 4) {
+            const segmentLength = 2 + Math.floor(Math.random() * (route.stops.length - 2));
+            const startIndex = Math.floor(Math.random() * (route.stops.length - segmentLength));
+            
+            const segment = route.stops.slice(startIndex, startIndex + segmentLength);
+            for (let i = segment.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [segment[i], segment[j]] = [segment[j], segment[i]];
+            }
+            
+            route.stops.splice(startIndex, segmentLength, ...segment);
+            updateRouteMetrics(route);
+          }
+        }
+        break;
+    }
   }
   
   return newSolution;
@@ -289,10 +277,8 @@ function updateRouteMetrics(route: SalesmanRoute): void {
 function optimizeBeats(routes: SalesmanRoute[], distributor: { latitude: number; longitude: number }): SalesmanRoute[] {
   const optimizedRoutes = routes.reduce((acc, route) => {
     if (route.stops.length >= MIN_OUTLETS_PER_BEAT && route.stops.length <= MAX_OUTLETS_PER_BEAT) {
-      // Route is within acceptable range
       acc.push(route);
     } else if (route.stops.length < MIN_OUTLETS_PER_BEAT) {
-      // Try to merge with another small route from the same cluster
       const mergeCandidate = acc.find(r => 
         r.clusterIds[0] === route.clusterIds[0] && 
         r.stops.length + route.stops.length <= MAX_OUTLETS_PER_BEAT
@@ -305,7 +291,6 @@ function optimizeBeats(routes: SalesmanRoute[], distributor: { latitude: number;
         acc.push(route);
       }
     } else {
-      // Split route that exceeds maximum size
       const midPoint = Math.ceil(route.stops.length / 2);
       
       const route1: SalesmanRoute = {
@@ -334,7 +319,6 @@ function optimizeBeats(routes: SalesmanRoute[], distributor: { latitude: number;
     return acc;
   }, [] as SalesmanRoute[]);
   
-  // Reassign beat IDs sequentially
   return optimizedRoutes.map((route, index) => ({
     ...route,
     salesmanId: index + 1,
