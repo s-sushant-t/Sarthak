@@ -25,60 +25,50 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     try {
       if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
         await onLogin(loginId, password);
-        return;
-      }
+      } else {
+        // Check if this is a distributor login
+        const { data, error: countError } = await supabase
+          .from('distributor_routes')
+          .select('id')
+          .eq('distributor_code', loginId)
+          .limit(1);
 
-      // Check if this is a distributor login
-      const { data, error: countError } = await supabase
-        .from('distributor_routes')
-        .select('id')
-        .eq('distributor_code', loginId)
-        .limit(1);
+        if (countError) throw countError;
 
-      if (countError) throw countError;
-
-      if (!data || data.length === 0) {
-        throw new Error('Invalid distributor code');
-      }
-
-      // Attempt to sign in
-      const { data: { session }, error: authError } = await supabase.auth.signInWithPassword({
-        email: `${loginId}@distributor.com`,
-        password: loginId
-      });
-
-      if (authError) {
-        // Only attempt signup if the user doesn't exist
-        if (authError.message === 'Invalid login credentials') {
-          const { error: signUpError } = await supabase.auth.signUp({
+        if (data && data.length > 0) {
+          // This is a valid distributor code
+          const { data: { session }, error: authError } = await supabase.auth.signInWithPassword({
             email: `${loginId}@distributor.com`,
             password: loginId
           });
 
-          if (signUpError) {
-            throw signUpError;
+          if (authError) {
+            // If auth fails, try to create the account
+            const { error: signUpError } = await supabase.auth.signUp({
+              email: `${loginId}@distributor.com`,
+              password: loginId
+            });
+
+            if (signUpError) throw signUpError;
+
+            // Try login again after signup
+            const { error: retryError } = await supabase.auth.signInWithPassword({
+              email: `${loginId}@distributor.com`,
+              password: loginId
+            });
+
+            if (retryError) throw retryError;
           }
 
-          // Try login again after signup
-          const { error: retryError } = await supabase.auth.signInWithPassword({
-            email: `${loginId}@distributor.com`,
-            password: loginId
-          });
-
-          if (retryError) {
-            throw retryError;
-          }
+          localStorage.setItem('userType', 'distributor');
+          await onLogin(loginId, loginId);
         } else {
-          throw authError;
+          throw new Error('Invalid distributor code');
         }
       }
-
-      localStorage.setItem('userType', 'distributor');
-      await onLogin(loginId, loginId);
-      
     } catch (error) {
       console.error('Login error:', error);
-      setError(error instanceof Error ? error.message : 'Invalid credentials. Please try again.');
+      setError('Invalid credentials. Please try again.');
     } finally {
       setIsLoading(false);
     }

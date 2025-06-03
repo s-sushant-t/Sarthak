@@ -39,25 +39,14 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   const handleLogin = useCallback((loginId: string, password: string) => {
-    // Check for admin credentials
     if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
       setIsAuthenticated(true);
       setIsDistributor(false);
       localStorage.setItem('isAuthenticated', 'true');
       localStorage.setItem('userType', 'admin');
-      return;
+    } else {
+      throw new Error('Invalid credentials');
     }
-
-    // Check for distributor login
-    const userType = localStorage.getItem('userType');
-    if (userType === 'distributor') {
-      setIsAuthenticated(true);
-      setIsDistributor(true);
-      localStorage.setItem('isAuthenticated', 'true');
-      return;
-    }
-
-    throw new Error('Invalid credentials');
   }, []);
 
   const handleLogout = useCallback(() => {
