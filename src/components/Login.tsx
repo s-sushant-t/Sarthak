@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { LogIn, Binary, Network, Cpu } from 'lucide-react';
 
 interface LoginProps {
-  onLogin: (loginId: string) => void;
+  onLogin: (loginId: string, password: string) => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
@@ -17,16 +17,9 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setError('');
     
     try {
-      if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
-        onLogin(loginId);
-      } else if (loginId === sessionStorage.getItem('distributorCode') && 
-                 password === sessionStorage.getItem('distributorCode')) {
-        onLogin(loginId);
-      } else {
-        setError('Invalid credentials. Please try again.');
-      }
+      await onLogin(loginId, password);
     } catch (error) {
-      setError('An error occurred during login.');
+      setError('Invalid credentials. Please try again.');
     } finally {
       setIsLoading(false);
     }

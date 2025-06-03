@@ -44,12 +44,12 @@ function App() {
     checkSession();
   }, []);
 
-  const handleLogin = useCallback(async (loginId: string) => {
+  const handleLogin = useCallback(async (loginId: string, password: string) => {
     try {
       if (loginId === 'EDIS') {
         const { data, error } = await supabase.auth.signInWithPassword({
           email: 'admin@itc.com',
-          password: 'EDIS_2024-25'
+          password: password
         });
         if (error) throw error;
         setIsAuthenticated(true);
@@ -57,15 +57,16 @@ function App() {
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({
           email: `${loginId}@distributor.com`,
-          password: loginId
+          password: password
         });
         if (error) throw error;
         setIsAuthenticated(true);
         setIsDistributor(true);
+        sessionStorage.setItem('distributorCode', loginId);
       }
     } catch (error) {
       console.error('Login error:', error);
-      setError('Login failed. Please try again.');
+      throw error;
     }
   }, []);
 
