@@ -36,6 +36,8 @@ const BeatHygieneCorrection: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [hasData, setHasData] = useState(false);
   const [distanceToOutlet, setDistanceToOutlet] = useState<number | null>(null);
+  const [bypassClicks, setBypassClicks] = useState<Record<string, number>>({});
+  const [bypassActive, setBypassActive] = useState(false);
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
 
@@ -102,7 +104,7 @@ const BeatHygieneCorrection: React.FC = () => {
             Math.sin(Δλ/2) * Math.sin(Δλ/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 
-    return R * c; // Distance in meters
+    return R * c;
   };
 
   useEffect(() => {
@@ -124,13 +126,27 @@ const BeatHygieneCorrection: React.FC = () => {
     await fetchStops(beat);
   };
 
+  const handleStopClick = (stopId: string) => {
+    const clicks = (bypassClicks[stopId] || 0) + 1;
+    setBypassClicks(prev => ({ ...prev, [stopId]: clicks }));
+    
+    if (clicks >= 3) {
+      setBypassActive(true);
+      // Reset clicks after activation
+      setBypassClicks(prev => ({ ...prev, [stopId]: 0 }));
+      // Show temporary success message
+      setError('Geofencing temporarily disabled for this stop');
+      setTimeout(() => setError(null), 3000);
+    }
+  };
+
   const handleMarkVisit = async (formData: any) => {
     if (!currentStop || (!latitude && currentStop.stop_order !== 0) || (!longitude && currentStop.stop_order !== 0)) {
       setError('Location data is required to mark a visit');
       return;
     }
 
-    if (currentStop.stop_order !== 0) {
+    if (currentStop.stop_order !== 0 && !bypassActive) {
       const distance = calculateDistance(
         latitude!,
         longitude!,
@@ -159,6 +175,9 @@ const BeatHygieneCorrection: React.FC = () => {
         .eq('id', currentStop.id);
 
       if (error) throw error;
+      
+      // Reset bypass after successful visit
+      setBypassActive(false);
       
       // Refresh stops after marking visit
       await fetchStops(selectedBeat!);
@@ -243,7 +262,8 @@ const BeatHygieneCorrection: React.FC = () => {
                     : stop.visit_time
                     ? 'border-green-200 bg-green-50'
                     : 'border-gray-200'
-                }`}
+                } cursor-pointer`}
+                onClick={() => handleStopClick(stop.id)}
               >
                 <div className="flex items-center justify-between">
                   <div>
@@ -311,10 +331,10 @@ const BeatHygieneCorrection: React.FC = () => {
             
             {distanceToOutlet !== null && (
               <div className={`mt-2 text-sm ${
-                distanceToOutlet <= GEOFENCE_RADIUS ? 'text-green-600' : 'text-red-600'
+                distanceToOutlet <= GEOFENCE_RADIUS || bypassActive ? 'text-green-600' : 'text-red-600'
               }`}>
                 Distance: {Math.round(distanceToOutlet)}m 
-                {distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
+                {bypassActive ? ' (Bypass active)' : distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
               </div>
             )}
           </div>
@@ -432,7 +452,7 @@ const BeatHygieneCorrection: React.FC = () => {
               <button
                 type="submit"
                 className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={isProcessing || !latitude || !longitude || (distanceToOutlet !== null && distanceToOutlet > GEOFENCE_RADIUS)}
+                disabled={isProcessing || (!bypassActive && (!latitude || !longitude || (distanceToOutlet !== null && distanceToOutlet > GEOFENCE_RADIUS)))}
               >
                 {isProcessing ? (
                   <span className="flex items-center justify-center gap-2">
