@@ -5,7 +5,8 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
   const headers = [
     'Beat',
     'Stop Order',
-    'DMS Customer ID', 
+    'DMS Customer ID',
+    'Outlet Name',
     'OL_Latitude',
     'OL_Longitude',
     'Distance to Next Node (km)',
@@ -19,16 +20,16 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
   routes.forEach(route => {
     // Add distributor as first stop (stop order 0)
     if (route.stops.length > 0) {
-      const firstStop = route.stops[0];
       rows.push([
         route.salesmanId,
         0,
         'DISTRIBUTOR',
-        firstStop.latitude,
-        firstStop.longitude,
-        firstStop.distanceToNext,
-        firstStop.timeToNext,
-        firstStop.clusterId
+        'DISTRIBUTOR',
+        route.distributorLat,
+        route.distributorLng,
+        route.stops[0].distanceToNext,
+        route.stops[0].timeToNext,
+        route.stops[0].clusterId
       ].join(','));
     }
     
@@ -38,6 +39,7 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         route.salesmanId,
         index + 1,
         stop.customerId,
+        stop.outletName || '',
         stop.latitude,
         stop.longitude,
         stop.distanceToNext,

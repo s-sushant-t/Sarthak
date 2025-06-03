@@ -2,6 +2,7 @@ export interface Customer {
   id: string;
   latitude: number;
   longitude: number;
+  outletName?: string;
 }
 
 export interface ClusteredCustomer extends Customer {
@@ -26,6 +27,7 @@ export interface RouteStop {
   timeToNext: number;
   visitTime: number;
   clusterId: number;
+  outletName?: string;
 }
 
 export interface SalesmanRoute {
@@ -34,6 +36,8 @@ export interface SalesmanRoute {
   totalDistance: number;
   totalTime: number;
   clusterIds: number[];
+  distributorLat: number;
+  distributorLng: number;
 }
 
 export type RouteData = SalesmanRoute[];

@@ -42,7 +42,13 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
         const headers = jsonData[0] as string[];
         console.log('Headers found:', headers);
         
-        const requiredColumns = ['WD_Latitude', 'WD_Longitude', 'OL_Latitude', 'OL_Longitude', 'DMS Customer ID'];
+        const requiredColumns = [
+          'WD_Latitude', 'WD_Longitude', 
+          'OL_Latitude', 'OL_Longitude', 
+          'DMS Customer ID',
+          'Outlet_Name'
+        ];
+        
         const headerMap = new Map(headers.map((header, index) => [header?.trim() || '', index]));
         
         const missingColumns = requiredColumns.filter(col => !headerMap.has(col));
@@ -54,7 +60,8 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
             '- WD_Longitude (Distributor longitude)\n' +
             '- OL_Latitude (Customer latitude)\n' +
             '- OL_Longitude (Customer longitude)\n' +
-            '- DMS Customer ID (Customer identifier)'
+            '- DMS Customer ID (Customer identifier)\n' +
+            '- Outlet_Name (Customer outlet name)'
           );
         }
         
@@ -96,12 +103,14 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           const lat = parseFloat(row[headerMap.get('OL_Latitude')] || '');
           const lng = parseFloat(row[headerMap.get('OL_Longitude')] || '');
           const id = row[headerMap.get('DMS Customer ID')]?.toString();
+          const outletName = row[headerMap.get('Outlet_Name')]?.toString() || '';
           
           if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0 && id) {
             customers.push({
               id,
               latitude: lat,
-              longitude: lng
+              longitude: lng,
+              outletName
             });
             
             if (customers.length % 100 === 0) {
