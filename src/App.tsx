@@ -6,62 +6,34 @@ import AlgorithmSelector from './components/AlgorithmSelector';
 import ResultsView from './components/ResultsView';
 import Login from './components/Login';
 import BeatHygieneCorrection from './components/BeatHygieneCorrection';
-import AssignDistributor from './components/AssignDistributor';
 import { processExcelFile } from './utils/excelParser';
 import { RouteData, LocationData, AlgorithmType, AlgorithmResult } from './types';
 import { executeAlgorithm } from './algorithms';
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return sessionStorage.getItem('isAuthenticated') === 'true';
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isDistributor, setIsDistributor] = useState(false);
+  const [locationData, setLocationData] = useState<LocationData | null>(null);
+  const [algorithmResults, setAlgorithmResults] = useState<Record<AlgorithmType, AlgorithmResult | null>>({
+    'nearest-neighbor': null,
+    'simulated-annealing': null,
+    'custom': null
   });
-
-  const [locationData, setLocationData] = useState<LocationData | null>(() => {
-    const stored = sessionStorage.getItem('locationData');
-    return stored ? JSON.parse(stored) : null;
-  });
-
-  const [algorithmResults, setAlgorithmResults] = useState<Record<AlgorithmType, AlgorithmResult | null>>(() => {
-    const stored = sessionStorage.getItem('algorithmResults');
-    return stored ? JSON.parse(stored) : {
-      'nearest-neighbor': null,
-      'simulated-annealing': null,
-      'custom': null
-    };
-  });
-
-  const [selectedAlgorithm, setSelectedAlgorithm] = useState<AlgorithmType | null>(() => {
-    return (sessionStorage.getItem('selectedAlgorithm') as AlgorithmType | null) || null;
-  });
-
+  const [selectedAlgorithm, setSelectedAlgorithm] = useState<AlgorithmType | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'upload' | 'map' | 'results'>('upload');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showBeatHygiene, setShowBeatHygiene] = useState(false);
-
-  useEffect(() => {
-    const isDistributorAccess = sessionStorage.getItem('isAuthenticated') === 'true' &&
-                               sessionStorage.getItem('loginId') === sessionStorage.getItem('distributorCode');
-    setShowBeatHygiene(isDistributorAccess);
-  }, []);
 
   const handleLogin = useCallback((loginId: string) => {
     setIsAuthenticated(true);
-    sessionStorage.setItem('isAuthenticated', 'true');
-    sessionStorage.setItem('loginId', loginId);
-    
-    if (loginId === sessionStorage.getItem('distributorCode')) {
-      setShowBeatHygiene(true);
-    }
+    const distributorCode = sessionStorage.getItem('distributorCode');
+    setIsDistributor(loginId === distributorCode);
   }, []);
 
   const handleLogout = useCallback(() => {
     setIsAuthenticated(false);
-    sessionStorage.removeItem('isAuthenticated');
-    sessionStorage.removeItem('locationData');
-    sessionStorage.removeItem('algorithmResults');
-    sessionStorage.removeItem('selectedAlgorithm');
+    setIsDistributor(false);
     setLocationData(null);
     setAlgorithmResults({
       'nearest-neighbor': null,
@@ -70,6 +42,7 @@ function App() {
     });
     setSelectedAlgorithm(null);
     setActiveTab('upload');
+    sessionStorage.clear();
   }, []);
 
   const handleFileUpload = async (file: File) => {
@@ -77,32 +50,23 @@ function App() {
     setError(null);
     
     try {
-      console.log('Starting file processing...');
       const data = await processExcelFile(file);
-      console.log('File processed successfully:', data);
       
       if (!data || !data.customers || data.customers.length === 0) {
         throw new Error('No valid customer data found in the file');
       }
       
       setLocationData(data);
-      sessionStorage.setItem('locationData', JSON.stringify(data));
-      setActiveTab('map');
       
       const algorithms: AlgorithmType[] = ['nearest-neighbor', 'simulated-annealing'];
       
       for (const algorithm of algorithms) {
         try {
-          console.log(`Processing algorithm: ${algorithm}`);
           const result = await executeAlgorithm(algorithm, data);
-          console.log(`Algorithm ${algorithm} completed:`, result);
-          
-          setAlgorithmResults(prev => {
-            const updated = { ...prev, [algorithm]: result };
-            sessionStorage.setItem('algorithmResults', JSON.stringify(updated));
-            return updated;
-          });
-          
+          setAlgorithmResults(prev => ({
+            ...prev,
+            [algorithm]: result
+          }));
         } catch (algorithmError) {
           console.error(`Error processing ${algorithm}:`, algorithmError);
           setError(`Error processing ${algorithm}: ${algorithmError instanceof Error ? algorithmError.message : 'Unknown error'}`);
@@ -112,22 +76,17 @@ function App() {
       }
       
       setSelectedAlgorithm('nearest-neighbor');
-      sessionStorage.setItem('selectedAlgorithm', 'nearest-neighbor');
+      setActiveTab('map');
       
     } catch (error) {
       console.error("Error processing file:", error);
       setError(error instanceof Error ? error.message : 'Unknown error processing file');
-      
       setLocationData(null);
       setAlgorithmResults({
         'nearest-neighbor': null,
         'simulated-annealing': null,
         'custom': null
       });
-      sessionStorage.removeItem('locationData');
-      sessionStorage.removeItem('algorithmResults');
-      sessionStorage.removeItem('selectedAlgorithm');
-      
     } finally {
       setIsLoading(false);
     }
@@ -147,32 +106,27 @@ function App() {
       isCustom: true
     };
 
-    setAlgorithmResults(prev => {
-      const updated = { ...prev, custom: customResult };
-      sessionStorage.setItem('algorithmResults', JSON.stringify(updated));
-      return updated;
-    });
+    setAlgorithmResults(prev => ({
+      ...prev,
+      custom: customResult
+    }));
 
     setSelectedAlgorithm('custom');
-    sessionStorage.setItem('selectedAlgorithm', 'custom');
   }, [selectedAlgorithm, algorithmResults]);
 
   const handleSelectAlgorithm = useCallback((algorithm: AlgorithmType) => {
     setSelectedAlgorithm(algorithm);
-    sessionStorage.setItem('selectedAlgorithm', algorithm);
   }, []);
 
   const handleExportCSV = useCallback(() => {
     if (!selectedAlgorithm || !algorithmResults[selectedAlgorithm]) return;
-    
-    const csvData = algorithmResults[selectedAlgorithm]?.routes || [];
   }, [selectedAlgorithm, algorithmResults]);
 
   if (!isAuthenticated) {
     return <Login onLogin={handleLogin} />;
   }
 
-  if (showBeatHygiene) {
+  if (isDistributor) {
     return <BeatHygieneCorrection />;
   }
 
@@ -289,8 +243,8 @@ function App() {
               onSelectAlgorithm={handleSelectAlgorithm}
               onExportCSV={handleExportCSV}
               showAssignDistributor={true}
-              onAssignDistributor={() => {
-                sessionStorage.setItem('distributorCode', selectedAlgorithm);
+              onAssignDistributor={(code) => {
+                sessionStorage.setItem('distributorCode', code);
               }}
             />
           )}

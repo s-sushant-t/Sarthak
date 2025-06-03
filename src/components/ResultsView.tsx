@@ -2,6 +2,7 @@ import React from 'react';
 import { BarChart2, Award, Download } from 'lucide-react';
 import { AlgorithmType, AlgorithmResult } from '../types';
 import { exportToCSV } from '../utils/csvExporter';
+import AssignDistributor from './AssignDistributor';
 
 interface ResultsViewProps {
   results: Record<AlgorithmType, AlgorithmResult | null>;
@@ -9,7 +10,7 @@ interface ResultsViewProps {
   onSelectAlgorithm: (algorithm: AlgorithmType) => void;
   onExportCSV: () => void;
   showAssignDistributor?: boolean;
-  onAssignDistributor?: () => void;
+  onAssignDistributor?: (code: string) => void;
 }
 
 const ResultsView: React.FC<ResultsViewProps> = ({ 
@@ -181,7 +182,7 @@ const ResultsView: React.FC<ResultsViewProps> = ({
       {showAssignDistributor && selectedAlgorithm && results[selectedAlgorithm] && (
         <AssignDistributor
           routes={results[selectedAlgorithm]!.routes}
-          onAssign={() => onAssignDistributor?.()}
+          onAssign={(code) => onAssignDistributor?.(code)}
         />
       )}
     </div>

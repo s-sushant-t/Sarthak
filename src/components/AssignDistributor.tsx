@@ -9,7 +9,7 @@ const supabase = createClient(
 
 interface AssignDistributorProps {
   routes: RouteData;
-  onAssign: () => void;
+  onAssign: (code: string) => void;
 }
 
 const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign }) => {
@@ -65,7 +65,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
 
       if (insertError) throw insertError;
 
-      onAssign();
+      onAssign(distributorCode);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -74,7 +74,9 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
   };
 
   return (
-    <div className="mt-4">
+    <div className="mt-8 bg-white rounded-lg border border-gray-200 p-4">
+      <h3 className="font-medium text-gray-800 mb-3">Assign Routes to Distributor</h3>
+      
       {error && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">
           {error}
@@ -97,6 +99,12 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
           {isLoading ? 'Assigning...' : 'Assign to Distributor'}
         </button>
       </div>
+      
+      <p className="mt-2 text-sm text-gray-500">
+        The distributor will use this code to log in and access their assigned routes.
+      </p>
     </div>
   );
 };
+
+export default AssignDistributor;
