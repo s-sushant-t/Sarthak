@@ -27,6 +27,18 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     setError(null);
 
     try {
+      // First, delete any existing routes for this distributor and wait for it to complete
+      const { error: deleteError, count } = await supabase
+        .from('distributor_routes')
+        .delete()
+        .eq('distributor_code', distributorCode)
+        .select('count');
+
+      if (deleteError) throw deleteError;
+
+      // Wait a brief moment to ensure the delete has propagated
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       const routeData = routes.flatMap(route => {
         // Add distributor point as stop 0
         const stops = [
@@ -59,11 +71,16 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         return stops;
       });
 
-      const { error: insertError } = await supabase
-        .from('distributor_routes')
-        .insert(routeData);
+      // Insert new routes in batches to avoid potential timeout issues
+      const batchSize = 100;
+      for (let i = 0; i < routeData.length; i += batchSize) {
+        const batch = routeData.slice(i, i + batchSize);
+        const { error: insertError } = await supabase
+          .from('distributor_routes')
+          .insert(batch);
 
-      if (insertError) throw insertError;
+        if (insertError) throw insertError;
+      }
 
       onAssign(distributorCode);
     } catch (err) {
