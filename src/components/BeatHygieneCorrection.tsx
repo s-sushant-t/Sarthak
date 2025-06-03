@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronRight } from 'lucide-react';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -30,6 +30,7 @@ const BeatHygieneCorrection: React.FC = () => {
   const [beats, setBeats] = useState<number[]>([]);
   const [selectedBeat, setSelectedBeat] = useState<number | null>(null);
   const [currentStop, setCurrentStop] = useState<Stop | null>(null);
+  const [stops, setStops] = useState<Stop[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,13 +45,13 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('distributor_routes')
-          .select('beat')
+          .select('distinct beat')
           .eq('distributor_code', distributorCode)
           .order('beat');
 
         if (error) throw error;
 
-        const uniqueBeats = [...new Set(data.map(d => d.beat))];
+        const uniqueBeats = data.map(d => d.beat);
         setBeats(uniqueBeats);
         setHasData(uniqueBeats.length > 0);
       } catch (error) {
@@ -63,8 +64,8 @@ const BeatHygieneCorrection: React.FC = () => {
     fetchBeats();
   }, [distributorCode]);
 
-  const fetchNextStop = async () => {
-    if (!selectedBeat || !distributorCode) return;
+  const fetchStops = async (beat: number) => {
+    if (!distributorCode) return;
 
     setIsProcessing(true);
     try {
@@ -72,17 +73,16 @@ const BeatHygieneCorrection: React.FC = () => {
         .from('distributor_routes')
         .select('*')
         .eq('distributor_code', distributorCode)
-        .eq('beat', selectedBeat)
-        .is('visit_time', null)
-        .order('stop_order')
-        .limit(1)
-        .single();
+        .eq('beat', beat)
+        .order('stop_order');
 
       if (error) throw error;
-      setCurrentStop(data);
+      setStops(data);
+      setCurrentStop(data.find(stop => !stop.visit_time) || null);
       setError(null);
     } catch (error) {
-      setError('Error fetching next stop: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setError('Error fetching stops: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setStops([]);
       setCurrentStop(null);
     } finally {
       setIsProcessing(false);
@@ -106,8 +106,7 @@ const BeatHygieneCorrection: React.FC = () => {
 
   const handleBeatSelect = async (beat: number) => {
     setSelectedBeat(beat);
-    setCurrentStop(null);
-    await fetchNextStop();
+    await fetchStops(beat);
   };
 
   const handleMarkVisit = async (formData: any) => {
@@ -145,8 +144,10 @@ const BeatHygieneCorrection: React.FC = () => {
         .eq('id', currentStop.id);
 
       if (error) throw error;
+      
+      // Refresh stops after marking visit
+      await fetchStops(selectedBeat!);
       setError(null);
-      await fetchNextStop();
     } catch (error) {
       setError('Error updating visit: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
@@ -211,6 +212,42 @@ const BeatHygieneCorrection: React.FC = () => {
           ))}
         </select>
       </div>
+
+      {selectedBeat && (
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4">Beat {selectedBeat} Stops</h3>
+          <div className="space-y-4">
+            {stops.map((stop) => (
+              <div
+                key={stop.id}
+                className={`p-4 rounded-lg border ${
+                  currentStop?.id === stop.id
+                    ? 'border-blue-500 bg-blue-50'
+                    : stop.visit_time
+                    ? 'border-green-200 bg-green-50'
+                    : 'border-gray-200'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium">
+                      {stop.stop_order === 0 ? 'Distribution Point' : stop.outlet_name}
+                    </h4>
+                    <p className="text-sm text-gray-600">Stop #{stop.stop_order}</p>
+                  </div>
+                  {stop.visit_time ? (
+                    <span className="text-green-600 text-sm">
+                      Visited at {new Date(stop.visit_time).toLocaleTimeString()}
+                    </span>
+                  ) : (
+                    <ChevronRight className="text-gray-400" />
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isProcessing && (
         <div className="flex justify-center my-8">
