@@ -1,73 +1,39 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { LogIn, Binary, Network, Cpu } from 'lucide-react';
 
 interface LoginProps {
-  onLogin: () => void;
+  onLogin: (loginId: string) => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [particles, setParticles] = useState<Array<{ x: number; y: number; vx: number; vy: number }>>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    // Create initial particles
-    const initialParticles = Array.from({ length: 50 }, () => ({
-      x: Math.random() * window.innerWidth,
-      y: Math.random() * window.innerHeight,
-      vx: (Math.random() - 0.5) * 2,
-      vy: (Math.random() - 0.5) * 2
-    }));
-    setParticles(initialParticles);
-
-    // Animation loop
-    let animationId: number;
-    const animate = () => {
-      setParticles(prevParticles => 
-        prevParticles.map(particle => ({
-          x: (particle.x + particle.vx + window.innerWidth) % window.innerWidth,
-          y: (particle.y + particle.vy + window.innerHeight) % window.innerHeight,
-          vx: particle.vx,
-          vy: particle.vy
-        }))
-      );
-      animationId = requestAnimationFrame(animate);
-    };
-    animate();
-
-    return () => cancelAnimationFrame(animationId);
-  }, []);
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoading(true);
+    setError('');
     
-    if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
-      onLogin();
-    } else {
-      setError('Invalid credentials. Please try again.');
+    try {
+      if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
+        onLogin(loginId);
+      } else if (loginId === sessionStorage.getItem('distributorCode') && 
+                 password === sessionStorage.getItem('distributorCode')) {
+        onLogin(loginId);
+      } else {
+        setError('Invalid credentials. Please try again.');
+      }
+    } catch (error) {
+      setError('An error occurred during login.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative overflow-hidden">
-      {/* Animated background */}
-      <div className="absolute inset-0 z-0">
-        <svg className="w-full h-full">
-          {particles.map((particle, i) => (
-            <circle
-              key={i}
-              cx={particle.x}
-              cy={particle.y}
-              r="1"
-              fill="#ffffff"
-              opacity="0.2"
-            />
-          ))}
-        </svg>
-      </div>
-
-      {/* Floating icons */}
       <div className="absolute inset-0 z-0">
         <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float" style={{ top: '15%', left: '10%' }} />
         <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed" style={{ top: '60%', right: '15%' }} />
@@ -105,6 +71,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   onChange={(e) => setLoginId(e.target.value)}
                   className="appearance-none block w-full px-3 py-2 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                   placeholder="Enter your login ID"
+                  disabled={isLoading}
                 />
               </div>
             </div>
@@ -123,6 +90,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   onChange={(e) => setPassword(e.target.value)}
                   className="appearance-none block w-full px-3 py-2 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                   placeholder="Enter your password"
+                  disabled={isLoading}
                 />
               </div>
             </div>
@@ -133,15 +101,23 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               </div>
             )}
 
-            <div>
-              <button
-                type="submit"
-                className="w-full flex justify-center items-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transform transition-all duration-200 hover:scale-[1.02]"
-              >
-                <LogIn className="w-4 h-4 mr-2" />
-                Access System
-              </button>
-            </div>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full flex justify-center items-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transform transition-all duration-200 hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? (
+                <div className="flex items-center">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                  Logging in...
+                </div>
+              ) : (
+                <>
+                  <LogIn className="w-4 h-4 mr-2" />
+                  Access System
+                </>
+              )}
+            </button>
           </form>
         </div>
       </div>
