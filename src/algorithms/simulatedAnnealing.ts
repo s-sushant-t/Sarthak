@@ -1,8 +1,8 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const MIN_OUTLETS_PER_BEAT = 30;
-const MAX_OUTLETS_PER_BEAT = 35;
+const MIN_OUTLETS_PER_BEAT = 28; // Updated minimum outlets per beat
+const MAX_OUTLETS_PER_BEAT = 35; // Maximum outlets per beat
 const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
 const TRAVEL_SPEED = 30;
@@ -241,7 +241,7 @@ function mergeSmallerBeats(routes: SalesmanRoute[]): SalesmanRoute[] {
     if (route.stops.length >= MIN_OUTLETS_PER_BEAT) {
       acc.push(route);
     } else {
-      // Find best route to merge with, even if it exceeds MAX_OUTLETS_PER_BEAT
+      // Find best route to merge with
       let bestRouteIndex = -1;
       let minDistance = Infinity;
       
