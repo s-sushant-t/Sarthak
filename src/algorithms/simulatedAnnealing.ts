@@ -1,7 +1,7 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 
-const MIN_OUTLETS_PER_BEAT = 28; // Updated minimum outlets per beat
+const MIN_OUTLETS_PER_BEAT = 28; // Minimum outlets per beat
 const MAX_OUTLETS_PER_BEAT = 35; // Maximum outlets per beat
 const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
@@ -61,23 +61,18 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
     temperature *= COOLING_RATE;
   }
   
-  // Final pass to merge any small beats
-  const finalSolution = mergeSmallerBeats(bestSolution);
+  // Optimize beats to ensure they meet size requirements
+  const optimizedRoutes = optimizeBeats(bestSolution, distributor);
   
-  // Reassign salesman IDs sequentially
-  const reindexedSolution = finalSolution.map((route, index) => ({
-    ...route,
-    salesmanId: index + 1
-  }));
-  
-  const finalEnergy = calculateTotalDistance(reindexedSolution);
+  // Calculate total distance
+  const totalDistance = optimizedRoutes.reduce((total, route) => total + route.totalDistance, 0);
   
   return {
     name: 'Simulated Annealing (Clustered)',
-    totalDistance: finalEnergy,
-    totalSalesmen: reindexedSolution.length,
+    totalDistance,
+    totalSalesmen: optimizedRoutes.length,
     processingTime: 0,
-    routes: reindexedSolution
+    routes: optimizedRoutes
   };
 };
 
@@ -97,24 +92,28 @@ function createInitialSolution(
         stops: [],
         totalDistance: 0,
         totalTime: 0,
-        clusterIds: [Number(clusterId)]
+        clusterIds: [Number(clusterId)],
+        distributorLat: distributor.latitude,
+        distributorLng: distributor.longitude
       };
       
       let currentLat = distributor.latitude;
       let currentLng = distributor.longitude;
       let remainingTime = MAX_WORKING_TIME;
-      let assignedOutlets = 0;
       
       // Calculate target outlets for this route
       const remainingOutlets = clusterCustomers.length;
-      const targetOutlets = Math.min(
-        MAX_OUTLETS_PER_BEAT,
-        remainingOutlets <= MIN_OUTLETS_PER_BEAT * 1.5 ? remainingOutlets : MAX_OUTLETS_PER_BEAT
-      );
+      let targetOutlets = MAX_OUTLETS_PER_BEAT;
+      
+      if (remainingOutlets <= MAX_OUTLETS_PER_BEAT) {
+        targetOutlets = remainingOutlets;
+      } else if (remainingOutlets < (MAX_OUTLETS_PER_BEAT * 2)) {
+        targetOutlets = Math.ceil(remainingOutlets / 2);
+      }
       
       while (clusterCustomers.length > 0 && 
              remainingTime > 0 && 
-             assignedOutlets < targetOutlets) {
+             route.stops.length < targetOutlets) {
         let nearestIndex = -1;
         let shortestDistance = Infinity;
         
@@ -124,6 +123,9 @@ function createInitialSolution(
             currentLat, currentLng,
             customer.latitude, customer.longitude
           );
+          
+          const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
+          if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) continue;
           
           if (distance < shortestDistance) {
             shortestDistance = distance;
@@ -136,8 +138,6 @@ function createInitialSolution(
         const customer = clusterCustomers.splice(nearestIndex, 1)[0];
         const travelTime = calculateTravelTime(shortestDistance, TRAVEL_SPEED);
         
-        if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) break;
-        
         route.stops.push({
           customerId: customer.id,
           latitude: customer.latitude,
@@ -145,7 +145,8 @@ function createInitialSolution(
           distanceToNext: 0,
           timeToNext: 0,
           visitTime: CUSTOMER_VISIT_TIME,
-          clusterId: customer.clusterId
+          clusterId: customer.clusterId,
+          outletName: customer.outletName
         });
         
         route.totalDistance += shortestDistance;
@@ -154,7 +155,6 @@ function createInitialSolution(
         
         currentLat = customer.latitude;
         currentLng = customer.longitude;
-        assignedOutlets++;
       }
       
       if (route.stops.length > 0) {
@@ -164,7 +164,7 @@ function createInitialSolution(
     }
   }
   
-  return mergeSmallerBeats(routes);
+  return routes;
 }
 
 function createNeighborSolution(solution: SalesmanRoute[]): SalesmanRoute[] {
@@ -211,23 +211,31 @@ function createNeighborSolution(solution: SalesmanRoute[]): SalesmanRoute[] {
       }
       break;
       
-    case 2: // Move a stop to a different position within the same route
-      if (newSolution.length > 0) {
-        const routeIndex = Math.floor(Math.random() * newSolution.length);
-        const route = newSolution[routeIndex];
+    case 2: // Move a stop between routes in the same cluster
+      if (newSolution.length >= 2) {
+        const fromRouteIndex = Math.floor(Math.random() * newSolution.length);
+        const fromRoute = newSolution[fromRouteIndex];
         
-        if (route.stops.length >= 2) {
-          const fromIndex = Math.floor(Math.random() * route.stops.length);
-          let toIndex = Math.floor(Math.random() * route.stops.length);
+        // Find another route in the same cluster
+        const sameClusterRoutes = newSolution.filter((r, i) => 
+          i !== fromRouteIndex && r.clusterIds[0] === fromRoute.clusterIds[0]
+        );
+        
+        if (sameClusterRoutes.length > 0 && fromRoute.stops.length > MIN_OUTLETS_PER_BEAT) {
+          const toRoute = sameClusterRoutes[Math.floor(Math.random() * sameClusterRoutes.length)];
           
-          while (fromIndex === toIndex) {
-            toIndex = Math.floor(Math.random() * route.stops.length);
+          if (toRoute.stops.length < MAX_OUTLETS_PER_BEAT) {
+            const stopIndex = Math.floor(Math.random() * fromRoute.stops.length);
+            const [stop] = fromRoute.stops.splice(stopIndex, 1);
+            
+            if (stop) {
+              const insertIndex = Math.floor(Math.random() * (toRoute.stops.length + 1));
+              toRoute.stops.splice(insertIndex, 0, stop);
+              
+              updateRouteMetrics(fromRoute);
+              updateRouteMetrics(toRoute);
+            }
           }
-          
-          const [stop] = route.stops.splice(fromIndex, 1);
-          route.stops.splice(toIndex, 0, stop);
-          
-          updateRouteMetrics(route);
         }
       }
       break;
@@ -236,54 +244,14 @@ function createNeighborSolution(solution: SalesmanRoute[]): SalesmanRoute[] {
   return newSolution;
 }
 
-function mergeSmallerBeats(routes: SalesmanRoute[]): SalesmanRoute[] {
-  return routes.reduce((acc, route) => {
-    if (route.stops.length >= MIN_OUTLETS_PER_BEAT) {
-      acc.push(route);
-    } else {
-      // Find best route to merge with
-      let bestRouteIndex = -1;
-      let minDistance = Infinity;
-      
-      acc.forEach((existingRoute, index) => {
-        if (existingRoute.clusterIds[0] === route.clusterIds[0]) {
-          const lastStop = existingRoute.stops[existingRoute.stops.length - 1];
-          const firstStop = route.stops[0];
-          const distance = calculateHaversineDistance(
-            lastStop.latitude, lastStop.longitude,
-            firstStop.latitude, firstStop.longitude
-          );
-          
-          if (distance < minDistance) {
-            minDistance = distance;
-            bestRouteIndex = index;
-          }
-        }
-      });
-      
-      if (bestRouteIndex !== -1) {
-        const targetRoute = acc[bestRouteIndex];
-        targetRoute.stops.push(...route.stops);
-        updateRouteMetrics(targetRoute);
-      } else {
-        acc.push(route);
-      }
-    }
-    return acc;
-  }, [] as SalesmanRoute[]);
-}
-
-function updateRouteMetrics(
-  route: SalesmanRoute,
-  distributor?: { latitude: number; longitude: number }
-): void {
+function updateRouteMetrics(route: SalesmanRoute): void {
   route.totalDistance = 0;
   route.totalTime = 0;
   
   if (route.stops.length === 0) return;
   
-  let prevLat = distributor ? distributor.latitude : route.stops[0].latitude;
-  let prevLng = distributor ? distributor.longitude : route.stops[0].longitude;
+  let prevLat = route.distributorLat;
+  let prevLng = route.distributorLng;
   
   for (let i = 0; i < route.stops.length; i++) {
     const stop = route.stops[i];
@@ -316,6 +284,63 @@ function updateRouteMetrics(
     prevLat = stop.latitude;
     prevLng = stop.longitude;
   }
+}
+
+function optimizeBeats(routes: SalesmanRoute[], distributor: { latitude: number; longitude: number }): SalesmanRoute[] {
+  const optimizedRoutes = routes.reduce((acc, route) => {
+    if (route.stops.length >= MIN_OUTLETS_PER_BEAT && route.stops.length <= MAX_OUTLETS_PER_BEAT) {
+      // Route is within acceptable range
+      acc.push(route);
+    } else if (route.stops.length < MIN_OUTLETS_PER_BEAT) {
+      // Try to merge with another small route from the same cluster
+      const mergeCandidate = acc.find(r => 
+        r.clusterIds[0] === route.clusterIds[0] && 
+        r.stops.length + route.stops.length <= MAX_OUTLETS_PER_BEAT
+      );
+      
+      if (mergeCandidate) {
+        mergeCandidate.stops.push(...route.stops);
+        updateRouteMetrics(mergeCandidate);
+      } else {
+        acc.push(route);
+      }
+    } else {
+      // Split route that exceeds maximum size
+      const midPoint = Math.ceil(route.stops.length / 2);
+      
+      const route1: SalesmanRoute = {
+        ...route,
+        stops: route.stops.slice(0, midPoint),
+        totalDistance: 0,
+        totalTime: 0
+      };
+      
+      const route2: SalesmanRoute = {
+        ...route,
+        stops: route.stops.slice(midPoint),
+        totalDistance: 0,
+        totalTime: 0
+      };
+      
+      updateRouteMetrics(route1);
+      updateRouteMetrics(route2);
+      
+      acc.push(route1);
+      if (route2.stops.length > 0) {
+        acc.push(route2);
+      }
+    }
+    
+    return acc;
+  }, [] as SalesmanRoute[]);
+  
+  // Reassign beat IDs sequentially
+  return optimizedRoutes.map((route, index) => ({
+    ...route,
+    salesmanId: index + 1,
+    distributorLat: distributor.latitude,
+    distributorLng: distributor.longitude
+  }));
 }
 
 function calculateTotalDistance(solution: SalesmanRoute[]): number {
