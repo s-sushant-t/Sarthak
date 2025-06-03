@@ -9,6 +9,12 @@ import BeatHygieneCorrection from './components/BeatHygieneCorrection';
 import { processExcelFile } from './utils/excelParser';
 import { RouteData, LocationData, AlgorithmType, AlgorithmResult } from './types';
 import { executeAlgorithm } from './algorithms';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -25,24 +31,61 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = useCallback((loginId: string) => {
-    setIsAuthenticated(true);
-    const distributorCode = sessionStorage.getItem('distributorCode');
-    setIsDistributor(loginId === distributorCode);
+  useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        setIsAuthenticated(true);
+        const distributorCode = sessionStorage.getItem('distributorCode');
+        setIsDistributor(session.user.id === distributorCode);
+      }
+    };
+    
+    checkSession();
   }, []);
 
-  const handleLogout = useCallback(() => {
-    setIsAuthenticated(false);
-    setIsDistributor(false);
-    setLocationData(null);
-    setAlgorithmResults({
-      'nearest-neighbor': null,
-      'simulated-annealing': null,
-      'custom': null
-    });
-    setSelectedAlgorithm(null);
-    setActiveTab('upload');
-    sessionStorage.clear();
+  const handleLogin = useCallback(async (loginId: string) => {
+    try {
+      if (loginId === 'EDIS') {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: 'admin@itc.com',
+          password: 'EDIS_2024-25'
+        });
+        if (error) throw error;
+        setIsAuthenticated(true);
+        setIsDistributor(false);
+      } else {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: `${loginId}@distributor.com`,
+          password: loginId
+        });
+        if (error) throw error;
+        setIsAuthenticated(true);
+        setIsDistributor(true);
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      setError('Login failed. Please try again.');
+    }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await supabase.auth.signOut();
+      setIsAuthenticated(false);
+      setIsDistributor(false);
+      setLocationData(null);
+      setAlgorithmResults({
+        'nearest-neighbor': null,
+        'simulated-annealing': null,
+        'custom': null
+      });
+      setSelectedAlgorithm(null);
+      setActiveTab('upload');
+      sessionStorage.clear();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   }, []);
 
   const handleFileUpload = async (file: File) => {
