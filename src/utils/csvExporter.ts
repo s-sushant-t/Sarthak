@@ -3,13 +3,14 @@ import { RouteData, SalesmanRoute, RouteStop } from '../types';
 export const exportToCSV = (routes: RouteData, filename: string): void => {
   // Create CSV headers
   const headers = [
-    'Salesman ID',
+    'Beat',
     'Stop Order',
     'DMS Customer ID', 
     'OL_Latitude',
     'OL_Longitude',
     'Distance to Next Node (km)',
-    'Time to Next Node (min)'
+    'Time to Next Node (min)',
+    'Cluster ID'
   ].join(',');
   
   // Create rows for each stop in each route
@@ -23,10 +24,11 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         route.salesmanId,
         0,
         'DISTRIBUTOR',
-        firstStop.latitude, // We don't have the actual distributor coords here, using first stop as proxy
+        firstStop.latitude,
         firstStop.longitude,
         firstStop.distanceToNext,
-        firstStop.timeToNext
+        firstStop.timeToNext,
+        firstStop.clusterId
       ].join(','));
     }
     
@@ -39,7 +41,8 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         stop.latitude,
         stop.longitude,
         stop.distanceToNext,
-        stop.timeToNext
+        stop.timeToNext,
+        stop.clusterId
       ].join(','));
     });
   });
