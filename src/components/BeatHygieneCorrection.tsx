@@ -31,14 +31,30 @@ const BeatHygieneCorrection: React.FC = () => {
   const [currentStop, setCurrentStop] = useState<Stop | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const { latitude, longitude, error: locationError } = useGeolocation();
 
   useEffect(() => {
+    const fetchUser = async () => {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError) {
+        setError('Error fetching user: ' + userError.message);
+        return;
+      }
+      setUserId(user?.id || null);
+    };
+
+    fetchUser();
+  }, []);
+
+  useEffect(() => {
     const fetchBeats = async () => {
+      if (!userId) return;
+
       const { data, error } = await supabase
         .from('distributor_routes')
         .select('beat')
-        .eq('distributor_code', supabase.auth.user()?.id)
+        .eq('distributor_code', userId)
         .order('beat');
 
       if (error) {
@@ -52,15 +68,15 @@ const BeatHygieneCorrection: React.FC = () => {
     };
 
     fetchBeats();
-  }, []);
+  }, [userId]);
 
   const fetchNextStop = async () => {
-    if (!selectedBeat) return;
+    if (!selectedBeat || !userId) return;
 
     const { data, error } = await supabase
       .from('distributor_routes')
       .select('*')
-      .eq('distributor_code', supabase.auth.user()?.id)
+      .eq('distributor_code', userId)
       .eq('beat', selectedBeat)
       .is('visit_time', null)
       .order('stop_order')
