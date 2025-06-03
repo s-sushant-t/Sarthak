@@ -9,8 +9,7 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
     'OL_Latitude',
     'OL_Longitude',
     'Distance to Next Node (km)',
-    'Time to Next Node (min)',
-    'Cluster ID'  // Added Cluster ID column
+    'Time to Next Node (min)'
   ].join(',');
   
   // Create rows for each stop in each route
@@ -24,11 +23,10 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         route.salesmanId,
         0,
         'DISTRIBUTOR',
-        firstStop.latitude,
+        firstStop.latitude, // We don't have the actual distributor coords here, using first stop as proxy
         firstStop.longitude,
         firstStop.distanceToNext,
-        firstStop.timeToNext,
-        firstStop.clusterId  // Include cluster ID for distributor stop
+        firstStop.timeToNext
       ].join(','));
     }
     
@@ -41,8 +39,7 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         stop.latitude,
         stop.longitude,
         stop.distanceToNext,
-        stop.timeToNext,
-        stop.clusterId  // Include cluster ID for each stop
+        stop.timeToNext
       ].join(','));
     });
   });
