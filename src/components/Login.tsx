@@ -1,5 +1,11 @@
 import React, { useState } from 'react';
 import { LogIn, Binary, Network, Cpu } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 interface LoginProps {
   onLogin: (loginId: string, password: string) => void;
@@ -17,8 +23,51 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setError('');
     
     try {
-      await onLogin(loginId, password);
+      if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
+        await onLogin(loginId, password);
+      } else {
+        // Check if this is a distributor login
+        const { data, error: countError } = await supabase
+          .from('distributor_routes')
+          .select('id')
+          .eq('distributor_code', loginId)
+          .limit(1);
+
+        if (countError) throw countError;
+
+        if (data && data.length > 0) {
+          // This is a valid distributor code
+          const { data: { session }, error: authError } = await supabase.auth.signInWithPassword({
+            email: `${loginId}@distributor.com`,
+            password: loginId
+          });
+
+          if (authError) {
+            // If auth fails, try to create the account
+            const { error: signUpError } = await supabase.auth.signUp({
+              email: `${loginId}@distributor.com`,
+              password: loginId
+            });
+
+            if (signUpError) throw signUpError;
+
+            // Try login again after signup
+            const { error: retryError } = await supabase.auth.signInWithPassword({
+              email: `${loginId}@distributor.com`,
+              password: loginId
+            });
+
+            if (retryError) throw retryError;
+          }
+
+          localStorage.setItem('userType', 'distributor');
+          await onLogin(loginId, loginId);
+        } else {
+          throw new Error('Invalid distributor code');
+        }
+      }
     } catch (error) {
+      console.error('Login error:', error);
       setError('Invalid credentials. Please try again.');
     } finally {
       setIsLoading(false);
@@ -63,7 +112,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   value={loginId}
                   onChange={(e) => setLoginId(e.target.value)}
                   className="appearance-none block w-full px-3 py-2 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                  placeholder="Enter EDIS or your full distributor email"
+                  placeholder="Enter EDIS or your distributor code"
                   disabled={isLoading}
                 />
               </div>
