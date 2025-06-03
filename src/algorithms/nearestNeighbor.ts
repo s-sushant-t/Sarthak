@@ -32,7 +32,9 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         stops: [],
         totalDistance: 0,
         totalTime: 0,
-        clusterIds: [Number(clusterId)]
+        clusterIds: [Number(clusterId)],
+        distributorLat: distributor.latitude,
+        distributorLng: distributor.longitude
       };
       
       let currentLat = distributor.latitude;
@@ -84,7 +86,8 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
           distanceToNext: 0,
           timeToNext: 0,
           visitTime: CUSTOMER_VISIT_TIME,
-          clusterId: nearestCustomer.clusterId
+          clusterId: nearestCustomer.clusterId,
+          outletName: nearestCustomer.outletName
         });
         
         currentRoute.totalDistance += shortestDistance;
@@ -173,7 +176,9 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         stops: route.stops.slice(0, midPoint),
         totalDistance: 0,
         totalTime: 0,
-        clusterIds: route.clusterIds
+        clusterIds: route.clusterIds,
+        distributorLat: distributor.latitude,
+        distributorLng: distributor.longitude
       };
       
       const route2: SalesmanRoute = {
@@ -181,7 +186,9 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         stops: route.stops.slice(midPoint),
         totalDistance: 0,
         totalTime: 0,
-        clusterIds: route.clusterIds
+        clusterIds: route.clusterIds,
+        distributorLat: distributor.latitude,
+        distributorLng: distributor.longitude
       };
       
       // Recalculate metrics for both routes
@@ -225,7 +232,9 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   // Reassign beat IDs sequentially
   const finalRoutes = optimizedRoutes.map((route, index) => ({
     ...route,
-    salesmanId: index + 1
+    salesmanId: index + 1,
+    distributorLat: distributor.latitude,
+    distributorLng: distributor.longitude
   }));
   
   // Calculate total distance
