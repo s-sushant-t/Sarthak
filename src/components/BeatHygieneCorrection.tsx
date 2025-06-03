@@ -251,14 +251,14 @@ const BeatHygieneCorrection: React.FC = () => {
             Select Beat
           </label>
           <select
-            className="w-full bg-white/10 backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-white placeholder-blue-300/50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+            className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
             value={selectedBeat || ''}
             onChange={(e) => handleBeatSelect(Number(e.target.value))}
             disabled={isProcessing}
           >
-            <option value="">Select a beat</option>
+            <option value="" className="text-black">Select a beat</option>
             {beats.map((beat) => (
-              <option key={beat} value={beat}>Beat {beat}</option>
+              <option key={beat} value={beat} className="text-black">Beat {beat}</option>
             ))}
           </select>
         </div>
@@ -402,16 +402,16 @@ const BeatHygieneCorrection: React.FC = () => {
                   <select
                     name="marketWorkRemark"
                     required
-                    className="w-full bg-white/10 backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-white placeholder-blue-300/50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                     disabled={isProcessing}
                   >
-                    <option value="">Select remark</option>
-                    <option value="GR1BDS">GR1BDS</option>
-                    <option value="GR1ADS">GR1ADS</option>
-                    <option value="GR2 DS">GR2 DS</option>
-                    <option value="All DS">All DS</option>
-                    <option value="No Outlet Present">No Outlet Present</option>
-                    <option value="Outlet Closed">Outlet Closed</option>
+                    <option value="" className="text-black">Select remark</option>
+                    <option value="GR1BDS" className="text-black">GR1BDS</option>
+                    <option value="GR1ADS" className="text-black">GR1ADS</option>
+                    <option value="GR2 DS" className="text-black">GR2 DS</option>
+                    <option value="All DS" className="text-black">All DS</option>
+                    <option value="No Outlet Present" className="text-black">No Outlet Present</option>
+                    <option value="Outlet Closed" className="text-black">Outlet Closed</option>
                   </select>
                 </div>
 
@@ -422,7 +422,7 @@ const BeatHygieneCorrection: React.FC = () => {
                   <input
                     type="text"
                     name="updatedOutletName"
-                    className="w-full bg-white/10 backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-white placeholder-blue-300/50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                     disabled={isProcessing}
                   />
                 </div>
@@ -434,7 +434,7 @@ const BeatHygieneCorrection: React.FC = () => {
                   <input
                     type="text"
                     name="ownerName"
-                    className="w-full bg-white/10 backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-white placeholder-blue-300/50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                     disabled={isProcessing}
                   />
                 </div>
@@ -446,7 +446,7 @@ const BeatHygieneCorrection: React.FC = () => {
                   <input
                     type="text"
                     name="ownerContact"
-                    className="w-full bg-white/10 backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-white placeholder-blue-300/50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                     disabled={isProcessing}
                   />
                 </div>
@@ -458,7 +458,7 @@ const BeatHygieneCorrection: React.FC = () => {
                   <input
                     type="time"
                     name="closureTime"
-                    className="w-full bg-white/10 backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-white placeholder-blue-300/50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                     disabled={isProcessing}
                   />
                 </div>
