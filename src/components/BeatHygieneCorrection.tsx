@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
-import { Loader2, AlertCircle, ChevronRight } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone } from 'lucide-react';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -35,6 +35,7 @@ const BeatHygieneCorrection: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasData, setHasData] = useState(false);
+  const [distanceToOutlet, setDistanceToOutlet] = useState<number | null>(null);
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
 
@@ -45,14 +46,13 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('distributor_routes')
-          .select('beat', { count: 'exact' })
-          .eq('distributor_code', distributorCode)
-          .order('beat');
+          .select('*')
+          .eq('distributor_code', distributorCode);
 
         if (error) throw error;
 
-        // Filter unique beats
-        const uniqueBeats = [...new Set(data.map(d => d.beat))];
+        // Get unique beats and ensure we have all 36
+        const uniqueBeats = [...new Set(data.map(d => d.beat))].sort((a, b) => a - b);
         setBeats(uniqueBeats);
         setHasData(uniqueBeats.length > 0);
       } catch (error) {
@@ -90,7 +90,7 @@ const BeatHygieneCorrection: React.FC = () => {
     }
   };
 
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
     const R = 6371e3; // Earth's radius in meters
     const φ1 = lat1 * Math.PI/180;
     const φ2 = lat2 * Math.PI/180;
@@ -104,6 +104,20 @@ const BeatHygieneCorrection: React.FC = () => {
 
     return R * c; // Distance in meters
   };
+
+  useEffect(() => {
+    if (currentStop && latitude && longitude) {
+      const distance = calculateDistance(
+        latitude,
+        longitude,
+        currentStop.latitude,
+        currentStop.longitude
+      );
+      setDistanceToOutlet(distance);
+    } else {
+      setDistanceToOutlet(null);
+    }
+  }, [currentStop, latitude, longitude]);
 
   const handleBeatSelect = async (beat: number) => {
     setSelectedBeat(beat);
@@ -125,7 +139,7 @@ const BeatHygieneCorrection: React.FC = () => {
       );
 
       if (distance > GEOFENCE_RADIUS) {
-        setError('You must be within 200 meters of the outlet to mark a visit');
+        setError(`You must be within ${GEOFENCE_RADIUS} meters of the outlet to mark a visit (currently ${Math.round(distance)}m away)`);
         return;
       }
     }
@@ -186,14 +200,16 @@ const BeatHygieneCorrection: React.FC = () => {
       <h2 className="text-2xl font-bold mb-6">Beat Hygiene Correction</h2>
       
       {error && (
-        <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-4">
-          {error}
+        <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-4 flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <p>{error}</p>
         </div>
       )}
 
       {locationError && (
-        <div className="bg-yellow-50 text-yellow-700 p-4 rounded-lg mb-4">
-          Please enable location services to mark visits
+        <div className="bg-yellow-50 text-yellow-700 p-4 rounded-lg mb-4 flex items-center gap-2">
+          <MapPin className="w-5 h-5 flex-shrink-0" />
+          <p>Please enable location services to mark visits</p>
         </div>
       )}
 
@@ -234,12 +250,37 @@ const BeatHygieneCorrection: React.FC = () => {
                     <h4 className="font-medium">
                       {stop.stop_order === 0 ? 'Distribution Point' : stop.outlet_name}
                     </h4>
-                    <p className="text-sm text-gray-600">Stop #{stop.stop_order}</p>
+                    <div className="mt-1 space-y-1">
+                      <p className="text-sm text-gray-600">Stop #{stop.stop_order}</p>
+                      {stop.owner_name && (
+                        <p className="text-sm text-gray-600 flex items-center gap-1">
+                          <User className="w-4 h-4" />
+                          {stop.owner_name}
+                        </p>
+                      )}
+                      {stop.owner_contact && (
+                        <p className="text-sm text-gray-600 flex items-center gap-1">
+                          <Phone className="w-4 h-4" />
+                          {stop.owner_contact}
+                        </p>
+                      )}
+                      {stop.ol_closure_time && (
+                        <p className="text-sm text-gray-600 flex items-center gap-1">
+                          <Clock className="w-4 h-4" />
+                          Closes at {stop.ol_closure_time}
+                        </p>
+                      )}
+                    </div>
                   </div>
                   {stop.visit_time ? (
-                    <span className="text-green-600 text-sm">
-                      Visited at {new Date(stop.visit_time).toLocaleTimeString()}
-                    </span>
+                    <div className="text-right">
+                      <span className="text-green-600 text-sm font-medium">
+                        Visited
+                      </span>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {new Date(stop.visit_time).toLocaleTimeString()}
+                      </p>
+                    </div>
                   ) : (
                     <ChevronRight className="text-gray-400" />
                   )}
@@ -267,6 +308,15 @@ const BeatHygieneCorrection: React.FC = () => {
             </h3>
             <p className="text-gray-600">Stop #{currentStop.stop_order}</p>
             <p className="text-gray-600">DMS ID: {currentStop.dms_customer_id}</p>
+            
+            {distanceToOutlet !== null && (
+              <div className={`mt-2 text-sm ${
+                distanceToOutlet <= GEOFENCE_RADIUS ? 'text-green-600' : 'text-red-600'
+              }`}>
+                Distance: {Math.round(distanceToOutlet)}m 
+                {distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
+              </div>
+            )}
           </div>
 
           <div className="mb-4">
@@ -274,9 +324,10 @@ const BeatHygieneCorrection: React.FC = () => {
               href={`http://maps.google.com/maps?q=${currentStop.latitude},${currentStop.longitude}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 hover:text-blue-800 flex items-center"
+              className="text-blue-600 hover:text-blue-800 flex items-center gap-2"
             >
-              Open in Google Maps
+              <MapPin className="w-4 h-4" />
+              <span>Open in Google Maps</span>
             </a>
           </div>
 
@@ -381,7 +432,7 @@ const BeatHygieneCorrection: React.FC = () => {
               <button
                 type="submit"
                 className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={isProcessing || !latitude || !longitude}
+                disabled={isProcessing || !latitude || !longitude || (distanceToOutlet !== null && distanceToOutlet > GEOFENCE_RADIUS)}
               >
                 {isProcessing ? (
                   <span className="flex items-center justify-center gap-2">
