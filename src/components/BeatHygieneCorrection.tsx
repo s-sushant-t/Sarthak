@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
-import { Loader2 } from 'lucide-react';
+import { Loader2, AlertCircle } from 'lucide-react';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -34,6 +34,7 @@ const BeatHygieneCorrection: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [hasData, setHasData] = useState(false);
   const { latitude, longitude, error: locationError } = useGeolocation();
 
   useEffect(() => {
@@ -65,6 +66,7 @@ const BeatHygieneCorrection: React.FC = () => {
 
         const uniqueBeats = [...new Set(data.map(d => d.beat))];
         setBeats(uniqueBeats);
+        setHasData(uniqueBeats.length > 0);
       } catch (error) {
         setError('Error fetching beats: ' + (error instanceof Error ? error.message : 'Unknown error'));
       } finally {
@@ -173,7 +175,21 @@ const BeatHygieneCorrection: React.FC = () => {
       <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-          <p className="text-gray-600">Loading beat data...</p>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasData) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center max-w-md mx-auto p-6 bg-white rounded-lg shadow-md">
+          <AlertCircle className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-800 mb-2">No Routes Assigned</h2>
+          <p className="text-gray-600">
+            No routes have been assigned to this distributor code yet. Please assign routes through the main application first.
+          </p>
         </div>
       </div>
     );
