@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
-import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut } from 'lucide-react';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -40,6 +40,11 @@ const BeatHygieneCorrection: React.FC = () => {
   const [bypassActive, setBypassActive] = useState(false);
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
+
+  const handleLogout = () => {
+    localStorage.clear();
+    window.location.href = '/';
+  };
 
   useEffect(() => {
     const fetchBeats = async () => {
@@ -216,7 +221,16 @@ const BeatHygieneCorrection: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto p-4">
-      <h2 className="text-2xl font-bold mb-6">Beat Hygiene Correction</h2>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold">Beat Hygiene Correction</h2>
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-2 px-4 py-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+        >
+          <LogOut className="w-5 h-5" />
+          <span>Logout</span>
+        </button>
+      </div>
       
       {error && (
         <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-4 flex items-center gap-2">
