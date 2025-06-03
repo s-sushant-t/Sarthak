@@ -428,7 +428,8 @@ const MapView: React.FC<MapViewProps> = ({ locationData, routes, onRouteUpdate }
           });
 
           marker.bindTooltip(
-            `Customer: ${stop.customerId}<br>` +
+            `${stop.outletName || 'Unnamed Outlet'}<br>` +
+            `Customer ID: ${stop.customerId}<br>` +
             `Stop #${stopIndex + 1} for Beat ${route.salesmanId}<br>` +
             `Cluster: ${stop.clusterId}`,
             { direction: 'top' }
