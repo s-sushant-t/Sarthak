@@ -66,7 +66,7 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         setIsLoading(true);
         
-        // First, get all unique beats using a distinct query
+        // Use a raw query to get distinct beats
         const { data: distinctBeats, error: distinctError } = await supabase
           .from('distributor_routes')
           .select('beat')
@@ -77,37 +77,35 @@ const BeatHygieneCorrection: React.FC = () => {
 
         console.log('Raw beats data:', distinctBeats);
 
-        // Create a Set of unique beat numbers
-        const uniqueBeatNumbers = new Set(distinctBeats.map(row => row.beat));
-        console.log('Unique beat numbers:', Array.from(uniqueBeatNumbers));
+        // Create a Set to ensure uniqueness and proper sorting
+        const uniqueBeatNumbers = [...new Set(distinctBeats.map(row => row.beat))].sort((a, b) => a - b);
+        console.log('Unique and sorted beat numbers:', uniqueBeatNumbers);
 
         // Now get audit info for each beat
-        const beatInfoPromises = Array.from(uniqueBeatNumbers).map(async (beat) => {
+        const beatInfoPromises = uniqueBeatNumbers.map(async (beat) => {
           const { data: auditData, error: auditError } = await supabase
             .from('distributor_routes')
             .select('beat, auditor_name, is_being_audited')
             .eq('distributor_code', distributorCode)
             .eq('beat', beat)
-            .limit(1);
+            .limit(1)
+            .single();
 
           if (auditError) throw auditError;
 
           return {
             beat,
-            auditor_name: auditData?.[0]?.auditor_name,
-            is_being_audited: auditData?.[0]?.is_being_audited
+            auditor_name: auditData?.auditor_name,
+            is_being_audited: auditData?.is_being_audited
           };
         });
 
         const beatInfos = await Promise.all(beatInfoPromises);
-        console.log('Beat infos:', beatInfos);
-
-        // Sort beats numerically
-        const sortedBeats = beatInfos.sort((a, b) => a.beat - b.beat);
+        console.log('Final beat infos:', beatInfos);
         
-        setBeats(sortedBeats);
-        setHasData(sortedBeats.length > 0);
-        console.log('Final beats count:', sortedBeats.length);
+        setBeats(beatInfos);
+        setHasData(beatInfos.length > 0);
+        console.log('Total beats loaded:', beatInfos.length);
 
       } catch (error) {
         console.error('Error in fetchBeats:', error);
@@ -709,7 +707,6 @@ const BeatHygieneCorrection: React.FC = () => {
                     >
                       Start Audit
                     </button>
-                
                   </div>
                 </div>
               </form>
