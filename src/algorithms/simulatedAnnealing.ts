@@ -7,15 +7,15 @@ const CUSTOMER_VISIT_TIME = 6;
 const MAX_WORKING_TIME = 360;
 const TRAVEL_SPEED = 30;
 
-// Optimized parameters for faster convergence
-const INITIAL_TEMPERATURE = 100;
-const COOLING_RATE = 0.95;
-const MIN_TEMPERATURE = 1;
-const ITERATIONS_PER_TEMP = 50;
+// Enhanced annealing parameters
+const INITIAL_TEMPERATURE = 1000; // Increased for better exploration
+const COOLING_RATE = 0.98; // Slower cooling
+const MIN_TEMPERATURE = 0.01;
+const ITERATIONS_PER_TEMP = 100; // More iterations per temperature
 const MAX_DISTANCE_VARIANCE = 5;
 
 // Batch processing size
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 20;
 
 export const simulatedAnnealing = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
@@ -40,21 +40,19 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
     })
   );
   
-  // Combine results from all clusters
-  const routes = clusterResults.flat();
-  
-  // Optimize and balance the final routes
-  const optimizedRoutes = optimizeBeats(routes, distributor);
+  // Combine and optimize routes across clusters
+  let routes = clusterResults.flat();
+  routes = await optimizeAcrossClusters(routes, distributor);
   
   // Calculate total distance
-  const totalDistance = optimizedRoutes.reduce((total, route) => total + route.totalDistance, 0);
+  const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
   
   return {
-    name: 'Simulated Annealing (Optimized)',
+    name: 'Simulated Annealing (Enhanced)',
     totalDistance,
-    totalSalesmen: optimizedRoutes.length,
+    totalSalesmen: routes.length,
     processingTime: 0,
-    routes: optimizedRoutes
+    routes
   };
 };
 
@@ -63,17 +61,31 @@ async function processCluster(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number }
 ): Promise<SalesmanRoute[]> {
-  let currentSolution = createInitialSolution(clusterId, customers, distributor);
-  let bestSolution = JSON.parse(JSON.stringify(currentSolution));
+  // Create multiple initial solutions and select the best
+  const numInitialSolutions = 5;
+  let bestSolution = null;
+  let bestEnergy = Infinity;
   
-  let currentEnergy = calculateEnergy(currentSolution);
-  let bestEnergy = currentEnergy;
+  for (let i = 0; i < numInitialSolutions; i++) {
+    const solution = createInitialSolution(clusterId, customers, distributor);
+    const energy = calculateEnergy(solution);
+    if (energy < bestEnergy) {
+      bestSolution = solution;
+      bestEnergy = energy;
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  
+  let currentSolution = JSON.parse(JSON.stringify(bestSolution));
+  let currentEnergy = bestEnergy;
   
   let temperature = INITIAL_TEMPERATURE;
-  let iteration = 0;
+  let noImprovementCount = 0;
+  const MAX_NO_IMPROVEMENT = 20;
   
-  while (temperature > MIN_TEMPERATURE) {
-    // Process in batches to allow yielding
+  while (temperature > MIN_TEMPERATURE && noImprovementCount < MAX_NO_IMPROVEMENT) {
+    let improved = false;
+    
     for (let batch = 0; batch < ITERATIONS_PER_TEMP; batch += BATCH_SIZE) {
       const batchSize = Math.min(BATCH_SIZE, ITERATIONS_PER_TEMP - batch);
       
@@ -83,34 +95,226 @@ async function processCluster(
         
         const acceptanceProbability = Math.exp(-(neighborEnergy - currentEnergy) / temperature);
         
-        if (Math.random() < acceptanceProbability) {
+        if (neighborEnergy < currentEnergy || Math.random() < acceptanceProbability) {
           currentSolution = neighborSolution;
           currentEnergy = neighborEnergy;
           
-          if (currentEnergy < bestEnergy) {
-            bestSolution = JSON.parse(JSON.stringify(currentSolution));
-            bestEnergy = currentEnergy;
+          if (neighborEnergy < bestEnergy) {
+            bestSolution = JSON.parse(JSON.stringify(neighborSolution));
+            bestEnergy = neighborEnergy;
+            improved = true;
+            noImprovementCount = 0;
           }
         }
-        
-        iteration++;
       }
       
-      // Yield to main thread after each batch
       await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    
+    if (!improved) noImprovementCount++;
+    temperature *= COOLING_RATE;
+  }
+  
+  return bestSolution!;
+}
+
+async function optimizeAcrossClusters(
+  routes: SalesmanRoute[],
+  distributor: { latitude: number; longitude: number }
+): Promise<SalesmanRoute[]> {
+  let currentSolution = [...routes];
+  let bestSolution = [...routes];
+  let currentEnergy = calculateGlobalEnergy(currentSolution);
+  let bestEnergy = currentEnergy;
+  
+  let temperature = INITIAL_TEMPERATURE * 0.5;
+  
+  while (temperature > MIN_TEMPERATURE) {
+    for (let i = 0; i < ITERATIONS_PER_TEMP / 2; i++) {
+      const neighborSolution = createGlobalNeighborSolution(currentSolution);
+      const neighborEnergy = calculateGlobalEnergy(neighborSolution);
+      
+      const acceptanceProbability = Math.exp(-(neighborEnergy - currentEnergy) / temperature);
+      
+      if (neighborEnergy < currentEnergy || Math.random() < acceptanceProbability) {
+        currentSolution = neighborSolution;
+        currentEnergy = neighborEnergy;
+        
+        if (neighborEnergy < bestEnergy) {
+          bestSolution = JSON.parse(JSON.stringify(neighborSolution));
+          bestEnergy = neighborEnergy;
+        }
+      }
+      
+      if (i % BATCH_SIZE === 0) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
     }
     
     temperature *= COOLING_RATE;
   }
   
-  return bestSolution;
+  return optimizeBeats(bestSolution, distributor);
 }
 
-function createInitialSolution(
-  clusterId: number,
-  customers: ClusteredCustomer[],
-  distributor: { latitude: number; longitude: number }
-): SalesmanRoute[] {
+function createGlobalNeighborSolution(solution: SalesmanRoute[]): SalesmanRoute[] {
+  const newSolution = JSON.parse(JSON.stringify(solution));
+  
+  // Apply multiple neighborhood operations
+  const numOperations = 1 + Math.floor(Math.random() * 3);
+  
+  for (let i = 0; i < numOperations; i++) {
+    const operation = Math.random();
+    
+    if (operation < 0.4) {
+      // Swap stops between adjacent clusters
+      swapBetweenAdjacentClusters(newSolution);
+    } else if (operation < 0.7) {
+      // Merge and split routes
+      mergeAndSplitRoutes(newSolution);
+    } else {
+      // Relocate boundary customers
+      relocateBoundaryCustomers(newSolution);
+    }
+  }
+  
+  return newSolution;
+}
+
+function swapBetweenAdjacentClusters(solution: SalesmanRoute[]): void {
+  if (solution.length < 2) return;
+  
+  const route1Index = Math.floor(Math.random() * solution.length);
+  const route1 = solution[route1Index];
+  
+  // Find routes in adjacent clusters
+  const adjacentRoutes = solution.filter((r, i) => 
+    i !== route1Index && 
+    Math.abs(r.clusterIds[0] - route1.clusterIds[0]) === 1
+  );
+  
+  if (adjacentRoutes.length === 0) return;
+  
+  const route2 = adjacentRoutes[Math.floor(Math.random() * adjacentRoutes.length)];
+  
+  if (route1.stops.length === 0 || route2.stops.length === 0) return;
+  
+  // Find boundary customers (those closest to the other cluster)
+  const stop1Index = findBoundaryCustomer(route1, route2);
+  const stop2Index = findBoundaryCustomer(route2, route1);
+  
+  if (stop1Index !== -1 && stop2Index !== -1) {
+    [route1.stops[stop1Index], route2.stops[stop2Index]] = 
+    [route2.stops[stop2Index], route1.stops[stop1Index]];
+    
+    updateRouteMetrics(route1);
+    updateRouteMetrics(route2);
+  }
+}
+
+function findBoundaryCustomer(route1: SalesmanRoute, route2: SalesmanRoute): number {
+  let minDistance = Infinity;
+  let boundaryIndex = -1;
+  
+  route1.stops.forEach((stop1, index) => {
+    route2.stops.forEach(stop2 => {
+      const distance = calculateHaversineDistance(
+        stop1.latitude, stop1.longitude,
+        stop2.latitude, stop2.longitude
+      );
+      if (distance < minDistance) {
+        minDistance = distance;
+        boundaryIndex = index;
+      }
+    });
+  });
+  
+  return boundaryIndex;
+}
+
+function mergeAndSplitRoutes(solution: SalesmanRoute[]): void {
+  if (solution.length < 2) return;
+  
+  const route1Index = Math.floor(Math.random() * solution.length);
+  let route2Index = Math.floor(Math.random() * solution.length);
+  
+  while (route2Index === route1Index) {
+    route2Index = Math.floor(Math.random() * solution.length);
+  }
+  
+  const route1 = solution[route1Index];
+  const route2 = solution[route2Index];
+  
+  // Merge stops
+  const allStops = [...route1.stops, ...route2.stops];
+  
+  // Split at a random point
+  const splitPoint = Math.floor(Math.random() * allStops.length);
+  
+  route1.stops = allStops.slice(0, splitPoint);
+  route2.stops = allStops.slice(splitPoint);
+  
+  updateRouteMetrics(route1);
+  updateRouteMetrics(route2);
+}
+
+function relocateBoundaryCustomers(solution: SalesmanRoute[]): void {
+  if (solution.length < 2) return;
+  
+  const route1Index = Math.floor(Math.random() * solution.length);
+  const route1 = solution[route1Index];
+  
+  if (route1.stops.length <= MIN_OUTLETS_PER_BEAT) return;
+  
+  // Find routes in adjacent clusters
+  const adjacentRoutes = solution.filter((r, i) => 
+    i !== route1Index && 
+    Math.abs(r.clusterIds[0] - route1.clusterIds[0]) === 1 &&
+    r.stops.length < MAX_OUTLETS_PER_BEAT
+  );
+  
+  if (adjacentRoutes.length === 0) return;
+  
+  const route2 = adjacentRoutes[Math.floor(Math.random() * adjacentRoutes.length)];
+  
+  // Find and relocate a boundary customer
+  const boundaryIndex = findBoundaryCustomer(route1, route2);
+  
+  if (boundaryIndex !== -1) {
+    const [customer] = route1.stops.splice(boundaryIndex, 1);
+    route2.stops.push(customer);
+    
+    updateRouteMetrics(route1);
+    updateRouteMetrics(route2);
+  }
+}
+
+function calculateGlobalEnergy(solution: SalesmanRoute[]): number {
+  let energy = calculateEnergy(solution);
+  
+  // Add penalties for cluster boundary violations
+  solution.forEach((route1, i) => {
+    solution.forEach((route2, j) => {
+      if (i < j && Math.abs(route1.clusterIds[0] - route2.clusterIds[0]) === 1) {
+        route1.stops.forEach(stop1 => {
+          route2.stops.forEach(stop2 => {
+            const distance = calculateHaversineDistance(
+              stop1.latitude, stop1.longitude,
+              stop2.latitude, stop2.longitude
+            );
+            if (distance < 1) { // 1km threshold
+              energy += 1000 * (1 - distance);
+            }
+          });
+        });
+      }
+    });
+  });
+  
+  return energy;
+}
+
+function createInitialSolution(clusterId: number, customers: ClusteredCustomer[], distributor: { latitude: number; longitude: number }): SalesmanRoute[] {
   const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
   const remainingCustomers = [...customers];
