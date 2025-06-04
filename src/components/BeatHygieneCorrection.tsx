@@ -32,10 +32,16 @@ interface AuditorInfo {
   designation: string;
 }
 
+interface BeatInfo {
+  beat: number;
+  auditor_name?: string;
+  is_being_audited?: boolean;
+}
+
 const GEOFENCE_RADIUS = 200; // meters
 
 const BeatHygieneCorrection: React.FC = () => {
-  const [beats, setBeats] = useState<number[]>([]);
+  const [beats, setBeats] = useState<BeatInfo[]>([]);
   const [selectedBeat, setSelectedBeat] = useState<number | null>(null);
   const [currentStop, setCurrentStop] = useState<Stop | null>(null);
   const [stops, setStops] = useState<Stop[]>([]);
@@ -63,15 +69,26 @@ const BeatHygieneCorrection: React.FC = () => {
       if (!distributorCode) return;
 
       try {
-        const { data, error } = await supabase
+        const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
-          .select('beat')
+          .select('beat, auditor_name, is_being_audited')
           .eq('distributor_code', distributorCode)
           .order('beat');
 
-        if (error) throw error;
+        if (beatError) throw beatError;
 
-        const uniqueBeats = Array.from(new Set(data.map(d => d.beat))).sort((a, b) => a - b);
+        const beatMap = new Map<number, BeatInfo>();
+        beatData?.forEach(row => {
+          if (!beatMap.has(row.beat)) {
+            beatMap.set(row.beat, {
+              beat: row.beat,
+              auditor_name: row.auditor_name,
+              is_being_audited: row.is_being_audited
+            });
+          }
+        });
+
+        const uniqueBeats = Array.from(beatMap.values());
         setBeats(uniqueBeats);
         setHasData(uniqueBeats.length > 0);
       } catch (error) {
@@ -272,7 +289,7 @@ const BeatHygieneCorrection: React.FC = () => {
     setEditingStop(stop);
     setCurrentStop(stop);
     setShowForm(true);
-    setBypassActive(true); // Bypass geofencing for editing
+    setBypassActive(true);
   };
 
   const handleEditSubmit = async (formData: any) => {
@@ -374,15 +391,12 @@ const BeatHygieneCorrection: React.FC = () => {
             disabled={isProcessing}
           >
             <option value="" className="text-black">Select a beat</option>
-            {beats.map((beat) => {
-              const beingAudited = stops.find(s => s.beat === beat)?.is_being_audited;
-              const auditorName = stops.find(s => s.beat === beat)?.auditor_name;
-              return (
-                <option key={beat} value={beat} className="text-black">
-                  Beat {beat} {beingAudited ? `(Being audited by ${auditorName})` : ''}
-                </option>
-              );
-            })}
+            {beats.map((beatInfo) => (
+              <option key={beatInfo.beat} value={beatInfo.beat} className="text-black">
+                Beat {beatInfo.beat} 
+                {beatInfo.is_being_audited ? ` (Being audited by ${beatInfo.auditor_name})` : ''}
+              </option>
+            ))}
           </select>
         </div>
 
