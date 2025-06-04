@@ -66,43 +66,35 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         setIsLoading(true);
         
-        const { data: distinctBeats, error: distinctError } = await supabase
+        // First, get all distinct beats with their counts
+        const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
-          .select('beat')
+          .select('beat, auditor_name, is_being_audited')
           .eq('distributor_code', distributorCode)
           .order('beat');
 
-        if (distinctError) throw distinctError;
+        if (beatError) throw beatError;
 
-        console.log('Raw beats data:', distinctBeats);
-
-        const uniqueBeatNumbers = [...new Set(distinctBeats.map(row => row.beat))].sort((a, b) => a - b);
-        console.log('Unique and sorted beat numbers:', uniqueBeatNumbers);
-
-        const beatInfoPromises = uniqueBeatNumbers.map(async (beat) => {
-          const { data: auditData, error: auditError } = await supabase
-            .from('distributor_routes')
-            .select('beat, auditor_name, is_being_audited')
-            .eq('distributor_code', distributorCode)
-            .eq('beat', beat)
-            .limit(1)
-            .single();
-
-          if (auditError) throw auditError;
-
-          return {
-            beat,
-            auditor_name: auditData?.auditor_name,
-            is_being_audited: auditData?.is_being_audited
-          };
+        // Create a Map to store unique beats with their latest audit info
+        const beatMap = new Map();
+        beatData?.forEach(row => {
+          if (!beatMap.has(row.beat)) {
+            beatMap.set(row.beat, {
+              beat: row.beat,
+              auditor_name: row.auditor_name,
+              is_being_audited: row.is_being_audited
+            });
+          }
         });
 
-        const beatInfos = await Promise.all(beatInfoPromises);
-        console.log('Final beat infos:', beatInfos);
+        // Convert Map to array and sort by beat number
+        const beatInfos = Array.from(beatMap.values()).sort((a, b) => a.beat - b.beat);
+        
+        console.log('Total unique beats found:', beatInfos.length);
+        console.log('Beat numbers:', beatInfos.map(b => b.beat));
         
         setBeats(beatInfos);
         setHasData(beatInfos.length > 0);
-        console.log('Total beats loaded:', beatInfos.length);
 
       } catch (error) {
         console.error('Error in fetchBeats:', error);
