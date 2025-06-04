@@ -66,7 +66,7 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         setIsLoading(true);
         
-        // First, get all unique beats for this distributor
+        // Get all unique beats for this distributor
         const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
           .select('beat, auditor_name, is_being_audited')
@@ -74,6 +74,8 @@ const BeatHygieneCorrection: React.FC = () => {
 
         if (beatError) throw beatError;
 
+        console.log('Total rows fetched:', beatData?.length);
+        
         // Create a Map to store unique beats with their latest audit info
         const beatMap = new Map<number, BeatInfo>();
         
@@ -88,9 +90,13 @@ const BeatHygieneCorrection: React.FC = () => {
           }
         });
 
+        console.log('Unique beats found:', beatMap.size);
+
         // Convert Map to array and sort by beat number
         const uniqueBeats = Array.from(beatMap.values())
           .sort((a, b) => a.beat - b.beat);
+
+        console.log('Beat numbers:', uniqueBeats.map(b => b.beat).join(', '));
 
         setBeats(uniqueBeats);
         setHasData(uniqueBeats.length > 0);
