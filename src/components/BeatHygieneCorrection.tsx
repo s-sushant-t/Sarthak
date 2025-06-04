@@ -67,11 +67,11 @@ const BeatHygieneCorrection: React.FC = () => {
         setIsLoading(true);
         console.log('Fetching beats for distributor:', distributorCode);
         
-        // First, get all distinct beats with their audit info
         const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
           .select('beat, auditor_name, is_being_audited')
-          .eq('distributor_code', distributorCode);
+          .eq('distributor_code', distributorCode)
+          .order('beat');
 
         if (beatError) {
           console.error('Error fetching beats:', beatError);
@@ -85,28 +85,24 @@ const BeatHygieneCorrection: React.FC = () => {
 
         console.log('Raw beat data:', beatData);
 
-        // Create a Map to store unique beats with their latest audit info
-        const beatMap = new Map<number, BeatInfo>();
+        const uniqueBeats = new Map<number, BeatInfo>();
         
         beatData.forEach(row => {
-          const beat = row.beat;
-          // Only update if this beat hasn't been seen or has audit info
-          if (!beatMap.has(beat) || row.is_being_audited || row.auditor_name) {
-            beatMap.set(beat, {
-              beat,
+          if (!uniqueBeats.has(row.beat)) {
+            uniqueBeats.set(row.beat, {
+              beat: row.beat,
               auditor_name: row.auditor_name,
               is_being_audited: row.is_being_audited
             });
           }
         });
 
-        // Convert Map to array and sort numerically by beat number
-        const beatInfos = Array.from(beatMap.values())
+        const beatInfos = Array.from(uniqueBeats.values())
           .sort((a, b) => a.beat - b.beat);
 
         console.log('Processed beats:', {
           total: beatInfos.length,
-          beats: beatInfos.map(b => b.beat)
+          beats: beatInfos.map(b => b.beat).join(', ')
         });
         
         setBeats(beatInfos);
@@ -708,7 +704,7 @@ const BeatHygieneCorrection: React.FC = () => {
                       type="text"
                       name="auditorDesignation"
                       required
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus: ring-blue-500"
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                     />
                   </div>
                   <div className="flex justify-end gap-3">
