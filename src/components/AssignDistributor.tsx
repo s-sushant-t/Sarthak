@@ -79,10 +79,11 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
 
       console.log(`Prepared ${routeData.length} records for import`);
 
-      // Process in smaller batches to avoid timeouts
-      const batchSize = 50;
+      // Process in smaller batches with retries
+      const batchSize = 25; // Reduced batch size
+      const maxRetries = 3;
       let processedCount = 0;
-      let failedBatches = [];
+      let failedRecords = [];
 
       for (let i = 0; i < routeData.length; i += batchSize) {
         const batch = routeData.slice(i, Math.min(i + batchSize, routeData.length));
@@ -91,64 +92,77 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         
         console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} records)`);
         
-        try {
-          const { error: insertError } = await supabase
-            .from('distributor_routes')
-            .insert(batch);
+        let retryCount = 0;
+        let success = false;
 
-          if (insertError) {
-            console.error(`Batch ${batchNumber} failed:`, insertError);
-            failedBatches.push({ start: i, records: batch });
-            continue;
+        while (retryCount < maxRetries && !success) {
+          try {
+            const { error: insertError } = await supabase
+              .from('distributor_routes')
+              .insert(batch);
+
+            if (insertError) {
+              console.error(`Batch ${batchNumber} attempt ${retryCount + 1} failed:`, insertError);
+              retryCount++;
+              // Add exponential backoff
+              await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+              continue;
+            }
+
+            success = true;
+            processedCount += batch.length;
+            setImportStats(prev => ({
+              ...prev,
+              processed: processedCount
+            }));
+
+          } catch (error) {
+            console.error(`Error processing batch ${batchNumber} attempt ${retryCount + 1}:`, error);
+            retryCount++;
+            if (retryCount === maxRetries) {
+              failedRecords.push(...batch);
+            }
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
           }
-
-          processedCount += batch.length;
-          setImportStats(prev => ({
-            ...prev,
-            processed: processedCount
-          }));
-
-        } catch (error) {
-          console.error(`Error processing batch ${batchNumber}:`, error);
-          failedBatches.push({ start: i, records: batch });
         }
 
-        // Small delay between batches to prevent rate limiting
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Add delay between batches to prevent rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
 
-      // Retry failed batches
-      if (failedBatches.length > 0) {
-        console.log(`Retrying ${failedBatches.length} failed batches...`);
+      // Handle any remaining failed records individually
+      if (failedRecords.length > 0) {
+        console.log(`Retrying ${failedRecords.length} failed records individually...`);
         
-        for (const failedBatch of failedBatches) {
+        for (const record of failedRecords) {
           try {
             const { error: retryError } = await supabase
               .from('distributor_routes')
-              .insert(failedBatch.records);
+              .insert([record]);
 
             if (!retryError) {
-              processedCount += failedBatch.records.length;
+              processedCount++;
               setImportStats(prev => ({
                 ...prev,
                 processed: processedCount
               }));
             }
+            // Add small delay between individual retries
+            await new Promise(resolve => setTimeout(resolve, 200));
           } catch (error) {
-            console.error(`Failed to retry batch starting at index ${failedBatch.start}:`, error);
+            console.error(`Failed to insert record:`, error);
           }
         }
       }
 
       // Verify final import count
-      const { data: importedRoutes, error: verifyError } = await supabase
+      const { count: actualImported, error: countError } = await supabase
         .from('distributor_routes')
-        .select('id')
+        .select('*', { count: 'exact', head: true })
         .eq('distributor_code', distributorCode);
 
-      if (verifyError) throw verifyError;
+      if (countError) throw countError;
 
-      const actualImported = importedRoutes?.length || 0;
       console.log(`Import verification:
         - Expected records: ${routeData.length}
         - Actually imported: ${actualImported}
