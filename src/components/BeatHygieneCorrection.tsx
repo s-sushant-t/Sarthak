@@ -65,33 +65,49 @@ const BeatHygieneCorrection: React.FC = () => {
 
       try {
         setIsLoading(true);
+        console.log('Fetching beats for distributor:', distributorCode);
         
-        // First, get all distinct beats with their counts
+        // First, get all distinct beats with their audit info
         const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
           .select('beat, auditor_name, is_being_audited')
-          .eq('distributor_code', distributorCode)
-          .order('beat');
+          .eq('distributor_code', distributorCode);
 
-        if (beatError) throw beatError;
+        if (beatError) {
+          console.error('Error fetching beats:', beatError);
+          throw beatError;
+        }
+
+        if (!beatData) {
+          console.error('No beat data returned');
+          throw new Error('No beat data found');
+        }
+
+        console.log('Raw beat data:', beatData);
 
         // Create a Map to store unique beats with their latest audit info
-        const beatMap = new Map();
-        beatData?.forEach(row => {
-          if (!beatMap.has(row.beat)) {
-            beatMap.set(row.beat, {
-              beat: row.beat,
+        const beatMap = new Map<number, BeatInfo>();
+        
+        beatData.forEach(row => {
+          const beat = row.beat;
+          // Only update if this beat hasn't been seen or has audit info
+          if (!beatMap.has(beat) || row.is_being_audited || row.auditor_name) {
+            beatMap.set(beat, {
+              beat,
               auditor_name: row.auditor_name,
               is_being_audited: row.is_being_audited
             });
           }
         });
 
-        // Convert Map to array and sort by beat number
-        const beatInfos = Array.from(beatMap.values()).sort((a, b) => a.beat - b.beat);
-        
-        console.log('Total unique beats found:', beatInfos.length);
-        console.log('Beat numbers:', beatInfos.map(b => b.beat));
+        // Convert Map to array and sort numerically by beat number
+        const beatInfos = Array.from(beatMap.values())
+          .sort((a, b) => a.beat - b.beat);
+
+        console.log('Processed beats:', {
+          total: beatInfos.length,
+          beats: beatInfos.map(b => b.beat)
+        });
         
         setBeats(beatInfos);
         setHasData(beatInfos.length > 0);
@@ -692,7 +708,7 @@ const BeatHygieneCorrection: React.FC = () => {
                       type="text"
                       name="auditorDesignation"
                       required
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus: ring-blue-500"
                     />
                   </div>
                   <div className="flex justify-end gap-3">
