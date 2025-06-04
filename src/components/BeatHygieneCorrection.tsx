@@ -66,7 +66,6 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         setIsLoading(true);
         
-        // Use a raw query to get distinct beats
         const { data: distinctBeats, error: distinctError } = await supabase
           .from('distributor_routes')
           .select('beat')
@@ -77,11 +76,9 @@ const BeatHygieneCorrection: React.FC = () => {
 
         console.log('Raw beats data:', distinctBeats);
 
-        // Create a Set to ensure uniqueness and proper sorting
         const uniqueBeatNumbers = [...new Set(distinctBeats.map(row => row.beat))].sort((a, b) => a - b);
         console.log('Unique and sorted beat numbers:', uniqueBeatNumbers);
 
-        // Now get audit info for each beat
         const beatInfoPromises = uniqueBeatNumbers.map(async (beat) => {
           const { data: auditData, error: auditError } = await supabase
             .from('distributor_routes')
@@ -420,6 +417,12 @@ const BeatHygieneCorrection: React.FC = () => {
               </option>
             ))}
           </select>
+          <div className="mt-2 flex items-center gap-2">
+            <div className="bg-white/10 backdrop-blur-lg px-4 py-2 rounded-lg border border-white/20">
+              <span className="text-blue-200">Total Beats: </span>
+              <span className="text-white font-semibold">{beats.length}</span>
+            </div>
+          </div>
         </div>
 
         {selectedBeat && (
