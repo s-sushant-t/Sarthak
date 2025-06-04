@@ -27,28 +27,20 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     setError(null);
 
     try {
-      // Get the highest beat number for this distributor
-      const { data: existingRoutes, error: fetchError } = await supabase
+      // First, delete existing routes for this distributor if they exist
+      const { error: deleteError } = await supabase
         .from('distributor_routes')
-        .select('beat')
-        .eq('distributor_code', distributorCode)
-        .order('beat', { ascending: false })
-        .limit(1);
+        .delete()
+        .eq('distributor_code', distributorCode);
 
-      if (fetchError) throw fetchError;
+      if (deleteError) throw deleteError;
 
-      // Calculate the starting beat number for new routes
-      const lastBeat = existingRoutes && existingRoutes.length > 0 ? existingRoutes[0].beat : 0;
-      const beatOffset = lastBeat;
-
-      // Prepare new route data with adjusted beat numbers
+      // Prepare new route data
       const routeData = routes.flatMap(route => {
-        const newBeat = route.salesmanId + beatOffset;
-        
         // Add distributor point as stop 0
         const stops = [
           {
-            beat: newBeat,
+            beat: route.salesmanId,
             stop_order: 0,
             dms_customer_id: 'DISTRIBUTOR',
             outlet_name: 'DISTRIBUTOR',
@@ -60,7 +52,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
             distributor_code: distributorCode
           },
           ...route.stops.map((stop, index) => ({
-            beat: newBeat,
+            beat: route.salesmanId,
             stop_order: index + 1,
             dms_customer_id: stop.customerId,
             outlet_name: stop.outletName || '',
