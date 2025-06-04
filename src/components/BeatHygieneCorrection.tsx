@@ -66,7 +66,8 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         setIsLoading(true);
         console.log('Fetching beats for distributor:', distributorCode);
-        
+
+        // Get all unique beats with a single query
         const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
           .select('beat, auditor_name, is_being_audited')
@@ -78,18 +79,17 @@ const BeatHygieneCorrection: React.FC = () => {
           throw beatError;
         }
 
-        if (!beatData) {
+        if (!beatData || beatData.length === 0) {
           console.error('No beat data returned');
           throw new Error('No beat data found');
         }
 
-        console.log('Raw beat data:', beatData);
-
-        const uniqueBeats = new Map<number, BeatInfo>();
+        // Process beats ensuring uniqueness and proper sorting
+        const beatsMap = new Map<number, BeatInfo>();
         
         beatData.forEach(row => {
-          if (!uniqueBeats.has(row.beat)) {
-            uniqueBeats.set(row.beat, {
+          if (!beatsMap.has(row.beat)) {
+            beatsMap.set(row.beat, {
               beat: row.beat,
               auditor_name: row.auditor_name,
               is_being_audited: row.is_being_audited
@@ -97,16 +97,27 @@ const BeatHygieneCorrection: React.FC = () => {
           }
         });
 
-        const beatInfos = Array.from(uniqueBeats.values())
+        const uniqueBeats = Array.from(beatsMap.values())
           .sort((a, b) => a.beat - b.beat);
 
-        console.log('Processed beats:', {
-          total: beatInfos.length,
-          beats: beatInfos.map(b => b.beat).join(', ')
+        console.log('Beat processing results:', {
+          totalRows: beatData.length,
+          uniqueBeats: uniqueBeats.length,
+          beatNumbers: uniqueBeats.map(b => b.beat)
         });
-        
-        setBeats(beatInfos);
-        setHasData(beatInfos.length > 0);
+
+        // Verify we have all beats
+        const { count: expectedCount } = await supabase
+          .from('distributor_routes')
+          .select('beat', { count: 'exact', head: true })
+          .eq('distributor_code', distributorCode);
+
+        if (uniqueBeats.length !== expectedCount) {
+          console.warn(`Beat count mismatch: found ${uniqueBeats.length}, expected ${expectedCount}`);
+        }
+
+        setBeats(uniqueBeats);
+        setHasData(uniqueBeats.length > 0);
 
       } catch (error) {
         console.error('Error in fetchBeats:', error);
