@@ -67,57 +67,51 @@ const BeatHygieneCorrection: React.FC = () => {
         setIsLoading(true);
         console.log('Fetching beats for distributor:', distributorCode);
 
-        // Get all unique beats with a single query
-        const { data: beatData, error: beatError } = await supabase
+        // First, get all distinct beats with a single query
+        const { data: distinctBeats, error: distinctError } = await supabase
           .from('distributor_routes')
-          .select('beat, auditor_name, is_being_audited')
+          .select('beat')
           .eq('distributor_code', distributorCode)
           .order('beat');
 
-        if (beatError) {
-          console.error('Error fetching beats:', beatError);
-          throw beatError;
-        }
+        if (distinctError) throw distinctError;
 
-        if (!beatData || beatData.length === 0) {
-          console.error('No beat data returned');
-          throw new Error('No beat data found');
-        }
+        // Create a Set to ensure uniqueness and proper sorting
+        const uniqueBeats = Array.from(new Set(distinctBeats.map(row => row.beat)))
+          .sort((a, b) => a - b);
 
-        // Process beats ensuring uniqueness and proper sorting
-        const beatsMap = new Map<number, BeatInfo>();
-        
-        beatData.forEach(row => {
-          if (!beatsMap.has(row.beat)) {
-            beatsMap.set(row.beat, {
-              beat: row.beat,
-              auditor_name: row.auditor_name,
-              is_being_audited: row.is_being_audited
-            });
+        // Now fetch additional information for each beat
+        const beatInfoPromises = uniqueBeats.map(async (beat) => {
+          const { data: beatData, error: beatError } = await supabase
+            .from('distributor_routes')
+            .select('auditor_name, is_being_audited')
+            .eq('distributor_code', distributorCode)
+            .eq('beat', beat)
+            .limit(1)
+            .single();
+
+          if (beatError) {
+            console.error(`Error fetching info for beat ${beat}:`, beatError);
+            return { beat, auditor_name: null, is_being_audited: false };
           }
+
+          return {
+            beat,
+            auditor_name: beatData?.auditor_name,
+            is_being_audited: beatData?.is_being_audited
+          };
         });
 
-        const uniqueBeats = Array.from(beatsMap.values())
-          .sort((a, b) => a.beat - b.beat);
+        const beatInfoResults = await Promise.all(beatInfoPromises);
 
         console.log('Beat processing results:', {
-          totalRows: beatData.length,
-          uniqueBeats: uniqueBeats.length,
-          beatNumbers: uniqueBeats.map(b => b.beat)
+          totalBeats: uniqueBeats.length,
+          beatNumbers: uniqueBeats,
+          beatInfo: beatInfoResults
         });
 
-        // Verify we have all beats
-        const { count: expectedCount } = await supabase
-          .from('distributor_routes')
-          .select('beat', { count: 'exact', head: true })
-          .eq('distributor_code', distributorCode);
-
-        if (uniqueBeats.length !== expectedCount) {
-          console.warn(`Beat count mismatch: found ${uniqueBeats.length}, expected ${expectedCount}`);
-        }
-
-        setBeats(uniqueBeats);
-        setHasData(uniqueBeats.length > 0);
+        setBeats(beatInfoResults);
+        setHasData(beatInfoResults.length > 0);
 
       } catch (error) {
         console.error('Error in fetchBeats:', error);
@@ -737,3 +731,5 @@ const BeatHygieneCorrection: React.FC = () => {
 };
 
 export default BeatHygieneCorrection;
+
+export default BeatHygieneCorrection
