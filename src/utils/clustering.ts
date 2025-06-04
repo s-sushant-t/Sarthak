@@ -11,7 +11,7 @@ export const clusterCustomers = async (
     }
 
     const TARGET_MIN_SIZE = 180; // Minimum cluster size (6 beats × 30 outlets)
-    const TARGET_MAX_SIZE = 270; // Maximum cluster size (6 beats × 45 outlets)
+    const TARGET_MAX_SIZE = 240; // Maximum cluster size (6 beats × 40 outlets)
     let maxDistance = 5; // Start with 5km radius
     let clusteredCustomers: ClusteredCustomer[] = [];
     let attempts = 0;
