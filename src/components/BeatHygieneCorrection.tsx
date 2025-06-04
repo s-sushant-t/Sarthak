@@ -98,11 +98,9 @@ const BeatHygieneCorrection: React.FC = () => {
       
       setStops(data || []);
       
-      // Find the first unvisited stop
       const nextUnvisitedStop = data?.find(stop => !stop.visit_time);
       setCurrentStop(nextUnvisitedStop || null);
 
-      // Check if beat is being audited
       const isBeingAudited = data?.[0]?.is_being_audited;
       const auditorName = data?.[0]?.auditor_name;
       const auditorDesignation = data?.[0]?.auditor_designation;
@@ -124,7 +122,7 @@ const BeatHygieneCorrection: React.FC = () => {
   };
 
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371e3; // Earth's radius in meters
+    const R = 6371e3;
     const φ1 = lat1 * Math.PI/180;
     const φ2 = lat2 * Math.PI/180;
     const Δφ = (lat2-lat1) * Math.PI/180;
@@ -158,7 +156,7 @@ const BeatHygieneCorrection: React.FC = () => {
   };
 
   const handleStopClick = (stop: Stop) => {
-    if (stop.visit_time) return; // Don't allow selecting already visited stops
+    if (stop.visit_time) return;
     
     setCurrentStop(stop);
     const clicks = (bypassClicks[stop.id] || 0) + 1;
