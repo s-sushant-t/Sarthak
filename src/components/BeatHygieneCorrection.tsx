@@ -731,5 +731,3 @@ const BeatHygieneCorrection: React.FC = () => {
 };
 
 export default BeatHygieneCorrection;
-
-export default BeatHygieneCorrection
