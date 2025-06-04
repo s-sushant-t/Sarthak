@@ -49,6 +49,7 @@ const BeatHygieneCorrection: React.FC = () => {
   const [auditorInfo, setAuditorInfo] = useState<AuditorInfo | null>(null);
   const [showAuditorModal, setShowAuditorModal] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [editingStop, setEditingStop] = useState<Stop | null>(null);
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
 
@@ -266,6 +267,44 @@ const BeatHygieneCorrection: React.FC = () => {
     }
   };
 
+  const handleEditClick = (e: React.MouseEvent, stop: Stop) => {
+    e.stopPropagation();
+    setEditingStop(stop);
+    setCurrentStop(stop);
+    setShowForm(true);
+    setBypassActive(true); // Bypass geofencing for editing
+  };
+
+  const handleEditSubmit = async (formData: any) => {
+    if (!editingStop) return;
+
+    setIsProcessing(true);
+    try {
+      const { error } = await supabase
+        .from('distributor_routes')
+        .update({
+          market_work_remark: formData.marketWorkRemark,
+          updated_ol_name: formData.updatedOutletName,
+          owner_name: formData.ownerName,
+          owner_contact: formData.ownerContact,
+          ol_closure_time: formData.closureTime
+        })
+        .eq('id', editingStop.id);
+
+      if (error) throw error;
+      
+      setEditingStop(null);
+      setShowForm(false);
+      setBypassActive(false);
+      await fetchStops(selectedBeat!);
+      setError(null);
+    } catch (error) {
+      setError('Error updating visit: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex items-center justify-center relative overflow-hidden">
@@ -361,7 +400,7 @@ const BeatHygieneCorrection: React.FC = () => {
                       ? 'bg-green-500/20 border border-green-400/30'
                       : 'bg-white/5 border border-white/10 hover:bg-white/10'
                   }`}
-                  onClick={() => handleStopClick(stop)}
+                  onClick={() => !stop.visit_time && handleStopClick(stop)}
                 >
                   <div className="flex items-center justify-between">
                     <div>
@@ -388,25 +427,6 @@ const BeatHygieneCorrection: React.FC = () => {
                             Closes at {stop.ol_closure_time}
                           </p>
                         )}
-                        {stop.visit_time && stop.market_work_remark && (
-                          <div className="flex items-center gap-2 mt-2">
-                            <p className="text-sm text-blue-200">
-                              Market Work: {stop.market_work_remark}
-                            </p>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const newRemark = prompt('Update market work remark:', stop.market_work_remark);
-                                if (newRemark && newRemark !== stop.market_work_remark) {
-                                  handleEditMarketWork(stop.id, newRemark);
-                                }
-                              }}
-                              className="p-1 hover:bg-white/10 rounded-full transition-colors"
-                            >
-                              <Edit2 className="w-4 h-4 text-blue-300" />
-                            </button>
-                          </div>
-                        )}
                       </div>
                     </div>
                     {stop.visit_time ? (
@@ -423,27 +443,55 @@ const BeatHygieneCorrection: React.FC = () => {
                     )}
                   </div>
 
-                  {showForm && currentStop?.id === stop.id && !stop.visit_time && (
-                    <div className="mt-4 pt-4 border-t border-white/10">
-                      <div className="mb-4">
-                        <a
-                          href={`http://maps.google.com/maps?q=${stop.latitude},${stop.longitude}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-300 hover:text-blue-200 flex items-center gap-2"
+                  {stop.visit_time && (
+                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/10">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm text-blue-200">
+                          Market Work: {stop.market_work_remark || 'Not set'}
+                        </p>
+                        <button
+                          onClick={(e) => handleEditClick(e, stop)}
+                          className="p-1 hover:bg-white/10 rounded-full transition-colors"
                         >
-                          <MapPin className="w-4 h-4" />
-                          <span>Open in Google Maps</span>
-                        </a>
+                          <Edit2 className="w-4 h-4 text-blue-300" />
+                        </button>
                       </div>
+                      <div className="text-right">
+                        <span className="text-green-300 text-sm font-medium">
+                          Visited
+                        </span>
+                        <p className="text-xs text-blue-200 mt-1">
+                          {new Date(stop.visit_time).toLocaleTimeString()}
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
-                      {distanceToOutlet !== null && (
-                        <div className={`mb-4 text-sm ${
-                          distanceToOutlet <= GEOFENCE_RADIUS || bypassActive ? 'text-green-300' : 'text-red-300'
-                        }`}>
-                          Distance: {Math.round(distanceToOutlet)}m 
-                          {bypassActive ? ' (Bypass active)' : distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
-                        </div>
+                  {showForm && currentStop?.id === stop.id && (
+                    <div className="mt-4 pt-4 border-t border-white/10">
+                      {!editingStop && (
+                        <>
+                          <div className="mb-4">
+                            <a
+                              href={`http://maps.google.com/maps?q=${stop.latitude},${stop.longitude}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-300 hover:text-blue-200 flex items-center gap-2"
+                            >
+                              <MapPin className="w-4 h-4" />
+                              <span>Open in Google Maps</span>
+                            </a>
+                          </div>
+
+                          {distanceToOutlet !== null && !editingStop && (
+                            <div className={`mb-4 text-sm ${
+                              distanceToOutlet <= GEOFENCE_RADIUS || bypassActive ? 'text-green-300' : 'text-red-300'
+                            }`}>
+                              Distance: {Math.round(distanceToOutlet)}m 
+                              {bypassActive ? ' (Bypass active)' : distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
+                            </div>
+                          )}
+                        </>
                       )}
 
                       {stop.stop_order === 0 ? (
@@ -466,13 +514,19 @@ const BeatHygieneCorrection: React.FC = () => {
                           onSubmit={(e) => {
                             e.preventDefault();
                             const formData = new FormData(e.target as HTMLFormElement);
-                            handleMarkVisit({
+                            const data = {
                               marketWorkRemark: formData.get('marketWorkRemark'),
                               updatedOutletName: formData.get('updatedOutletName'),
                               ownerName: formData.get('ownerName'),
                               ownerContact: formData.get('ownerContact'),
                               closureTime: formData.get('closureTime')
-                            });
+                            };
+                            
+                            if (editingStop) {
+                              handleEditSubmit(data);
+                            } else {
+                              handleMarkVisit(data);
+                            }
                           }}
                           className="space-y-4"
                         >
@@ -483,16 +537,17 @@ const BeatHygieneCorrection: React.FC = () => {
                             <select
                               name="marketWorkRemark"
                               required
+                              defaultValue={editingStop?.market_work_remark || ''}
                               className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                               disabled={isProcessing}
                             >
-                              <option value="" className="text-black">Select remark</option>
-                              <option value="GR1BDS" className="text-black">GR1BDS</option>
-                              <option value="GR1ADS" className="text-black">GR1ADS</option>
-                              <option value="GR2 DS" className="text-black">GR2 DS</option>
-                              <option value="All DS" className="text-black">All DS</option>
-                              <option value="No Outlet Present" className="text-black">No Outlet Present</option>
-                              <option value="Outlet Closed" className="text-black">Outlet Closed</option>
+                              <option value="">Select remark</option>
+                              <option value="GR1BDS">GR1BDS</option>
+                              <option value="GR1ADS">GR1ADS</option>
+                              <option value="GR2 DS">GR2 DS</option>
+                              <option value="All DS">All DS</option>
+                              <option value="No Outlet Present">No Outlet Present</option>
+                              <option value="Outlet Closed">Outlet Closed</option>
                             </select>
                           </div>
 
@@ -503,6 +558,7 @@ const BeatHygieneCorrection: React.FC = () => {
                             <input
                               type="text"
                               name="updatedOutletName"
+                              defaultValue={editingStop?.updated_ol_name || ''}
                               className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                               disabled={isProcessing}
                             />
@@ -515,6 +571,7 @@ const BeatHygieneCorrection: React.FC = () => {
                             <input
                               type="text"
                               name="ownerName"
+                              defaultValue={editingStop?.owner_name || ''}
                               className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                               disabled={isProcessing}
                             />
@@ -527,6 +584,7 @@ const BeatHygieneCorrection: React.FC = () => {
                             <input
                               type="text"
                               name="ownerContact"
+                              defaultValue={editingStop?.owner_contact || ''}
                               className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                               disabled={isProcessing}
                             />
@@ -539,6 +597,7 @@ const BeatHygieneCorrection: React.FC = () => {
                             <input
                               type="time"
                               name="closureTime"
+                              defaultValue={editingStop?.ol_closure_time || ''}
                               className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                               disabled={isProcessing}
                             />
@@ -547,7 +606,7 @@ const BeatHygieneCorrection: React.FC = () => {
                           <button
                             type="submit"
                             className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white py-2 px-4 rounded-lg hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transform transition-all duration-200 hover:scale-[1.02]"
-                            disabled={isProcessing || (!bypassActive && (!latitude || !longitude || (distanceToOutlet !== null && distanceToOutlet > GEOFENCE_RADIUS)))}
+                            disabled={isProcessing || (!editingStop && !bypassActive && (!latitude || !longitude || (distanceToOutlet !== null && distanceToOutlet > GEOFENCE_RADIUS)))}
                           >
                             {isProcessing ? (
                               <span className="flex items-center justify-center gap-2">
@@ -555,7 +614,7 @@ const BeatHygieneCorrection: React.FC = () => {
                                 Processing...
                               </span>
                             ) : (
-                              'Mark Visit'
+                              editingStop ? 'Update Visit Details' : 'Mark Visit'
                             )}
                           </button>
                         </form>
