@@ -61,15 +61,17 @@ const BeatHygieneCorrection: React.FC = () => {
       if (!distributorCode) return;
 
       try {
+        // Fetch all unique beats for this distributor
         const { data, error } = await supabase
           .from('distributor_routes')
-          .select('beat, is_being_audited, auditor_name')
+          .select('beat')
           .eq('distributor_code', distributorCode)
           .order('beat');
 
         if (error) throw error;
 
-        const uniqueBeats = [...new Set(data.map(d => d.beat))].sort((a, b) => a - b);
+        // Extract unique beat numbers and sort them
+        const uniqueBeats = Array.from(new Set(data.map(d => d.beat))).sort((a, b) => a - b);
         setBeats(uniqueBeats);
         setHasData(uniqueBeats.length > 0);
       } catch (error) {
