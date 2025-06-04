@@ -22,6 +22,14 @@ interface Stop {
   owner_contact?: string;
   ol_closure_time?: string;
   visit_time?: string;
+  auditor_name?: string;
+  auditor_designation?: string;
+  is_being_audited?: boolean;
+}
+
+interface AuditorInfo {
+  name: string;
+  designation: string;
 }
 
 const GEOFENCE_RADIUS = 200; // meters
@@ -38,6 +46,8 @@ const BeatHygieneCorrection: React.FC = () => {
   const [distanceToOutlet, setDistanceToOutlet] = useState<number | null>(null);
   const [bypassClicks, setBypassClicks] = useState<Record<string, number>>({});
   const [bypassActive, setBypassActive] = useState(false);
+  const [auditorInfo, setAuditorInfo] = useState<AuditorInfo | null>(null);
+  const [showAuditorModal, setShowAuditorModal] = useState(false);
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
 
@@ -53,7 +63,7 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from('distributor_routes')
-          .select('beat')
+          .select('beat, is_being_audited, auditor_name')
           .eq('distributor_code', distributorCode)
           .order('beat');
 
@@ -91,6 +101,17 @@ const BeatHygieneCorrection: React.FC = () => {
       // Find the first unvisited stop
       const nextUnvisitedStop = data?.find(stop => !stop.visit_time);
       setCurrentStop(nextUnvisitedStop || null);
+
+      // Check if beat is being audited
+      const isBeingAudited = data?.[0]?.is_being_audited;
+      const auditorName = data?.[0]?.auditor_name;
+      const auditorDesignation = data?.[0]?.auditor_designation;
+
+      if (isBeingAudited && !auditorInfo && auditorName && auditorDesignation) {
+        setAuditorInfo({ name: auditorName, designation: auditorDesignation });
+      } else if (!isBeingAudited) {
+        setShowAuditorModal(true);
+      }
       
       setError(null);
     } catch (error) {
@@ -197,6 +218,30 @@ const BeatHygieneCorrection: React.FC = () => {
     }
   };
 
+  const handleAuditorSubmit = async (name: string, designation: string) => {
+    if (!selectedBeat || !distributorCode) return;
+
+    try {
+      const { error } = await supabase
+        .from('distributor_routes')
+        .update({
+          auditor_name: name,
+          auditor_designation: designation,
+          is_being_audited: true
+        })
+        .eq('distributor_code', distributorCode)
+        .eq('beat', selectedBeat);
+
+      if (error) throw error;
+
+      setAuditorInfo({ name, designation });
+      setShowAuditorModal(false);
+      await fetchStops(selectedBeat);
+    } catch (error) {
+      setError('Error updating auditor information: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex items-center justify-center relative overflow-hidden">
@@ -266,9 +311,15 @@ const BeatHygieneCorrection: React.FC = () => {
             disabled={isProcessing}
           >
             <option value="" className="text-black">Select a beat</option>
-            {beats.map((beat) => (
-              <option key={beat} value={beat} className="text-black">Beat {beat}</option>
-            ))}
+            {beats.map((beat) => {
+              const beingAudited = stops.find(s => s.beat === beat)?.is_being_audited;
+              const auditorName = stops.find(s => s.beat === beat)?.auditor_name;
+              return (
+                <option key={beat} value={beat} className="text-black">
+                  Beat {beat} {beingAudited ? `(Being audited by ${auditorName})` : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
 
@@ -488,6 +539,57 @@ const BeatHygieneCorrection: React.FC = () => {
                 </button>
               </form>
             )}
+          </div>
+        )}
+
+        {showAuditorModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                Enter Auditor Information
+              </h3>
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target as HTMLFormElement);
+                handleAuditorSubmit(
+                  formData.get('auditorName') as string,
+                  formData.get('auditorDesignation') as string
+                );
+              }}>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      Auditor Name
+                    </label>
+                    <input
+                      type="text"
+                      name="auditorName"
+                      required
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      Auditor Designation
+                    </label>
+                    <input
+                      type="text"
+                      name="auditorDesignation"
+                      required
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-3">
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600"
+                    >
+                      Start Audit
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
           </div>
         )}
       </div>
