@@ -67,45 +67,53 @@ const BeatHygieneCorrection: React.FC = () => {
         setIsLoading(true);
         console.log('Fetching beats for distributor:', distributorCode);
 
-        // First, get all distinct beats with a single query
-        const { data: distinctBeats, error: distinctError } = await supabase
+        // First, get all distinct beats with a count
+        const { data: beatData, error: beatError, count } = await supabase
           .from('distributor_routes')
-          .select('beat')
-          .eq('distributor_code', distributorCode)
-          .order('beat');
+          .select('beat', { count: 'exact' })
+          .eq('distributor_code', distributorCode);
 
-        if (distinctError) throw distinctError;
+        if (beatError) throw beatError;
 
-        // Create a Set to ensure uniqueness and proper sorting
-        const uniqueBeats = Array.from(new Set(distinctBeats.map(row => row.beat)))
-          .sort((a, b) => a - b);
+        console.log('Initial beat data:', { count, rows: beatData?.length });
 
-        // Now fetch additional information for each beat
+        // Get unique beats and ensure they're properly sorted
+        const uniqueBeats = beatData ? 
+          Array.from(new Set(beatData.map(row => row.beat)))
+            .sort((a, b) => a - b) : 
+          [];
+
+        console.log('Unique beats:', uniqueBeats);
+
+        // Fetch additional information for each unique beat
         const beatInfoPromises = uniqueBeats.map(async (beat) => {
-          const { data: beatData, error: beatError } = await supabase
+          const { data: stopData, error: stopError } = await supabase
             .from('distributor_routes')
-            .select('auditor_name, is_being_audited')
+            .select('auditor_name, is_being_audited, stop_order')
             .eq('distributor_code', distributorCode)
             .eq('beat', beat)
-            .limit(1)
-            .single();
+            .order('stop_order', { ascending: true });
 
-          if (beatError) {
-            console.error(`Error fetching info for beat ${beat}:`, beatError);
+          if (stopError) {
+            console.error(`Error fetching info for beat ${beat}:`, stopError);
             return { beat, auditor_name: null, is_being_audited: false };
           }
 
+          // Use the first non-null auditor info
+          const beatInfo = stopData?.find(stop => stop.auditor_name || stop.is_being_audited);
           return {
             beat,
-            auditor_name: beatData?.auditor_name,
-            is_being_audited: beatData?.is_being_audited
+            auditor_name: beatInfo?.auditor_name || null,
+            is_being_audited: beatInfo?.is_being_audited || false
           };
         });
 
         const beatInfoResults = await Promise.all(beatInfoPromises);
 
         console.log('Beat processing results:', {
-          totalBeats: uniqueBeats.length,
+          expectedCount: count,
+          uniqueBeatsCount: uniqueBeats.length,
+          processedBeatsCount: beatInfoResults.length,
           beatNumbers: uniqueBeats,
           beatInfo: beatInfoResults
         });
