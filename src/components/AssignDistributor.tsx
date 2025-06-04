@@ -33,7 +33,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
       setImportStats({ total: totalRecords, processed: 0 });
       console.log(`Starting import of ${totalRecords} records...`);
 
-      // Delete existing routes
+      // Delete existing routes for this distributor
       const { error: deleteError } = await supabase
         .from('distributor_routes')
         .delete()
@@ -41,7 +41,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
 
       if (deleteError) throw deleteError;
 
-      // Process all routes and their stops
+      // Prepare all route data
       const routeData = routes.flatMap(route => {
         // Add distributor point as stop 0
         const stops = [
@@ -79,41 +79,83 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
 
       console.log(`Prepared ${routeData.length} records for import`);
 
-      // Insert in batches of 100
-      const batchSize = 100;
+      // Process in smaller batches to avoid timeouts
+      const batchSize = 50;
+      let processedCount = 0;
+      let failedBatches = [];
+
       for (let i = 0; i < routeData.length; i += batchSize) {
         const batch = routeData.slice(i, Math.min(i + batchSize, routeData.length));
-        console.log(`Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(routeData.length/batchSize)}`);
+        const batchNumber = Math.floor(i/batchSize) + 1;
+        const totalBatches = Math.ceil(routeData.length/batchSize);
         
-        const { error: insertError } = await supabase
-          .from('distributor_routes')
-          .insert(batch);
+        console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} records)`);
+        
+        try {
+          const { error: insertError } = await supabase
+            .from('distributor_routes')
+            .insert(batch);
 
-        if (insertError) throw insertError;
+          if (insertError) {
+            console.error(`Batch ${batchNumber} failed:`, insertError);
+            failedBatches.push({ start: i, records: batch });
+            continue;
+          }
 
-        setImportStats(prev => ({
-          ...prev,
-          processed: Math.min(prev.processed + batch.length, prev.total)
-        }));
+          processedCount += batch.length;
+          setImportStats(prev => ({
+            ...prev,
+            processed: processedCount
+          }));
+
+        } catch (error) {
+          console.error(`Error processing batch ${batchNumber}:`, error);
+          failedBatches.push({ start: i, records: batch });
+        }
+
+        // Small delay between batches to prevent rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
 
-      // Verify import
+      // Retry failed batches
+      if (failedBatches.length > 0) {
+        console.log(`Retrying ${failedBatches.length} failed batches...`);
+        
+        for (const failedBatch of failedBatches) {
+          try {
+            const { error: retryError } = await supabase
+              .from('distributor_routes')
+              .insert(failedBatch.records);
+
+            if (!retryError) {
+              processedCount += failedBatch.records.length;
+              setImportStats(prev => ({
+                ...prev,
+                processed: processedCount
+              }));
+            }
+          } catch (error) {
+            console.error(`Failed to retry batch starting at index ${failedBatch.start}:`, error);
+          }
+        }
+      }
+
+      // Verify final import count
       const { data: importedRoutes, error: verifyError } = await supabase
         .from('distributor_routes')
-        .select('beat')
+        .select('id')
         .eq('distributor_code', distributorCode);
 
       if (verifyError) throw verifyError;
 
-      const uniqueBeats = new Set(importedRoutes?.map(r => r.beat));
-      console.log('Import verification:');
-      console.log('- Total beats imported:', uniqueBeats.size);
-      console.log('- Total records imported:', importedRoutes?.length);
-      console.log('- Expected beats:', routes.length);
-      console.log('- Expected records:', routeData.length);
+      const actualImported = importedRoutes?.length || 0;
+      console.log(`Import verification:
+        - Expected records: ${routeData.length}
+        - Actually imported: ${actualImported}
+        - Processed count: ${processedCount}`);
 
-      if (importedRoutes?.length !== routeData.length) {
-        throw new Error(`Import mismatch: Expected ${routeData.length} records but imported ${importedRoutes?.length}`);
+      if (actualImported !== routeData.length) {
+        throw new Error(`Import mismatch: Expected ${routeData.length} records but imported ${actualImported}`);
       }
 
       onAssign(distributorCode);
