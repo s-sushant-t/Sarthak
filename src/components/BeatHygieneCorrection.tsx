@@ -48,6 +48,7 @@ const BeatHygieneCorrection: React.FC = () => {
   const [bypassActive, setBypassActive] = useState(false);
   const [auditorInfo, setAuditorInfo] = useState<AuditorInfo | null>(null);
   const [showAuditorModal, setShowAuditorModal] = useState(false);
+  const [showForm, setShowForm] = useState(false);
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
 
@@ -102,6 +103,7 @@ const BeatHygieneCorrection: React.FC = () => {
       
       const nextUnvisitedStop = data?.find(stop => !stop.visit_time);
       setCurrentStop(nextUnvisitedStop || null);
+      setShowForm(false);
 
       const isBeingAudited = data?.[0]?.is_being_audited;
       const auditorName = data?.[0]?.auditor_name;
@@ -154,6 +156,7 @@ const BeatHygieneCorrection: React.FC = () => {
 
   const handleBeatSelect = async (beat: number) => {
     setSelectedBeat(beat);
+    setShowForm(false);
     await fetchStops(beat);
   };
 
@@ -161,6 +164,7 @@ const BeatHygieneCorrection: React.FC = () => {
     if (stop.visit_time) return;
     
     setCurrentStop(stop);
+    setShowForm(true);
     const clicks = (bypassClicks[stop.id] || 0) + 1;
     setBypassClicks(prev => ({ ...prev, [stop.id]: clicks }));
     
@@ -209,6 +213,7 @@ const BeatHygieneCorrection: React.FC = () => {
       if (error) throw error;
       
       setBypassActive(false);
+      setShowForm(false);
       await fetchStops(selectedBeat!);
       setError(null);
     } catch (error) {
@@ -246,9 +251,9 @@ const BeatHygieneCorrection: React.FC = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex items-center justify-center relative overflow-hidden">
         <div className="absolute inset-0 z-0">
-          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float\" style={{ top: '15%', left: '10%' }} />
-          <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed\" style={{ top: '60%', right: '15%' }} />
-          <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float\" style={{ top: '30%', right: '25%' }} />
+          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float" style={{ top: '15%', left: '10%' }} />
+          <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed" style={{ top: '60%', right: '15%' }} />
+          <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float" style={{ top: '30%', right: '25%' }} />
         </div>
         <div className="flex flex-col items-center gap-3 z-10">
           <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
@@ -379,166 +384,149 @@ const BeatHygieneCorrection: React.FC = () => {
                       <ChevronRight className="text-blue-300" />
                     )}
                   </div>
+
+                  {showForm && currentStop?.id === stop.id && !stop.visit_time && (
+                    <div className="mt-4 pt-4 border-t border-white/10">
+                      <div className="mb-4">
+                        <a
+                          href={`http://maps.google.com/maps?q=${stop.latitude},${stop.longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-300 hover:text-blue-200 flex items-center gap-2"
+                        >
+                          <MapPin className="w-4 h-4" />
+                          <span>Open in Google Maps</span>
+                        </a>
+                      </div>
+
+                      {distanceToOutlet !== null && (
+                        <div className={`mb-4 text-sm ${
+                          distanceToOutlet <= GEOFENCE_RADIUS || bypassActive ? 'text-green-300' : 'text-red-300'
+                        }`}>
+                          Distance: {Math.round(distanceToOutlet)}m 
+                          {bypassActive ? ' (Bypass active)' : distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
+                        </div>
+                      )}
+
+                      {stop.stop_order === 0 ? (
+                        <button
+                          onClick={() => handleMarkVisit({})}
+                          className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white py-2 px-4 rounded-lg hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transform transition-all duration-200 hover:scale-[1.02]"
+                          disabled={isProcessing}
+                        >
+                          {isProcessing ? (
+                            <span className="flex items-center justify-center gap-2">
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              Processing...
+                            </span>
+                          ) : (
+                            'Mark Distribution Point Visit'
+                          )}
+                        </button>
+                      ) : (
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const formData = new FormData(e.target as HTMLFormElement);
+                            handleMarkVisit({
+                              marketWorkRemark: formData.get('marketWorkRemark'),
+                              updatedOutletName: formData.get('updatedOutletName'),
+                              ownerName: formData.get('ownerName'),
+                              ownerContact: formData.get('ownerContact'),
+                              closureTime: formData.get('closureTime')
+                            });
+                          }}
+                          className="space-y-4"
+                        >
+                          <div>
+                            <label className="block text-sm font-medium text-blue-200 mb-1">
+                              Market Work Remarks
+                            </label>
+                            <select
+                              name="marketWorkRemark"
+                              required
+                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                              disabled={isProcessing}
+                            >
+                              <option value="" className="text-black">Select remark</option>
+                              <option value="GR1BDS" className="text-black">GR1BDS</option>
+                              <option value="GR1ADS" className="text-black">GR1ADS</option>
+                              <option value="GR2 DS" className="text-black">GR2 DS</option>
+                              <option value="All DS" className="text-black">All DS</option>
+                              <option value="No Outlet Present" className="text-black">No Outlet Present</option>
+                              <option value="Outlet Closed" className="text-black">Outlet Closed</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-blue-200 mb-1">
+                              Updated Outlet Name
+                            </label>
+                            <input
+                              type="text"
+                              name="updatedOutletName"
+                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                              disabled={isProcessing}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-blue-200 mb-1">
+                              Owner Name
+                            </label>
+                            <input
+                              type="text"
+                              name="ownerName"
+                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                              disabled={isProcessing}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-blue-200 mb-1">
+                              Owner Contact
+                            </label>
+                            <input
+                              type="text"
+                              name="ownerContact"
+                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                              disabled={isProcessing}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-blue-200 mb-1">
+                              Outlet Closure Time
+                            </label>
+                            <input
+                              type="time"
+                              name="closureTime"
+                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                              disabled={isProcessing}
+                            />
+                          </div>
+
+                          <button
+                            type="submit"
+                            className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white py-2 px-4 rounded-lg hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transform transition-all duration-200 hover:scale-[1.02]"
+                            disabled={isProcessing || (!bypassActive && (!latitude || !longitude || (distanceToOutlet !== null && distanceToOutlet > GEOFENCE_RADIUS)))}
+                          >
+                            {isProcessing ? (
+                              <span className="flex items-center justify-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Processing...
+                              </span>
+                            ) : (
+                              'Mark Visit'
+                            )}
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
-          </div>
-        )}
-
-        {isProcessing && (
-          <div className="flex justify-center my-8">
-            <div className="flex items-center gap-3">
-              <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
-              <p className="text-blue-200">Processing...</p>
-            </div>
-          </div>
-        )}
-
-        {!isProcessing && currentStop && (
-          <div className="bg-white/10 backdrop-blur-lg rounded-xl border border-white/20 p-6 shadow-xl">
-            <div className="mb-4">
-              <h3 className="text-lg font-semibold text-white mb-2">
-                {currentStop.stop_order === 0 ? 'Distribution Point' : currentStop.outlet_name}
-              </h3>
-              <p className="text-blue-200">Stop #{currentStop.stop_order}</p>
-              <p className="text-blue-200">DMS ID: {currentStop.dms_customer_id}</p>
-              
-              {distanceToOutlet !== null && (
-                <div className={`mt-2 text-sm ${
-                  distanceToOutlet <= GEOFENCE_RADIUS || bypassActive ? 'text-green-300' : 'text-red-300'
-                }`}>
-                  Distance: {Math.round(distanceToOutlet)}m 
-                  {bypassActive ? ' (Bypass active)' : distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
-                </div>
-              )}
-            </div>
-
-            <div className="mb-4">
-              <a
-                href={`http://maps.google.com/maps?q=${currentStop.latitude},${currentStop.longitude}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-300 hover:text-blue-200 flex items-center gap-2"
-              >
-                <MapPin className="w-4 h-4" />
-                <span>Open in Google Maps</span>
-              </a>
-            </div>
-
-            {currentStop.stop_order === 0 ? (
-              <button
-                onClick={() => handleMarkVisit({})}
-                className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white py-2 px-4 rounded-lg hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transform transition-all duration-200 hover:scale-[1.02]"
-                disabled={isProcessing}
-              >
-                {isProcessing ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Processing...
-                  </span>
-                ) : (
-                  'Mark Distribution Point Visit'
-                )}
-              </button>
-            ) : (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const formData = new FormData(e.target as HTMLFormElement);
-                  handleMarkVisit({
-                    marketWorkRemark: formData.get('marketWorkRemark'),
-                    updatedOutletName: formData.get('updatedOutletName'),
-                    ownerName: formData.get('ownerName'),
-                    ownerContact: formData.get('ownerContact'),
-                    closureTime: formData.get('closureTime')
-                  });
-                }}
-                className="space-y-4"
-              >
-                <div>
-                  <label className="block text-sm font-medium text-blue-200 mb-1">
-                    Market Work Remarks
-                  </label>
-                  <select
-                    name="marketWorkRemark"
-                    required
-                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                    disabled={isProcessing}
-                  >
-                    <option value="" className="text-black">Select remark</option>
-                    <option value="GR1BDS" className="text-black">GR1BDS</option>
-                    <option value="GR1ADS" className="text-black">GR1ADS</option>
-                    <option value="GR2 DS" className="text-black">GR2 DS</option>
-                    <option value="All DS" className="text-black">All DS</option>
-                    <option value="No Outlet Present" className="text-black">No Outlet Present</option>
-                    <option value="Outlet Closed" className="text-black">Outlet Closed</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-blue-200 mb-1">
-                    Updated Outlet Name
-                  </label>
-                  <input
-                    type="text"
-                    name="updatedOutletName"
-                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                    disabled={isProcessing}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-blue-200 mb-1">
-                    Owner Name
-                  </label>
-                  <input
-                    type="text"
-                    name="ownerName"
-                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                    disabled={isProcessing}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-blue-200 mb-1">
-                    Owner Contact
-                  </label>
-                  <input
-                    type="text"
-                    name="ownerContact"
-                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                    disabled={isProcessing}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-blue-200 mb-1">
-                    Outlet Closure Time
-                  </label>
-                  <input
-                    type="time"
-                    name="closureTime"
-                    className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                    disabled={isProcessing}
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white py-2 px-4 rounded-lg hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed transform transition-all duration-200 hover:scale-[1.02]"
-                  disabled={isProcessing || (!bypassActive && (!latitude || !longitude || (distanceToOutlet !== null && distanceToOutlet > GEOFENCE_RADIUS)))}
-                >
-                  {isProcessing ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Processing...
-                    </span>
-                  ) : (
-                    'Mark Visit'
-                  )}
-                </button>
-              </form>
-            )}
           </div>
         )}
 
