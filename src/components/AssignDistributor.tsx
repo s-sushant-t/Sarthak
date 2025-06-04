@@ -16,6 +16,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
   const [distributorCode, setDistributorCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importStats, setImportStats] = useState<{total: number, processed: number}>({ total: 0, processed: 0 });
 
   const handleAssign = async () => {
     if (!distributorCode.trim()) {
@@ -27,7 +28,12 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     setError(null);
 
     try {
-      // First, delete existing routes for this distributor if they exist
+      // Calculate total records to process
+      const totalRecords = routes.reduce((acc, route) => acc + route.stops.length + 1, 0); // +1 for distributor point
+      setImportStats({ total: totalRecords, processed: 0 });
+      console.log(`Starting import of ${totalRecords} records...`);
+
+      // Delete existing routes
       const { error: deleteError } = await supabase
         .from('distributor_routes')
         .delete()
@@ -71,15 +77,43 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         return stops;
       });
 
-      // Insert all routes in batches of 100 to handle large datasets
+      console.log(`Prepared ${routeData.length} records for import`);
+
+      // Insert in batches of 100
       const batchSize = 100;
       for (let i = 0; i < routeData.length; i += batchSize) {
         const batch = routeData.slice(i, Math.min(i + batchSize, routeData.length));
+        console.log(`Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(routeData.length/batchSize)}`);
+        
         const { error: insertError } = await supabase
           .from('distributor_routes')
           .insert(batch);
 
         if (insertError) throw insertError;
+
+        setImportStats(prev => ({
+          ...prev,
+          processed: Math.min(prev.processed + batch.length, prev.total)
+        }));
+      }
+
+      // Verify import
+      const { data: importedRoutes, error: verifyError } = await supabase
+        .from('distributor_routes')
+        .select('beat')
+        .eq('distributor_code', distributorCode);
+
+      if (verifyError) throw verifyError;
+
+      const uniqueBeats = new Set(importedRoutes?.map(r => r.beat));
+      console.log('Import verification:');
+      console.log('- Total beats imported:', uniqueBeats.size);
+      console.log('- Total records imported:', importedRoutes?.length);
+      console.log('- Expected beats:', routes.length);
+      console.log('- Expected records:', routeData.length);
+
+      if (importedRoutes?.length !== routeData.length) {
+        throw new Error(`Import mismatch: Expected ${routeData.length} records but imported ${importedRoutes?.length}`);
       }
 
       onAssign(distributorCode);
@@ -116,6 +150,21 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
           {isLoading ? 'Assigning...' : 'Assign to Distributor'}
         </button>
       </div>
+
+      {isLoading && importStats.total > 0 && (
+        <div className="mt-4">
+          <div className="flex justify-between text-sm text-gray-600 mb-1">
+            <span>Importing routes...</span>
+            <span>{Math.round((importStats.processed / importStats.total) * 100)}%</span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div 
+              className="bg-green-500 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${(importStats.processed / importStats.total) * 100}%` }}
+            ></div>
+          </div>
+        </div>
+      )}
       
       <p className="mt-2 text-sm text-gray-500">
         The distributor will use this code to log in and access their assigned routes.
