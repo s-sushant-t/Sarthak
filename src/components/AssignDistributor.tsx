@@ -35,7 +35,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
 
       if (deleteError) throw deleteError;
 
-      // Prepare all route data upfront
+      // Process all routes and their stops
       const routeData = routes.flatMap(route => {
         // Add distributor point as stop 0
         const stops = [
@@ -49,8 +49,10 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
             distance_to_next: route.stops[0]?.distanceToNext || 0,
             time_to_next: route.stops[0]?.timeToNext || 0,
             cluster_id: route.stops[0]?.clusterId || 0,
-            distributor_code: distributorCode
+            distributor_code: distributorCode,
+            is_being_audited: false
           },
+          // Add all customer stops
           ...route.stops.map((stop, index) => ({
             beat: route.salesmanId,
             stop_order: index + 1,
@@ -61,19 +63,24 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
             distance_to_next: stop.distanceToNext,
             time_to_next: stop.timeToNext,
             cluster_id: stop.clusterId,
-            distributor_code: distributorCode
+            distributor_code: distributorCode,
+            is_being_audited: false
           }))
         ];
 
         return stops;
       });
 
-      // Insert all routes in a single batch
-      const { error: insertError } = await supabase
-        .from('distributor_routes')
-        .insert(routeData);
+      // Insert all routes in batches of 100 to handle large datasets
+      const batchSize = 100;
+      for (let i = 0; i < routeData.length; i += batchSize) {
+        const batch = routeData.slice(i, Math.min(i + batchSize, routeData.length));
+        const { error: insertError } = await supabase
+          .from('distributor_routes')
+          .insert(batch);
 
-      if (insertError) throw insertError;
+        if (insertError) throw insertError;
+      }
 
       onAssign(distributorCode);
     } catch (err) {
