@@ -59,38 +59,42 @@ const BeatHygieneCorrection: React.FC = () => {
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
 
-  const handleLogout = () => {
-    localStorage.clear();
-    window.location.href = '/';
-  };
-
   useEffect(() => {
     const fetchBeats = async () => {
       if (!distributorCode) return;
 
       try {
+        setIsLoading(true);
+        
+        // First, get all unique beats for this distributor
         const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
           .select('beat, auditor_name, is_being_audited')
-          .eq('distributor_code', distributorCode)
-          .order('beat');
+          .eq('distributor_code', distributorCode);
 
         if (beatError) throw beatError;
 
+        // Create a Map to store unique beats with their latest audit info
         const beatMap = new Map<number, BeatInfo>();
+        
         beatData?.forEach(row => {
-          if (!beatMap.has(row.beat)) {
+          const existingBeat = beatMap.get(row.beat);
+          if (!existingBeat || (row.is_being_audited && !existingBeat.is_being_audited)) {
             beatMap.set(row.beat, {
               beat: row.beat,
-              auditor_name: row.auditor_name,
-              is_being_audited: row.is_being_audited
+              auditor_name: row.auditor_name || undefined,
+              is_being_audited: row.is_being_audited || false
             });
           }
         });
 
-        const uniqueBeats = Array.from(beatMap.values());
+        // Convert Map to array and sort by beat number
+        const uniqueBeats = Array.from(beatMap.values())
+          .sort((a, b) => a.beat - b.beat);
+
         setBeats(uniqueBeats);
         setHasData(uniqueBeats.length > 0);
+
       } catch (error) {
         setError('Error fetching beats: ' + (error instanceof Error ? error.message : 'Unknown error'));
       } finally {
@@ -100,6 +104,11 @@ const BeatHygieneCorrection: React.FC = () => {
 
     fetchBeats();
   }, [distributorCode]);
+
+  const handleLogout = () => {
+    localStorage.clear();
+    window.location.href = '/';
+  };
 
   const fetchStops = async (beat: number) => {
     if (!distributorCode) return;
