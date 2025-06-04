@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
-import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2 } from 'lucide-react';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -62,7 +62,6 @@ const BeatHygieneCorrection: React.FC = () => {
       if (!distributorCode) return;
 
       try {
-        // Fetch all unique beats for this distributor
         const { data, error } = await supabase
           .from('distributor_routes')
           .select('beat')
@@ -71,7 +70,6 @@ const BeatHygieneCorrection: React.FC = () => {
 
         if (error) throw error;
 
-        // Extract unique beat numbers and sort them
         const uniqueBeats = Array.from(new Set(data.map(d => d.beat))).sort((a, b) => a - b);
         setBeats(uniqueBeats);
         setHasData(uniqueBeats.length > 0);
@@ -223,6 +221,27 @@ const BeatHygieneCorrection: React.FC = () => {
     }
   };
 
+  const handleEditMarketWork = async (stopId: string, newRemark: string) => {
+    setIsProcessing(true);
+    try {
+      const { error } = await supabase
+        .from('distributor_routes')
+        .update({
+          market_work_remark: newRemark
+        })
+        .eq('id', stopId);
+
+      if (error) throw error;
+      
+      await fetchStops(selectedBeat!);
+      setError(null);
+    } catch (error) {
+      setError('Error updating market work remark: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleAuditorSubmit = async (name: string, designation: string) => {
     if (!selectedBeat || !distributorCode) return;
 
@@ -368,6 +387,25 @@ const BeatHygieneCorrection: React.FC = () => {
                             <Clock className="w-4 h-4" />
                             Closes at {stop.ol_closure_time}
                           </p>
+                        )}
+                        {stop.visit_time && stop.market_work_remark && (
+                          <div className="flex items-center gap-2 mt-2">
+                            <p className="text-sm text-blue-200">
+                              Market Work: {stop.market_work_remark}
+                            </p>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const newRemark = prompt('Update market work remark:', stop.market_work_remark);
+                                if (newRemark && newRemark !== stop.market_work_remark) {
+                                  handleEditMarketWork(stop.id, newRemark);
+                                }
+                              }}
+                              className="p-1 hover:bg-white/10 rounded-full transition-colors"
+                            >
+                              <Edit2 className="w-4 h-4 text-blue-300" />
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
