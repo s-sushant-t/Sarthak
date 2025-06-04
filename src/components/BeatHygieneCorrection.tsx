@@ -66,42 +66,51 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         setIsLoading(true);
         
-        // Get all unique beats for this distributor
-        const { data: beatData, error: beatError } = await supabase
+        // First, get all unique beats using a distinct query
+        const { data: distinctBeats, error: distinctError } = await supabase
           .from('distributor_routes')
-          .select('beat, auditor_name, is_being_audited')
-          .eq('distributor_code', distributorCode);
+          .select('beat')
+          .eq('distributor_code', distributorCode)
+          .order('beat');
 
-        if (beatError) throw beatError;
+        if (distinctError) throw distinctError;
 
-        console.log('Total rows fetched:', beatData?.length);
-        
-        // Create a Map to store unique beats with their latest audit info
-        const beatMap = new Map<number, BeatInfo>();
-        
-        beatData?.forEach(row => {
-          const existingBeat = beatMap.get(row.beat);
-          if (!existingBeat || (row.is_being_audited && !existingBeat.is_being_audited)) {
-            beatMap.set(row.beat, {
-              beat: row.beat,
-              auditor_name: row.auditor_name || undefined,
-              is_being_audited: row.is_being_audited || false
-            });
-          }
+        console.log('Raw beats data:', distinctBeats);
+
+        // Create a Set of unique beat numbers
+        const uniqueBeatNumbers = new Set(distinctBeats.map(row => row.beat));
+        console.log('Unique beat numbers:', Array.from(uniqueBeatNumbers));
+
+        // Now get audit info for each beat
+        const beatInfoPromises = Array.from(uniqueBeatNumbers).map(async (beat) => {
+          const { data: auditData, error: auditError } = await supabase
+            .from('distributor_routes')
+            .select('beat, auditor_name, is_being_audited')
+            .eq('distributor_code', distributorCode)
+            .eq('beat', beat)
+            .limit(1);
+
+          if (auditError) throw auditError;
+
+          return {
+            beat,
+            auditor_name: auditData?.[0]?.auditor_name,
+            is_being_audited: auditData?.[0]?.is_being_audited
+          };
         });
 
-        console.log('Unique beats found:', beatMap.size);
+        const beatInfos = await Promise.all(beatInfoPromises);
+        console.log('Beat infos:', beatInfos);
 
-        // Convert Map to array and sort by beat number
-        const uniqueBeats = Array.from(beatMap.values())
-          .sort((a, b) => a.beat - b.beat);
-
-        console.log('Beat numbers:', uniqueBeats.map(b => b.beat).join(', '));
-
-        setBeats(uniqueBeats);
-        setHasData(uniqueBeats.length > 0);
+        // Sort beats numerically
+        const sortedBeats = beatInfos.sort((a, b) => a.beat - b.beat);
+        
+        setBeats(sortedBeats);
+        setHasData(sortedBeats.length > 0);
+        console.log('Final beats count:', sortedBeats.length);
 
       } catch (error) {
+        console.error('Error in fetchBeats:', error);
         setError('Error fetching beats: ' + (error instanceof Error ? error.message : 'Unknown error'));
       } finally {
         setIsLoading(false);
@@ -700,6 +709,7 @@ const BeatHygieneCorrection: React.FC = () => {
                     >
                       Start Audit
                     </button>
+                
                   </div>
                 </div>
               </form>
