@@ -50,7 +50,43 @@ const ResultsView: React.FC<ResultsViewProps> = ({
     const selectedResult = results[selectedAlgorithm];
     if (!selectedResult) return;
     
-    exportToCSV(selectedResult.routes, `routes_${selectedAlgorithm}`);
+    const routesWithDistances = selectedResult.routes.map(route => ({
+      ...route,
+      stops: route.stops.map((stop, index) => ({
+        ...stop,
+        distanceToNext: index < route.stops.length - 1 
+          ? calculateHaversineDistance(
+              stop.latitude,
+              stop.longitude,
+              route.stops[index + 1].latitude,
+              route.stops[index + 1].longitude
+            )
+          : 0,
+        timeToNext: index < route.stops.length - 1
+          ? calculateTravelTime(stop.distanceToNext)
+          : 0
+      }))
+    }));
+    
+    exportToCSV(routesWithDistances, `routes_${selectedAlgorithm}`);
+  };
+
+  // Helper function to calculate Haversine distance
+  const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * 
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Helper function to calculate travel time
+  const calculateTravelTime = (distance: number, speedKmPerHour: number = 30): number => {
+    return (distance / speedKmPerHour) * 60; // Convert to minutes
   };
 
   return (
