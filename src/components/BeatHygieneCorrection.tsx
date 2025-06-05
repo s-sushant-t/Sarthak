@@ -112,7 +112,8 @@ const BeatHygieneCorrection: React.FC = () => {
       const { data, error } = await supabase
         .from('distributor_routes')
         .select('*')
-        .eq('distributor_code', distributorCode);
+        .eq('distributor_code', distributorCode)
+        .order('beat, stop_order');
 
       if (error) throw error;
 
@@ -153,46 +154,32 @@ const BeatHygieneCorrection: React.FC = () => {
         setIsLoading(true);
         console.log('Fetching beats for distributor:', distributorCode);
 
+        // Get all beats with their auditor info
         const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
-          .select('beat')
-          .eq('distributor_code', distributorCode);
+          .select('beat, auditor_name, is_being_audited')
+          .eq('distributor_code', distributorCode)
+          .order('beat');
 
         if (beatError) throw beatError;
 
-        console.log('Initial beat data:', beatData);
-
-        const uniqueBeats = beatData ? 
-          Array.from(new Set(beatData.map(row => row.beat)))
-            .sort((a, b) => a - b) : 
-          [];
-
-        console.log('Unique beats:', uniqueBeats);
-
-        const beatInfoPromises = uniqueBeats.map(async (beat) => {
-          const { data: stopData, error: stopError } = await supabase
-            .from('distributor_routes')
-            .select('auditor_name, is_being_audited')
-            .eq('distributor_code', distributorCode)
-            .eq('beat', beat)
-            .limit(1);
-
-          if (stopError) {
-            console.error(`Error fetching info for beat ${beat}:`, stopError);
-            return { beat, auditor_name: null, is_being_audited: false };
+        // Process beats to get unique beats with their auditor info
+        const beatMap = new Map<number, BeatInfo>();
+        beatData?.forEach(row => {
+          if (!beatMap.has(row.beat)) {
+            beatMap.set(row.beat, {
+              beat: row.beat,
+              auditor_name: row.auditor_name || null,
+              is_being_audited: row.is_being_audited || false
+            });
           }
-
-          return {
-            beat,
-            auditor_name: stopData?.[0]?.auditor_name || null,
-            is_being_audited: stopData?.[0]?.is_being_audited || false
-          };
         });
 
-        const beatInfoResults = await Promise.all(beatInfoPromises);
-        setBeats(beatInfoResults);
-        setHasData(beatInfoResults.length > 0);
+        const uniqueBeats = Array.from(beatMap.values());
+        console.log('Processed beats:', uniqueBeats);
 
+        setBeats(uniqueBeats);
+        setHasData(uniqueBeats.length > 0);
         await fetchAuditProgress();
 
       } catch (error) {
@@ -437,9 +424,9 @@ const BeatHygieneCorrection: React.FC = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex items-center justify-center relative overflow-hidden">
         <div className="absolute inset-0 z-0">
-          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float\" style={{ top: '15%', left: '10%' }} />
-          <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed\" style={{ top: '60%', right: '15%' }} />
-          <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float\" style={{ top: '30%', right: '25%' }} />
+          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float" style={{ top: '15%', left: '10%' }} />
+          <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed" style={{ top: '60%', right: '15%' }} />
+          <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float" style={{ top: '30%', right: '25%' }} />
         </div>
         <div className="flex flex-col items-center gap-3 z-10">
           <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
@@ -733,7 +720,7 @@ const BeatHygieneCorrection: React.FC = () => {
                               type="text"
                               name="ownerName"
                               defaultValue={editingStop?.owner_name || ''}
-                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2  focus:ring-blue-400 focus:border-transparent"
                               disabled={isProcessing}
                             />
                           </div>
