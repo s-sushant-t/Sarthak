@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
-import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2, Download } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2, Download, RefreshCw } from 'lucide-react';
 import { getBeatCount } from './BeatCount';
 
 const supabase = createClient(
@@ -28,15 +28,15 @@ interface Stop {
   is_being_audited?: boolean;
 }
 
-interface AuditorInfo {
-  name: string;
-  designation: string;
-}
-
 interface BeatInfo {
   beat: number;
   auditor_name?: string;
   is_being_audited?: boolean;
+}
+
+interface AuditorInfo {
+  name: string;
+  designation: string;
 }
 
 interface AuditProgress {
@@ -63,6 +63,7 @@ const BeatHygieneCorrection: React.FC = () => {
   const [showAuditorModal, setShowAuditorModal] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingStop, setEditingStop] = useState<Stop | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [auditProgress, setAuditProgress] = useState<AuditProgress>({
     totalStops: 0,
     visitedStops: 0,
@@ -71,6 +72,65 @@ const BeatHygieneCorrection: React.FC = () => {
   const [isAuditComplete, setIsAuditComplete] = useState(false);
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
+
+  const fetchBeats = async () => {
+    if (!distributorCode) return;
+
+    try {
+      setIsLoading(true);
+      setError(null);
+      console.log('Fetching beats for distributor:', distributorCode);
+
+      const { beats: uniqueBeats, count } = await getBeatCount(distributorCode);
+      console.log('Beat count result:', { uniqueBeats, count });
+
+      if (!uniqueBeats || uniqueBeats.length === 0) {
+        throw new Error('No beats found for this distributor');
+      }
+
+      // Get auditor info for each beat
+      const { data: beatData, error: beatError } = await supabase
+        .from('distributor_routes')
+        .select('beat, auditor_name, is_being_audited')
+        .eq('distributor_code', distributorCode)
+        .in('beat', uniqueBeats);
+
+      if (beatError) throw beatError;
+
+      // Create beat info objects
+      const beatInfos: BeatInfo[] = uniqueBeats.map(beat => {
+        const beatInfo = beatData?.find(d => d.beat === beat);
+        return {
+          beat,
+          auditor_name: beatInfo?.auditor_name || undefined,
+          is_being_audited: beatInfo?.is_being_audited || false
+        };
+      });
+
+      console.log('Processed beats:', beatInfos);
+      setBeats(beatInfos);
+      setHasData(beatInfos.length > 0);
+      await fetchAuditProgress();
+
+    } catch (error) {
+      console.error('Error in fetchBeats:', error);
+      setError(error instanceof Error ? error.message : 'Unknown error');
+      setBeats([]);
+      setHasData(false);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchBeats();
+  };
+
+  useEffect(() => {
+    fetchBeats();
+  }, [distributorCode]);
 
   const fetchAuditProgress = async () => {
     if (!distributorCode) return;
@@ -146,56 +206,6 @@ const BeatHygieneCorrection: React.FC = () => {
       setError('Failed to download CSV file');
     }
   };
-
-  useEffect(() => {
-    const fetchBeats = async () => {
-      if (!distributorCode) return;
-
-      try {
-        setIsLoading(true);
-        console.log('Fetching beats for distributor:', distributorCode);
-
-        const result = await getBeatCount(distributorCode);
-        console.log('Beat count result from API:', result);
-
-        // Get all beats with their auditor info
-        const { data: beatData, error: beatError } = await supabase
-          .from('distributor_routes')
-          .select('beat, auditor_name, is_being_audited')
-          .eq('distributor_code', distributorCode)
-          .order('beat');
-
-        if (beatError) throw beatError;
-
-        // Process beats to get unique beats with their auditor info
-        const beatMap = new Map<number, BeatInfo>();
-        beatData?.forEach(row => {
-          if (!beatMap.has(row.beat)) {
-            beatMap.set(row.beat, {
-              beat: row.beat,
-              auditor_name: row.auditor_name || null,
-              is_being_audited: row.is_being_audited || false
-            });
-          }
-        });
-
-        const uniqueBeats = Array.from(beatMap.values());
-        console.log('Processed beats:', uniqueBeats);
-
-        setBeats(uniqueBeats);
-        setHasData(uniqueBeats.length > 0);
-        await fetchAuditProgress();
-
-      } catch (error) {
-        console.error('Error in fetchBeats:', error);
-        setError('Error fetching beats: ' + (error instanceof Error ? error.message : 'Unknown error'));
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchBeats();
-  }, [distributorCode]);
 
   const handleLogout = () => {
     localStorage.clear();
@@ -428,9 +438,9 @@ const BeatHygieneCorrection: React.FC = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex items-center justify-center relative overflow-hidden">
         <div className="absolute inset-0 z-0">
-          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float\" style={{ top: '15%', left: '10%' }} />
-          <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed\" style={{ top: '60%', right: '15%' }} />
-          <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float\" style={{ top: '30%', right: '25%' }} />
+          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float" style={{ top: '15%', left: '10%' }} />
+          <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed" style={{ top: '60%', right: '15%' }} />
+          <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float" style={{ top: '30%', right: '25%' }} />
         </div>
         <div className="flex flex-col items-center gap-3 z-10">
           <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
@@ -487,17 +497,27 @@ const BeatHygieneCorrection: React.FC = () => {
       <div className="max-w-4xl mx-auto p-4">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-white">Beat Hygiene Correction</h2>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 px-4 py-2 text-red-300 hover:text-red-200 hover:bg-red-500/20 rounded-lg transition-colors"
-          >
-            <LogOut className="w-5 h-5" />
-            <span>Logout</span>
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="flex items-center gap-2 px-4 py-2 text-blue-300 hover:text-blue-200 hover:bg-blue-500/20 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>Refresh</span>
+            </button>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-4 py-2 text-red-300 hover:text-red-200 hover:bg-red-500/20 rounded-lg transition-colors"
+            >
+              <LogOut className="w-5 h-5" />
+              <span>Logout</span>
+            </button>
+          </div>
         </div>
 
         <ProgressBar />
-        
+
         {error && (
           <div className="bg-red-500/20 backdrop-blur-lg text-red-200 p-4 rounded-lg mb-4 flex items-center gap-2 border border-red-500/30">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -522,10 +542,10 @@ const BeatHygieneCorrection: React.FC = () => {
             onChange={(e) => handleBeatSelect(Number(e.target.value))}
             disabled={isProcessing}
           >
-            <option value="" className="text-black">Select a beat</option>
+            <option value="">Select a beat</option>
             {beats.map((beatInfo) => (
-              <option key={beatInfo.beat} value={beatInfo.beat} className="text-black">
-                Beat {beatInfo.beat} 
+              <option key={beatInfo.beat} value={beatInfo.beat}>
+                Beat {beatInfo.beat}
                 {beatInfo.is_being_audited ? ` (Being audited by ${beatInfo.auditor_name})` : ''}
               </option>
             ))}
