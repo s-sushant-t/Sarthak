@@ -7,21 +7,17 @@ const supabase = createClient(
 
 export const getBeatCount = async (distributorCode: string) => {
   try {
-    // First, get a count of distinct beats
-    const { data: distinctBeats, error: distinctError } = await supabase
-      .from('distributor_routes')
-      .select('beat')
-      .eq('distributor_code', distributorCode)
-      .order('beat');
+    const { data, error } = await supabase
+      .rpc('get_distinct_beats', { distributor: distributorCode });
 
-    if (distinctError) throw distinctError;
+    if (error) throw error;
 
-    // Use Set to get unique beats and ensure proper sorting
-    const uniqueBeats = Array.from(new Set(distinctBeats.map(row => row.beat)))
+    const uniqueBeats = (data || [])
+      .map(row => Number(row.beat))
+      .filter(b => !isNaN(b))
       .sort((a, b) => a - b);
 
-    console.log('Beat count verification:', {
-      totalRows: distinctBeats.length,
+    console.log('✅ Beat count verification:', {
       distinctBeats: uniqueBeats.length,
       beatNumbers: uniqueBeats
     });
@@ -31,7 +27,7 @@ export const getBeatCount = async (distributorCode: string) => {
       beats: uniqueBeats
     };
   } catch (error) {
-    console.error('Error getting beat count:', error);
+    console.error('❌ Error getting beat count:', error);
     throw error;
   }
 };
