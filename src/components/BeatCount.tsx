@@ -8,17 +8,13 @@ const supabase = createClient(
 export const getBeatCount = async (distributorCode: string) => {
   try {
     const { data, error } = await supabase
-      .from('distributor_routes')
-      .select('beat', { count: 'exact', head: false })
-      .eq('distributor_code', distributorCode)
-      .order('beat');
+      .rpc('get_distinct_beats', { distributor: distributorCode });
 
     if (error) throw error;
 
-    // Get unique beats using Set to remove duplicates
-    const uniqueBeats = [...new Set((data || [])
+    const uniqueBeats = (data || [])
       .map(row => Number(row.beat))
-      .filter(b => !isNaN(b)))]
+      .filter(b => !isNaN(b))
       .sort((a, b) => a - b);
 
     console.log('✅ Beat count verification:', {
