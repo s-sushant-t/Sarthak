@@ -20,6 +20,15 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
   routes.forEach(route => {
     // Add distributor as first stop (stop order 0)
     if (route.stops.length > 0) {
+      const firstStop = route.stops[0];
+      const distanceToFirst = calculateHaversineDistance(
+        route.distributorLat,
+        route.distributorLng,
+        firstStop.latitude,
+        firstStop.longitude
+      );
+      const timeToFirst = calculateTravelTime(distanceToFirst);
+      
       rows.push([
         route.salesmanId,
         0,
@@ -27,14 +36,28 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         'DISTRIBUTOR',
         route.distributorLat,
         route.distributorLng,
-        route.stops[0].distanceToNext,
-        route.stops[0].timeToNext,
-        route.stops[0].clusterId
+        distanceToFirst.toFixed(2),
+        timeToFirst.toFixed(2),
+        firstStop.clusterId
       ].join(','));
     }
     
     // Add customer stops
     route.stops.forEach((stop, index) => {
+      let distanceToNext = 0;
+      let timeToNext = 0;
+      
+      if (index < route.stops.length - 1) {
+        const nextStop = route.stops[index + 1];
+        distanceToNext = calculateHaversineDistance(
+          stop.latitude,
+          stop.longitude,
+          nextStop.latitude,
+          nextStop.longitude
+        );
+        timeToNext = calculateTravelTime(distanceToNext);
+      }
+      
       rows.push([
         route.salesmanId,
         index + 1,
@@ -42,8 +65,8 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         stop.outletName || '',
         stop.latitude,
         stop.longitude,
-        stop.distanceToNext,
-        stop.timeToNext,
+        distanceToNext.toFixed(2),
+        timeToNext.toFixed(2),
         stop.clusterId
       ].join(','));
     });
@@ -64,4 +87,22 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+};
+
+// Helper function to calculate Haversine distance
+const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+// Helper function to calculate travel time
+const calculateTravelTime = (distance: number, speedKmPerHour: number = 30): number => {
+  return (distance / speedKmPerHour) * 60; // Convert to minutes
 };
