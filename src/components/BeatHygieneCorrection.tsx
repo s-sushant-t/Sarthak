@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2, Download } from 'lucide-react';
+import { getBeatCount } from './BeatCount';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -153,6 +154,9 @@ const BeatHygieneCorrection: React.FC = () => {
       try {
         setIsLoading(true);
         console.log('Fetching beats for distributor:', distributorCode);
+
+        const result = await getBeatCount(distributorCode);
+        console.log('Beat count result from API:', result);
 
         // Get all beats with their auditor info
         const { data: beatData, error: beatError } = await supabase
