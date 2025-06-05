@@ -9,16 +9,16 @@ export const getBeatCount = async (distributorCode: string) => {
   try {
     const { data, error } = await supabase
       .from('distributor_routes')
-      .select('beat')
+      .select('beat', { count: 'exact', head: false })
       .eq('distributor_code', distributorCode)
-      .order('beat')
-      .distinct();
+      .order('beat');
 
     if (error) throw error;
 
-    const uniqueBeats = (data || [])
+    // Get unique beats using Set to remove duplicates
+    const uniqueBeats = [...new Set((data || [])
       .map(row => Number(row.beat))
-      .filter(b => !isNaN(b))
+      .filter(b => !isNaN(b)))]
       .sort((a, b) => a - b);
 
     console.log('✅ Beat count verification:', {
