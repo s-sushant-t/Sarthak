@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
-import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2 } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2, Download } from 'lucide-react';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -38,6 +38,12 @@ interface BeatInfo {
   is_being_audited?: boolean;
 }
 
+interface AuditProgress {
+  totalStops: number;
+  visitedStops: number;
+  percentage: number;
+}
+
 const GEOFENCE_RADIUS = 200; // meters
 
 const BeatHygieneCorrection: React.FC = () => {
@@ -56,8 +62,88 @@ const BeatHygieneCorrection: React.FC = () => {
   const [showAuditorModal, setShowAuditorModal] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingStop, setEditingStop] = useState<Stop | null>(null);
+  const [auditProgress, setAuditProgress] = useState<AuditProgress>({
+    totalStops: 0,
+    visitedStops: 0,
+    percentage: 0
+  });
+  const [isAuditComplete, setIsAuditComplete] = useState(false);
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
+
+  const fetchAuditProgress = async () => {
+    if (!distributorCode) return;
+
+    try {
+      const { count: totalStops, error: totalError } = await supabase
+        .from('distributor_routes')
+        .select('*', { count: 'exact', head: true })
+        .eq('distributor_code', distributorCode);
+
+      if (totalError) throw totalError;
+
+      const { count: visitedStops, error: visitedError } = await supabase
+        .from('distributor_routes')
+        .select('*', { count: 'exact', head: true })
+        .eq('distributor_code', distributorCode)
+        .not('visit_time', 'is', null);
+
+      if (visitedError) throw visitedError;
+
+      const percentage = totalStops ? (visitedStops / totalStops) * 100 : 0;
+      
+      setAuditProgress({
+        totalStops: totalStops || 0,
+        visitedStops: visitedStops || 0,
+        percentage
+      });
+
+      setIsAuditComplete(totalStops > 0 && visitedStops === totalStops);
+
+    } catch (error) {
+      console.error('Error fetching audit progress:', error);
+    }
+  };
+
+  const handleDownloadCSV = async () => {
+    if (!distributorCode) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('distributor_routes')
+        .select('*')
+        .eq('distributor_code', distributorCode);
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        setError('No data available for download');
+        return;
+      }
+
+      const headers = Object.keys(data[0]).join(',');
+      const rows = data.map(row => 
+        Object.values(row).map(value => 
+          value === null ? '' : `"${value}"`
+        ).join(',')
+      );
+      const csv = [headers, ...rows].join('\n');
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `audit_data_${distributorCode}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+    } catch (error) {
+      console.error('Error downloading CSV:', error);
+      setError('Failed to download CSV file');
+    }
+  };
 
   useEffect(() => {
     const fetchBeats = async () => {
@@ -67,17 +153,15 @@ const BeatHygieneCorrection: React.FC = () => {
         setIsLoading(true);
         console.log('Fetching beats for distributor:', distributorCode);
 
-        // First, get all distinct beats with a count
-        const { data: beatData, error: beatError, count } = await supabase
+        const { data: beatData, error: beatError } = await supabase
           .from('distributor_routes')
-          .select('beat', { count: 'exact' })
+          .select('beat')
           .eq('distributor_code', distributorCode);
 
         if (beatError) throw beatError;
 
-        console.log('Initial beat data:', { count, rows: beatData?.length });
+        console.log('Initial beat data:', beatData);
 
-        // Get unique beats and ensure they're properly sorted
         const uniqueBeats = beatData ? 
           Array.from(new Set(beatData.map(row => row.beat)))
             .sort((a, b) => a - b) : 
@@ -85,41 +169,31 @@ const BeatHygieneCorrection: React.FC = () => {
 
         console.log('Unique beats:', uniqueBeats);
 
-        // Fetch additional information for each unique beat
         const beatInfoPromises = uniqueBeats.map(async (beat) => {
           const { data: stopData, error: stopError } = await supabase
             .from('distributor_routes')
-            .select('auditor_name, is_being_audited, stop_order')
+            .select('auditor_name, is_being_audited')
             .eq('distributor_code', distributorCode)
             .eq('beat', beat)
-            .order('stop_order', { ascending: true });
+            .limit(1);
 
           if (stopError) {
             console.error(`Error fetching info for beat ${beat}:`, stopError);
             return { beat, auditor_name: null, is_being_audited: false };
           }
 
-          // Use the first non-null auditor info
-          const beatInfo = stopData?.find(stop => stop.auditor_name || stop.is_being_audited);
           return {
             beat,
-            auditor_name: beatInfo?.auditor_name || null,
-            is_being_audited: beatInfo?.is_being_audited || false
+            auditor_name: stopData?.[0]?.auditor_name || null,
+            is_being_audited: stopData?.[0]?.is_being_audited || false
           };
         });
 
         const beatInfoResults = await Promise.all(beatInfoPromises);
-
-        console.log('Beat processing results:', {
-          expectedCount: count,
-          uniqueBeatsCount: uniqueBeats.length,
-          processedBeatsCount: beatInfoResults.length,
-          beatNumbers: uniqueBeats,
-          beatInfo: beatInfoResults
-        });
-
         setBeats(beatInfoResults);
         setHasData(beatInfoResults.length > 0);
+
+        await fetchAuditProgress();
 
       } catch (error) {
         console.error('Error in fetchBeats:', error);
@@ -267,6 +341,7 @@ const BeatHygieneCorrection: React.FC = () => {
       setBypassActive(false);
       setShowForm(false);
       await fetchStops(selectedBeat!);
+      await fetchAuditProgress();
       setError(null);
     } catch (error) {
       setError('Error updating visit: ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -388,6 +463,34 @@ const BeatHygieneCorrection: React.FC = () => {
     );
   }
 
+  const ProgressBar = () => (
+    <div className="bg-white/10 backdrop-blur-lg rounded-lg border border-white/20 p-4 mb-4">
+      <div className="flex justify-between items-center mb-2">
+        <span className="text-blue-200">Audit Progress</span>
+        <span className="text-blue-200">
+          {auditProgress.visitedStops} / {auditProgress.totalStops} stops
+        </span>
+      </div>
+      <div className="w-full bg-gray-700 rounded-full h-2.5">
+        <div
+          className="bg-blue-500 h-2.5 rounded-full transition-all duration-500"
+          style={{ width: `${auditProgress.percentage}%` }}
+        ></div>
+      </div>
+      {isAuditComplete && (
+        <div className="mt-4 flex justify-end">
+          <button
+            onClick={handleDownloadCSV}
+            className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+          >
+            <Download size={16} />
+            Download Audit Data
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900">
       <div className="max-w-4xl mx-auto p-4">
@@ -401,6 +504,8 @@ const BeatHygieneCorrection: React.FC = () => {
             <span>Logout</span>
           </button>
         </div>
+
+        <ProgressBar />
         
         {error && (
           <div className="bg-red-500/20 backdrop-blur-lg text-red-200 p-4 rounded-lg mb-4 flex items-center gap-2 border border-red-500/30">
