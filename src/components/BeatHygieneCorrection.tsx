@@ -724,7 +724,7 @@ const BeatHygieneCorrection: React.FC = () => {
                               type="text"
                               name="ownerName"
                               defaultValue={editingStop?.owner_name || ''}
-                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2  focus:ring-blue-400 focus:border-transparent"
+                              className="w-full bg-white backdrop-blur-lg border border-white/20 rounded-lg px-4 py-2 text-black placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
                               disabled={isProcessing}
                             />
                           </div>
