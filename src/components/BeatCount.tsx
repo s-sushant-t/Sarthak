@@ -8,7 +8,11 @@ const supabase = createClient(
 export const getBeatCount = async (distributorCode: string) => {
   try {
     const { data, error } = await supabase
-      .rpc('get_distinct_beats', { distributor: distributorCode });
+      .from('distributor_routes')
+      .select('beat')
+      .eq('distributor_code', distributorCode)
+      .order('beat')
+      .distinct();
 
     if (error) throw error;
 
