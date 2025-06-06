@@ -971,14 +971,12 @@ function circularSectorFallback(
           lastCluster.push(...currentCluster);
           console.log(`🚨 Merged undersized circular sector with previous sector`);
         } else {
-          // Force create cluster even if it doesn't meet sales constraints
-          clusters.push(currentCluster);
-          console.log(`🚨 Force-created circular sector that doesn't meet sales constraints`);
+          // Cannot merge - this means we cannot create valid clusters
+          throw new Error(`Cannot create valid circular sectors that meet sales constraints. Cluster would have GR1=${currentGR1.toLocaleString()} (required: ${MIN_GR1_SALE.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${MIN_GR2_SALE.toLocaleString()})`);
         }
       } else {
-        // First cluster - keep it even if it doesn't meet constraints
-        clusters.push(currentCluster);
-        console.log(`🚨 First circular sector doesn't meet constraints but keeping it`);
+        // First cluster doesn't meet constraints - cannot proceed
+        throw new Error(`Cannot create valid circular sectors that meet sales constraints. First cluster would have GR1=${currentGR1.toLocaleString()} (required: ${MIN_GR1_SALE.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${MIN_GR2_SALE.toLocaleString()})`);
       }
       
       // Start new cluster
@@ -1002,18 +1000,18 @@ function circularSectorFallback(
         lastCluster.push(...currentCluster);
         console.log(`🚨 Added final customers to last circular sector`);
       } else {
-        clusters.push(currentCluster);
-        console.log(`🚨 Created final circular sector that may not meet constraints`);
+        // Cannot merge final cluster - throw error
+        throw new Error(`Cannot create valid circular sectors that meet sales constraints. Final cluster would have GR1=${currentGR1.toLocaleString()} (required: ${MIN_GR1_SALE.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${MIN_GR2_SALE.toLocaleString()})`);
       }
     } else {
-      clusters.push(currentCluster);
-      console.log(`🚨 Only circular sector created - may not meet constraints`);
+      // Only cluster doesn't meet constraints - throw error
+      throw new Error(`Cannot create valid circular sectors that meet sales constraints. Only cluster would have GR1=${currentGR1.toLocaleString()} (required: ${MIN_GR1_SALE.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${MIN_GR2_SALE.toLocaleString()})`);
     }
   }
   
   console.log(`🚨 Circular fallback created ${clusters.length} sectors`);
   
-  // Validate fallback results
+  // Final validation - ensure all clusters meet constraints
   clusters.forEach((cluster, index) => {
     const gr1Total = cluster.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
     const gr2Total = cluster.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
@@ -1021,7 +1019,7 @@ function circularSectorFallback(
     const gr2Valid = gr2Total >= MIN_GR2_SALE;
     
     if (!gr1Valid || !gr2Valid) {
-      console.error(`🚨 CIRCULAR FALLBACK SECTOR ${index} STILL INVALID: GR1=${gr1Total.toLocaleString()} (${gr1Valid ? '✅' : '❌'}), GR2=${gr2Total.toLocaleString()} (${gr2Valid ? '✅' : '❌'})`);
+      throw new Error(`Circular fallback sector ${index} still invalid: GR1=${gr1Total.toLocaleString()} (${gr1Valid ? '✅' : '❌'}), GR2=${gr2Total.toLocaleString()} (${gr2Valid ? '✅' : '❌'}). Cannot proceed with invalid clusters.`);
     }
   });
   
