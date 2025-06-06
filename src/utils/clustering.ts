@@ -17,56 +17,56 @@ export const clusterCustomers = async (
     const TARGET_MIN_SIZE = 180;
     const TARGET_MAX_SIZE = 240;
 
-    console.log(`Starting sales-constrained circular sector clustering for ${customers.length} customers`);
-    console.log(`Constraints: ${TARGET_MIN_SIZE}-${TARGET_MAX_SIZE} outlets, GR1≥${MIN_GR1_SALE.toLocaleString()}, GR2≥${MIN_GR2_SALE.toLocaleString()}`);
+    console.log(`🎯 Starting circular sector clustering from median center for ${customers.length} customers`);
+    console.log(`📊 Constraints: ${TARGET_MIN_SIZE}-${TARGET_MAX_SIZE} outlets, GR1≥${MIN_GR1_SALE.toLocaleString()}, GR2≥${MIN_GR2_SALE.toLocaleString()}`);
 
-    // Step 1: Find the median center point
+    // Step 1: Calculate the median center point as the clustering origin
     const medianCenter = calculateMedianCenter(customers);
-    console.log('Median center:', medianCenter);
+    console.log('📍 Median center calculated:', medianCenter);
 
-    // Step 2: Create initial circular sectors
-    const initialSectors = createCircularSectors(customers, medianCenter, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
-    console.log(`Created ${initialSectors.length} initial circular sectors`);
+    // Step 2: Create circular sectors radiating from median center
+    const circularSectors = createCircularSectorsFromMedian(customers, medianCenter, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
+    console.log(`🔄 Created ${circularSectors.length} circular sectors from median center`);
 
-    // Step 3: Apply sales constraints and rebalance
-    const salesValidatedSectors = applySalesConstraints(initialSectors, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
-    console.log(`Sales validation complete: ${salesValidatedSectors.length} sectors meet sales requirements`);
+    // Step 3: Apply sales constraints while maintaining circular structure
+    const salesValidatedSectors = applySalesConstraintsToSectors(circularSectors, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
+    console.log(`💰 Sales validation complete: ${salesValidatedSectors.length} sectors meet requirements`);
 
-    // Step 4: Final size balancing
-    const balancedSectors = balanceSectorSizes(salesValidatedSectors, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
-    console.log(`Final balancing complete: ${balancedSectors.length} sectors`);
+    // Step 4: Final balancing while preserving circular geometry
+    const balancedSectors = balanceCircularSectors(salesValidatedSectors, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
+    console.log(`⚖️ Circular sector balancing complete: ${balancedSectors.length} sectors`);
 
-    // Step 5: Convert sectors to clusters
-    const clusteredCustomers = convertSectorsToClusters(balancedSectors);
+    // Step 5: Convert sectors to clustered customers
+    const clusteredCustomers = convertSectorsToCustomers(balancedSectors);
 
-    // Step 6: Final validation
-    const validationResult = validateClustering(clusteredCustomers, customers, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
+    // Step 6: Comprehensive validation
+    const validationResult = validateCircularClustering(clusteredCustomers, customers, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
     
     if (!validationResult.isValid) {
-      console.warn(`Validation failed: ${validationResult.message}. Applying fallback...`);
-      return salesConstrainedFallback(customers, medianCenter, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
+      console.warn(`❌ Validation failed: ${validationResult.message}. Applying circular fallback...`);
+      return circularSectorFallback(customers, medianCenter, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
     }
 
     // Step 7: Validate sales constraints
     const salesValidation = validateSalesConstraints(clusteredCustomers);
     if (!salesValidation.isValid) {
-      console.warn(`Sales validation failed: ${salesValidation.message}. Applying sales fallback...`);
-      return salesConstrainedFallback(customers, medianCenter, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
+      console.warn(`💰 Sales validation failed: ${salesValidation.message}. Applying sales-aware fallback...`);
+      return circularSectorFallback(customers, medianCenter, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
     }
 
     const clusterCount = new Set(clusteredCustomers.map(c => c.clusterId)).size;
     const clusterSizes = getClusterSizes(clusteredCustomers);
     
-    console.log(`✅ Sales-constrained clustering result: ${clusterCount} sectors`);
-    console.log('Sector sizes:', clusterSizes);
-    console.log('Sales validation:', salesValidation.details);
+    console.log(`✅ Circular sector clustering successful: ${clusterCount} sectors`);
+    console.log('📏 Sector sizes:', clusterSizes);
+    console.log('💰 Sales validation:', salesValidation.details);
 
     return clusteredCustomers;
 
   } catch (error) {
-    console.warn('Sales-constrained clustering failed, using fallback:', error);
+    console.warn('🚨 Circular sector clustering failed, using fallback:', error);
     const medianCenter = calculateMedianCenter(customers);
-    return salesConstrainedFallback(customers, medianCenter, 180, 240);
+    return circularSectorFallback(customers, medianCenter, 180, 240);
   }
 };
 
@@ -85,6 +85,7 @@ interface CircularSector {
   center: MedianCenter;
   gr1Total: number;
   gr2Total: number;
+  avgRadius: number;
 }
 
 interface SalesValidation {
@@ -94,11 +95,13 @@ interface SalesValidation {
 }
 
 function calculateMedianCenter(customers: Customer[]): MedianCenter {
-  console.log('Calculating median center point...');
+  console.log('📍 Calculating median center as clustering origin...');
   
+  // Sort customers by latitude and longitude separately
   const sortedByLat = [...customers].sort((a, b) => a.latitude - b.latitude);
   const sortedByLng = [...customers].sort((a, b) => a.longitude - b.longitude);
   
+  // Calculate true median for both coordinates
   const medianLat = sortedByLat.length % 2 === 0
     ? (sortedByLat[sortedByLat.length / 2 - 1].latitude + sortedByLat[sortedByLat.length / 2].latitude) / 2
     : sortedByLat[Math.floor(sortedByLat.length / 2)].latitude;
@@ -107,54 +110,61 @@ function calculateMedianCenter(customers: Customer[]): MedianCenter {
     ? (sortedByLng[sortedByLng.length / 2 - 1].longitude + sortedByLng[sortedByLng.length / 2].longitude) / 2
     : sortedByLng[Math.floor(sortedByLng.length / 2)].longitude;
   
-  return {
+  const center = {
     latitude: medianLat,
     longitude: medianLng
   };
+  
+  console.log(`📍 Median center: (${center.latitude.toFixed(6)}, ${center.longitude.toFixed(6)})`);
+  return center;
 }
 
-function createCircularSectors(
+function createCircularSectorsFromMedian(
   customers: Customer[],
   center: MedianCenter,
   minSize: number,
   maxSize: number
 ): CircularSector[] {
-  console.log('Creating circular sectors from median center...');
+  console.log('🔄 Creating circular sectors radiating from median center...');
   
-  const customersWithPolar = customers.map(customer => ({
-    ...customer,
-    distance: calculateDistance(center.latitude, center.longitude, customer.latitude, customer.longitude),
-    angle: calculateAngle(center.latitude, center.longitude, customer.latitude, customer.longitude)
-  }));
+  // Convert all customers to polar coordinates relative to median center
+  const customersWithPolar = customers.map(customer => {
+    const distance = calculateDistance(center.latitude, center.longitude, customer.latitude, customer.longitude);
+    const angle = calculateAngle(center.latitude, center.longitude, customer.latitude, customer.longitude);
+    
+    return {
+      ...customer,
+      distance,
+      angle: normalizeAngle(angle)
+    };
+  });
   
+  // Sort by angle to create proper circular sectors
   customersWithPolar.sort((a, b) => a.angle - b.angle);
   
+  // Calculate optimal number of sectors based on size constraints
   const totalCustomers = customers.length;
-  const optimalSectorCount = Math.ceil(totalCustomers / maxSize);
+  const optimalSectorCount = Math.max(1, Math.ceil(totalCustomers / maxSize));
+  const angleStep = (2 * Math.PI) / optimalSectorCount;
   
-  console.log(`Creating ${optimalSectorCount} sectors with sales constraints`);
+  console.log(`🔄 Creating ${optimalSectorCount} circular sectors with ${angleStep.toFixed(3)} radians per sector`);
   
   const sectors: CircularSector[] = [];
-  const angleStep = (2 * Math.PI) / optimalSectorCount;
   
   for (let i = 0; i < optimalSectorCount; i++) {
     const startAngle = i * angleStep;
-    const endAngle = (i + 1) * angleStep;
+    const endAngle = ((i + 1) * angleStep) % (2 * Math.PI);
     
+    // Filter customers that fall within this angular sector
     const sectorCustomers = customersWithPolar.filter(customer => {
-      let angle = customer.angle;
-      
-      if (startAngle > endAngle) {
-        return angle >= startAngle || angle <= endAngle;
-      } else {
-        return angle >= startAngle && angle <= endAngle;
-      }
+      return isAngleInSector(customer.angle, startAngle, endAngle);
     });
     
     if (sectorCustomers.length > 0) {
       const distances = sectorCustomers.map(c => c.distance);
       const gr1Total = sectorCustomers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
       const gr2Total = sectorCustomers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
+      const avgRadius = distances.reduce((sum, d) => sum + d, 0) / distances.length;
       
       sectors.push({
         id: i,
@@ -165,129 +175,106 @@ function createCircularSectors(
         maxRadius: Math.max(...distances),
         center,
         gr1Total,
-        gr2Total
+        gr2Total,
+        avgRadius
       });
+      
+      console.log(`🔄 Sector ${i}: ${sectorCustomers.length} customers, angles ${startAngle.toFixed(3)}-${endAngle.toFixed(3)}, radius ${avgRadius.toFixed(2)}km`);
     }
   }
   
   return sectors;
 }
 
-function applySalesConstraints(
+function applySalesConstraintsToSectors(
   sectors: CircularSector[],
   minSize: number,
   maxSize: number
 ): CircularSector[] {
-  console.log('Applying sales constraints to sectors...');
+  console.log('💰 Applying sales constraints to circular sectors...');
   
   const validSectors: CircularSector[] = [];
   const invalidSectors: CircularSector[] = [];
   
-  // Separate sectors that meet sales constraints from those that don't
+  // Classify sectors based on sales constraints
   sectors.forEach(sector => {
-    if (sector.gr1Total >= MIN_GR1_SALE && sector.gr2Total >= MIN_GR2_SALE) {
+    const meetsGR1 = sector.gr1Total >= MIN_GR1_SALE;
+    const meetsGR2 = sector.gr2Total >= MIN_GR2_SALE;
+    
+    if (meetsGR1 && meetsGR2) {
       validSectors.push(sector);
-      console.log(`Sector ${sector.id}: ✅ GR1=${sector.gr1Total.toLocaleString()}, GR2=${sector.gr2Total.toLocaleString()}`);
+      console.log(`💰 Sector ${sector.id}: ✅ Sales valid - GR1=${sector.gr1Total.toLocaleString()}, GR2=${sector.gr2Total.toLocaleString()}`);
     } else {
       invalidSectors.push(sector);
-      console.log(`Sector ${sector.id}: ❌ GR1=${sector.gr1Total.toLocaleString()}, GR2=${sector.gr2Total.toLocaleString()}`);
+      console.log(`💰 Sector ${sector.id}: ❌ Sales invalid - GR1=${sector.gr1Total.toLocaleString()}, GR2=${sector.gr2Total.toLocaleString()}`);
     }
   });
   
-  // Redistribute customers from invalid sectors
+  // Redistribute customers from invalid sectors to adjacent valid sectors
   if (invalidSectors.length > 0) {
-    console.log(`Redistributing customers from ${invalidSectors.length} sectors that don't meet sales constraints...`);
+    console.log(`🔄 Redistributing customers from ${invalidSectors.length} sales-invalid sectors...`);
     
-    const unassignedCustomers = invalidSectors.flatMap(sector => sector.customers);
-    
-    // Try to merge invalid sectors with adjacent valid sectors
-    unassignedCustomers.forEach(customer => {
-      let bestSector: CircularSector | null = null;
-      let minDistance = Infinity;
+    invalidSectors.forEach(invalidSector => {
+      const unassignedCustomers = [...invalidSector.customers];
       
-      // Find the nearest valid sector that can accommodate this customer
-      validSectors.forEach(sector => {
-        if (sector.customers.length < maxSize) {
-          const distance = calculateDistance(
-            sector.center.latitude,
-            sector.center.longitude,
-            customer.latitude,
-            customer.longitude
-          );
-          
-          if (distance < minDistance) {
-            minDistance = distance;
-            bestSector = sector;
+      // Find adjacent sectors (by angle) that can accommodate customers
+      unassignedCustomers.forEach(customer => {
+        let bestSector: CircularSector | null = null;
+        let minAngularDistance = Infinity;
+        
+        // Find the closest valid sector by angular distance
+        validSectors.forEach(validSector => {
+          if (validSector.customers.length < maxSize) {
+            const customerAngle = calculateAngle(
+              invalidSector.center.latitude,
+              invalidSector.center.longitude,
+              customer.latitude,
+              customer.longitude
+            );
+            
+            const angularDistance = Math.min(
+              Math.abs(customerAngle - validSector.startAngle),
+              Math.abs(customerAngle - validSector.endAngle),
+              2 * Math.PI - Math.abs(customerAngle - validSector.startAngle),
+              2 * Math.PI - Math.abs(customerAngle - validSector.endAngle)
+            );
+            
+            if (angularDistance < minAngularDistance) {
+              minAngularDistance = angularDistance;
+              bestSector = validSector;
+            }
           }
+        });
+        
+        if (bestSector) {
+          bestSector.customers.push(customer);
+          bestSector.gr1Total += customer.gr1Sale || 0;
+          bestSector.gr2Total += customer.gr2Sale || 0;
+          updateSectorBounds(bestSector);
+          console.log(`🔄 Moved customer ${customer.id} to adjacent sector ${bestSector.id}`);
+        } else {
+          // Create new sector if no existing sector can accommodate
+          const newSector = createNewCircularSector(
+            [customer],
+            invalidSector.center,
+            Math.max(...validSectors.map(s => s.id)) + 1
+          );
+          validSectors.push(newSector);
+          console.log(`🆕 Created new sector ${newSector.id} for unassigned customer`);
         }
       });
-      
-      if (bestSector) {
-        bestSector.customers.push(customer);
-        bestSector.gr1Total += customer.gr1Sale || 0;
-        bestSector.gr2Total += customer.gr2Sale || 0;
-        updateSectorBounds(bestSector);
-      } else {
-        // Create new sector if no existing sector can accommodate
-        const newSector: CircularSector = {
-          id: Math.max(...validSectors.map(s => s.id)) + 1,
-          customers: [customer],
-          startAngle: 0,
-          endAngle: 2 * Math.PI,
-          minRadius: 0,
-          maxRadius: 0,
-          center: sectors[0].center,
-          gr1Total: customer.gr1Sale || 0,
-          gr2Total: customer.gr2Sale || 0
-        };
-        updateSectorBounds(newSector);
-        validSectors.push(newSector);
-      }
     });
   }
   
-  // Now try to merge sectors that still don't meet sales constraints
-  const finalSectors: CircularSector[] = [];
-  let nextSectorId = Math.max(...validSectors.map(s => s.id)) + 1;
-  
-  validSectors.forEach(sector => {
-    if (sector.gr1Total >= MIN_GR1_SALE && sector.gr2Total >= MIN_GR2_SALE) {
-      finalSectors.push(sector);
-    } else {
-      // Try to merge with an existing final sector
-      let merged = false;
-      
-      for (const finalSector of finalSectors) {
-        if (finalSector.customers.length + sector.customers.length <= maxSize) {
-          const combinedGR1 = finalSector.gr1Total + sector.gr1Total;
-          const combinedGR2 = finalSector.gr2Total + sector.gr2Total;
-          
-          if (combinedGR1 >= MIN_GR1_SALE && combinedGR2 >= MIN_GR2_SALE) {
-            finalSector.customers.push(...sector.customers);
-            finalSector.gr1Total = combinedGR1;
-            finalSector.gr2Total = combinedGR2;
-            updateSectorBounds(finalSector);
-            merged = true;
-            break;
-          }
-        }
-      }
-      
-      if (!merged) {
-        finalSectors.push(sector);
-      }
-    }
-  });
-  
-  return finalSectors;
+  return validSectors;
 }
 
-function balanceSectorSizes(
+function balanceCircularSectors(
   sectors: CircularSector[],
   minSize: number,
   maxSize: number
 ): CircularSector[] {
-  console.log('Balancing sector sizes while maintaining sales constraints...');
+  console.log('⚖️ Balancing circular sector sizes while maintaining geometry...');
   
   const balancedSectors: CircularSector[] = [];
   let nextSectorId = Math.max(...sectors.map(s => s.id)) + 1;
@@ -295,20 +282,26 @@ function balanceSectorSizes(
   sectors.forEach(sector => {
     if (sector.customers.length >= minSize && sector.customers.length <= maxSize) {
       balancedSectors.push(sector);
+      console.log(`⚖️ Sector ${sector.id}: Size ${sector.customers.length} - within bounds`);
     } else if (sector.customers.length > maxSize) {
-      const splitSectors = splitOversizedSectorWithSales(sector, maxSize, nextSectorId);
+      // Split oversized sectors while maintaining circular structure
+      const splitSectors = splitCircularSector(sector, maxSize, nextSectorId);
       balancedSectors.push(...splitSectors);
       nextSectorId += splitSectors.length;
+      console.log(`⚖️ Split sector ${sector.id} into ${splitSectors.length} sectors`);
     } else {
+      // Keep undersized sectors for merging
       balancedSectors.push(sector);
+      console.log(`⚖️ Sector ${sector.id}: Size ${sector.customers.length} - undersized, will merge`);
     }
   });
   
-  const finalSectors = mergeUndersizedSectorsWithSales(balancedSectors, minSize, maxSize, nextSectorId);
+  // Merge undersized sectors with adjacent sectors
+  const finalSectors = mergeAdjacentUndersizedSectors(balancedSectors, minSize, maxSize, nextSectorId);
   return finalSectors;
 }
 
-function splitOversizedSectorWithSales(
+function splitCircularSector(
   sector: CircularSector,
   maxSize: number,
   startId: number
@@ -316,48 +309,47 @@ function splitOversizedSectorWithSales(
   const customers = sector.customers;
   const numSplits = Math.ceil(customers.length / maxSize);
   
-  console.log(`Splitting sector ${sector.id} (${customers.length} customers) into ${numSplits} parts with sales validation`);
+  console.log(`🔄 Splitting circular sector ${sector.id} (${customers.length} customers) into ${numSplits} sub-sectors`);
   
-  // Sort customers by sales contribution for balanced splitting
-  const sortedCustomers = [...customers].sort((a, b) => {
-    const aTotal = (a.gr1Sale || 0) + (a.gr2Sale || 0);
-    const bTotal = (b.gr1Sale || 0) + (b.gr2Sale || 0);
-    return bTotal - aTotal; // Descending order
-  });
+  // Sort customers by angle within the sector for proper circular splitting
+  const customersWithAngles = customers.map(customer => ({
+    ...customer,
+    angle: calculateAngle(sector.center.latitude, sector.center.longitude, customer.latitude, customer.longitude)
+  }));
+  
+  customersWithAngles.sort((a, b) => a.angle - b.angle);
   
   const splitSectors: CircularSector[] = [];
   const customersPerSplit = Math.ceil(customers.length / numSplits);
+  const angleRange = sector.endAngle - sector.startAngle;
+  const anglePerSplit = angleRange / numSplits;
   
   for (let i = 0; i < numSplits; i++) {
     const start = i * customersPerSplit;
-    const end = Math.min(start + customersPerSplit, sortedCustomers.length);
-    const splitCustomers = sortedCustomers.slice(start, end);
+    const end = Math.min(start + customersPerSplit, customersWithAngles.length);
+    const splitCustomers = customersWithAngles.slice(start, end);
     
     if (splitCustomers.length > 0) {
-      const gr1Total = splitCustomers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-      const gr2Total = splitCustomers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
+      const subSectorStartAngle = sector.startAngle + (i * anglePerSplit);
+      const subSectorEndAngle = sector.startAngle + ((i + 1) * anglePerSplit);
       
-      const newSector: CircularSector = {
-        id: startId + i,
-        customers: splitCustomers,
-        startAngle: sector.startAngle,
-        endAngle: sector.endAngle,
-        minRadius: 0,
-        maxRadius: 0,
-        center: sector.center,
-        gr1Total,
-        gr2Total
-      };
+      const newSector = createCircularSectorFromCustomers(
+        startId + i,
+        splitCustomers.map(({ angle, ...customer }) => customer),
+        subSectorStartAngle,
+        subSectorEndAngle,
+        sector.center
+      );
       
-      updateSectorBounds(newSector);
       splitSectors.push(newSector);
+      console.log(`🔄 Sub-sector ${newSector.id}: ${newSector.customers.length} customers, angles ${subSectorStartAngle.toFixed(3)}-${subSectorEndAngle.toFixed(3)}`);
     }
   }
   
   return splitSectors;
 }
 
-function mergeUndersizedSectorsWithSales(
+function mergeAdjacentUndersizedSectors(
   sectors: CircularSector[],
   minSize: number,
   maxSize: number,
@@ -370,12 +362,17 @@ function mergeUndersizedSectorsWithSales(
     return sectors;
   }
   
-  console.log(`Merging ${undersizedSectors.length} undersized sectors with sales constraints...`);
+  console.log(`🔄 Merging ${undersizedSectors.length} undersized sectors with adjacent sectors...`);
+  
+  // Sort undersized sectors by angle for proper adjacency
+  undersizedSectors.sort((a, b) => a.startAngle - b.startAngle);
   
   const mergedSectors: CircularSector[] = [...validSectors];
   let currentMerge: Customer[] = [];
   let currentGR1 = 0;
   let currentGR2 = 0;
+  let mergeStartAngle = 0;
+  let mergeEndAngle = 0;
   let sectorId = startId;
   
   undersizedSectors.forEach((sector, index) => {
@@ -384,48 +381,58 @@ function mergeUndersizedSectorsWithSales(
     const potentialSize = currentMerge.length + sector.customers.length;
     
     if (potentialSize <= maxSize) {
+      if (currentMerge.length === 0) {
+        mergeStartAngle = sector.startAngle;
+      }
+      
       currentMerge.push(...sector.customers);
       currentGR1 = potentialGR1;
       currentGR2 = potentialGR2;
+      mergeEndAngle = sector.endAngle;
     } else {
       // Finalize current merge if it meets requirements
       if (currentMerge.length >= minSize && currentGR1 >= MIN_GR1_SALE && currentGR2 >= MIN_GR2_SALE) {
-        const newSector = createSectorFromCustomersWithSales(
+        const mergedSector = createCircularSectorFromCustomers(
           sectorId++,
           currentMerge,
-          0,
-          2 * Math.PI,
-          undersizedSectors[0].center
+          mergeStartAngle,
+          mergeEndAngle,
+          sector.center
         );
-        mergedSectors.push(newSector);
+        mergedSectors.push(mergedSector);
+        console.log(`🔄 Merged sector ${mergedSector.id}: ${mergedSector.customers.length} customers`);
       }
       
       // Start new merge
       currentMerge = [...sector.customers];
       currentGR1 = sector.gr1Total;
       currentGR2 = sector.gr2Total;
+      mergeStartAngle = sector.startAngle;
+      mergeEndAngle = sector.endAngle;
     }
   });
   
   // Handle final merge
   if (currentMerge.length > 0) {
     if (currentMerge.length >= minSize && currentGR1 >= MIN_GR1_SALE && currentGR2 >= MIN_GR2_SALE) {
-      const newSector = createSectorFromCustomersWithSales(
+      const mergedSector = createCircularSectorFromCustomers(
         sectorId++,
         currentMerge,
-        0,
-        2 * Math.PI,
+        mergeStartAngle,
+        mergeEndAngle,
         undersizedSectors[0].center
       );
-      mergedSectors.push(newSector);
+      mergedSectors.push(mergedSector);
+      console.log(`🔄 Final merged sector ${mergedSector.id}: ${mergedSector.customers.length} customers`);
     } else if (mergedSectors.length > 0) {
-      // Try to add to last sector
-      const lastSector = mergedSectors[mergedSectors.length - 1];
-      if (lastSector.customers.length + currentMerge.length <= maxSize) {
-        lastSector.customers.push(...currentMerge);
-        lastSector.gr1Total += currentGR1;
-        lastSector.gr2Total += currentGR2;
-        updateSectorBounds(lastSector);
+      // Add to nearest existing sector
+      const nearestSector = findNearestSectorByAngle(mergedSectors, mergeStartAngle);
+      if (nearestSector && nearestSector.customers.length + currentMerge.length <= maxSize) {
+        nearestSector.customers.push(...currentMerge);
+        nearestSector.gr1Total += currentGR1;
+        nearestSector.gr2Total += currentGR2;
+        updateSectorBounds(nearestSector);
+        console.log(`🔄 Added remaining customers to nearest sector ${nearestSector.id}`);
       }
     }
   }
@@ -433,7 +440,32 @@ function mergeUndersizedSectorsWithSales(
   return mergedSectors;
 }
 
-function createSectorFromCustomersWithSales(
+function createNewCircularSector(
+  customers: Customer[],
+  center: MedianCenter,
+  id: number
+): CircularSector {
+  const gr1Total = customers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
+  const gr2Total = customers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
+  
+  const sector: CircularSector = {
+    id,
+    customers,
+    startAngle: 0,
+    endAngle: 2 * Math.PI,
+    minRadius: 0,
+    maxRadius: 0,
+    center,
+    gr1Total,
+    gr2Total,
+    avgRadius: 0
+  };
+  
+  updateSectorBounds(sector);
+  return sector;
+}
+
+function createCircularSectorFromCustomers(
   id: number,
   customers: Customer[],
   startAngle: number,
@@ -452,7 +484,8 @@ function createSectorFromCustomersWithSales(
     maxRadius: 0,
     center,
     gr1Total,
-    gr2Total
+    gr2Total,
+    avgRadius: 0
   };
   
   updateSectorBounds(sector);
@@ -468,9 +501,32 @@ function updateSectorBounds(sector: CircularSector): void {
   
   sector.minRadius = Math.min(...distances);
   sector.maxRadius = Math.max(...distances);
+  sector.avgRadius = distances.reduce((sum, d) => sum + d, 0) / distances.length;
 }
 
-function convertSectorsToClusters(sectors: CircularSector[]): ClusteredCustomer[] {
+function findNearestSectorByAngle(sectors: CircularSector[], targetAngle: number): CircularSector | null {
+  if (sectors.length === 0) return null;
+  
+  let nearestSector = sectors[0];
+  let minAngularDistance = Infinity;
+  
+  sectors.forEach(sector => {
+    const sectorMidAngle = (sector.startAngle + sector.endAngle) / 2;
+    const angularDistance = Math.min(
+      Math.abs(targetAngle - sectorMidAngle),
+      2 * Math.PI - Math.abs(targetAngle - sectorMidAngle)
+    );
+    
+    if (angularDistance < minAngularDistance) {
+      minAngularDistance = angularDistance;
+      nearestSector = sector;
+    }
+  });
+  
+  return nearestSector;
+}
+
+function convertSectorsToCustomers(sectors: CircularSector[]): ClusteredCustomer[] {
   const clusteredCustomers: ClusteredCustomer[] = [];
   
   sectors.forEach((sector, index) => {
@@ -485,12 +541,13 @@ function convertSectorsToClusters(sectors: CircularSector[]): ClusteredCustomer[
   return clusteredCustomers;
 }
 
-function validateClustering(
+function validateCircularClustering(
   clusteredCustomers: ClusteredCustomer[],
   originalCustomers: Customer[],
   minSize: number,
   maxSize: number
 ): { isValid: boolean; message: string } {
+  // Check customer count
   if (clusteredCustomers.length !== originalCustomers.length) {
     return {
       isValid: false,
@@ -498,15 +555,17 @@ function validateClustering(
     };
   }
   
+  // Check for duplicates
   const customerIds = clusteredCustomers.map(c => c.id);
   const uniqueIds = new Set(customerIds);
   if (customerIds.length !== uniqueIds.size) {
     return {
       isValid: false,
-      message: `Duplicate customers detected`
+      message: `Duplicate customers detected in clustering`
     };
   }
   
+  // Check for missing customers
   const originalIds = new Set(originalCustomers.map(c => c.id));
   const clusteredIds = new Set(clusteredCustomers.map(c => c.id));
   
@@ -514,10 +573,11 @@ function validateClustering(
   if (missingIds.length > 0) {
     return {
       isValid: false,
-      message: `Missing customers: ${missingIds.length} customers not assigned`
+      message: `Missing customers: ${missingIds.length} customers not assigned to any cluster`
     };
   }
   
+  // Check cluster sizes
   const clusterSizes = getClusterSizes(clusteredCustomers);
   const undersizedClusters = clusterSizes.filter(size => size < minSize);
   const oversizedClusters = clusterSizes.filter(size => size > maxSize);
@@ -536,7 +596,7 @@ function validateClustering(
     };
   }
   
-  return { isValid: true, message: 'All validation checks passed' };
+  return { isValid: true, message: 'All circular clustering validation checks passed' };
 }
 
 function validateSalesConstraints(clusteredCustomers: ClusteredCustomer[]): SalesValidation {
@@ -587,27 +647,30 @@ function getClusterSizes(customers: ClusteredCustomer[]): number[] {
   return Array.from(clusterMap.values()).sort((a, b) => a - b);
 }
 
-function salesConstrainedFallback(
+function circularSectorFallback(
   customers: Customer[],
   center: MedianCenter,
   minSize: number,
   maxSize: number
 ): ClusteredCustomer[] {
-  console.log('Applying sales-constrained fallback clustering...');
+  console.log('🚨 Applying circular sector fallback clustering...');
   
-  // Sort customers by total sales (descending) for better distribution
-  const sortedCustomers = [...customers].sort((a, b) => {
-    const aTotal = (a.gr1Sale || 0) + (a.gr2Sale || 0);
-    const bTotal = (b.gr1Sale || 0) + (b.gr2Sale || 0);
-    return bTotal - aTotal;
-  });
+  // Sort customers by angle from median center for circular distribution
+  const customersWithAngles = customers.map(customer => ({
+    ...customer,
+    angle: calculateAngle(center.latitude, center.longitude, customer.latitude, customer.longitude),
+    distance: calculateDistance(center.latitude, center.longitude, customer.latitude, customer.longitude)
+  }));
   
+  customersWithAngles.sort((a, b) => a.angle - b.angle);
+  
+  // Create clusters ensuring both size and sales constraints
   const clusters: Customer[][] = [];
   let currentCluster: Customer[] = [];
   let currentGR1 = 0;
   let currentGR2 = 0;
   
-  sortedCustomers.forEach(customer => {
+  customersWithAngles.forEach(({ angle, distance, ...customer }) => {
     const potentialGR1 = currentGR1 + (customer.gr1Sale || 0);
     const potentialGR2 = currentGR2 + (customer.gr2Sale || 0);
     
@@ -627,6 +690,7 @@ function salesConstrainedFallback(
     }
   });
   
+  // Handle final cluster
   if (currentCluster.length > 0) {
     if (currentCluster.length >= minSize) {
       clusters.push(currentCluster);
@@ -637,6 +701,8 @@ function salesConstrainedFallback(
     }
   }
   
+  console.log(`🚨 Fallback created ${clusters.length} circular sectors`);
+  
   return clusters.flatMap((cluster, clusterIndex) =>
     cluster.map(customer => ({
       ...customer,
@@ -645,8 +711,9 @@ function salesConstrainedFallback(
   );
 }
 
+// Utility functions for circular geometry
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371;
+  const R = 6371; // Earth's radius in kilometers
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   
@@ -670,4 +737,24 @@ function calculateAngle(centerLat: number, centerLon: number, pointLat: number, 
   }
   
   return angle;
+}
+
+function normalizeAngle(angle: number): number {
+  while (angle < 0) angle += 2 * Math.PI;
+  while (angle >= 2 * Math.PI) angle -= 2 * Math.PI;
+  return angle;
+}
+
+function isAngleInSector(angle: number, startAngle: number, endAngle: number): boolean {
+  // Normalize all angles
+  angle = normalizeAngle(angle);
+  startAngle = normalizeAngle(startAngle);
+  endAngle = normalizeAngle(endAngle);
+  
+  if (startAngle <= endAngle) {
+    return angle >= startAngle && angle <= endAngle;
+  } else {
+    // Sector crosses 0 radians
+    return angle >= startAngle || angle <= endAngle;
+  }
 }
