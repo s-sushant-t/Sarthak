@@ -36,6 +36,23 @@ export const clusterCustomers = async (
     // Step 6: Validate non-overlapping nature
     validateNonOverlapping(finalClusters);
 
+    // Step 7: Critical validation - ensure no customers are lost
+    if (finalClusters.length !== customers.length) {
+      console.error(`CRITICAL: Clustering lost customers! Input: ${customers.length}, Output: ${finalClusters.length}`);
+      
+      // Find missing customers
+      const inputIds = new Set(customers.map(c => c.id));
+      const outputIds = new Set(finalClusters.map(c => c.id));
+      const missingIds = Array.from(inputIds).filter(id => !outputIds.has(id));
+      
+      if (missingIds.length > 0) {
+        console.error('Missing customers after clustering:', missingIds);
+      }
+      
+      // Fallback to strict size-based clustering to preserve all customers
+      return strictFallbackClustering(customers, TARGET_MIN_SIZE);
+    }
+
     const clusterCount = new Set(finalClusters.map(c => c.clusterId)).size;
     const clusterSizes = getClusterSizes(finalClusters);
     
@@ -631,14 +648,22 @@ async function splitPartitionIntoValidClusters(
   // Try DBSCAN first
   try {
     const dbscanClusters = await applyDBSCANToPartitionStrict(partition, targetMinSize, targetMaxSize);
-    if (dbscanClusters.length > 0 && dbscanClusters.every(cluster => cluster.length >= targetMinSize)) {
+    
+    // Critical fix: Ensure ALL customers are accounted for
+    const totalCustomersInClusters = dbscanClusters.reduce((sum, cluster) => sum + cluster.length, 0);
+    
+    if (dbscanClusters.length > 0 && 
+        dbscanClusters.every(cluster => cluster.length >= targetMinSize) &&
+        totalCustomersInClusters === customers.length) { // This is the key fix
       return dbscanClusters;
     }
+    
+    console.warn(`DBSCAN failed validation: clusters=${dbscanClusters.length}, total customers in clusters=${totalCustomersInClusters}, original=${customers.length}`);
   } catch (error) {
     console.warn('DBSCAN failed, falling back to even split');
   }
   
-  // Fallback to even split
+  // Fallback to even split which guarantees all customers are included
   return createEvenClusters(customers, optimalClusterCount, customersPerCluster);
 }
 
@@ -703,17 +728,16 @@ async function applyDBSCANToPartitionStrict(
       clusterMap.get(clusterNum)!.push(customers[index]);
     });
     
-    // Filter valid clusters
-    const validClusters = Array.from(clusterMap.values()).filter(cluster => 
-      cluster.length >= targetMinSize && cluster.length <= targetMaxSize
-    );
+    // Filter valid clusters (excluding noise cluster -1)
+    const validClusters = Array.from(clusterMap.entries())
+      .filter(([clusterId, cluster]) => clusterId !== -1 && cluster.length >= targetMinSize && cluster.length <= targetMaxSize)
+      .map(([_, cluster]) => cluster);
     
-    if (validClusters.length > 0) {
-      // Check if we've assigned most customers to valid clusters
-      const assignedCount = validClusters.reduce((sum, cluster) => sum + cluster.length, 0);
-      if (assignedCount >= customers.length * 0.8) { // 80% threshold
-        return validClusters;
-      }
+    // Check if we've assigned ALL customers to valid clusters
+    const assignedCount = validClusters.reduce((sum, cluster) => sum + cluster.length, 0);
+    
+    if (validClusters.length > 0 && assignedCount === customers.length) {
+      return validClusters;
     }
     
     // Adjust parameters
@@ -721,7 +745,7 @@ async function applyDBSCANToPartitionStrict(
     attempts++;
   }
   
-  throw new Error('DBSCAN failed to create valid clusters');
+  throw new Error('DBSCAN failed to create valid clusters that include all customers');
 }
 
 function enforceMinimumClusterSize(
