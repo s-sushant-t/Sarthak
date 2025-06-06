@@ -13,73 +13,46 @@ export const clusterCustomers = async (
     const TARGET_MIN_SIZE = 180; // Enforced minimum
     const TARGET_MAX_SIZE = 210;
 
-    console.log(`Starting clustering for ${customers.length} customers with minimum ${TARGET_MIN_SIZE} outlets per cluster`);
+    console.log(`Starting enhanced non-overlapping clustering for ${customers.length} customers with minimum ${TARGET_MIN_SIZE} outlets per cluster`);
 
     // Step 1: Compute median coordinates as central reference point
     const { medianLat, medianLng } = computeMedianCoordinates(customers);
     console.log(`Central reference point: (${medianLat.toFixed(6)}, ${medianLng.toFixed(6)})`);
 
-    // Step 2: Analyze spatial distribution to determine partitioning strategy
-    const spatialAnalysis = analyzeSpatialDistribution(customers, medianLat, medianLng, TARGET_MIN_SIZE);
-    console.log('Spatial analysis:', spatialAnalysis);
+    // Step 2: Create strictly non-overlapping spatial zones using Voronoi-like partitioning
+    const spatialZones = createStrictNonOverlappingZones(customers, medianLat, medianLng, TARGET_MIN_SIZE);
+    console.log(`Created ${spatialZones.length} strictly non-overlapping spatial zones`);
 
-    // Step 3: Create non-overlapping spatial partitions
-    const partitions = createNonOverlappingSpatialPartitions(customers, medianLat, medianLng, spatialAnalysis);
-    console.log(`Created ${partitions.length} non-overlapping spatial partitions`);
+    // Step 3: Apply density-based clustering within each zone
+    const clusteredCustomers = await clusterWithinZonesStrict(spatialZones, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
 
-    // Step 4: Apply DBSCAN within each partition with strict size enforcement
-    const clusteredCustomers = await clusterWithinPartitionsStrict(partitions, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
+    // Step 4: Enforce strict non-overlap and minimum size constraints
+    const finalClusters = enforceStrictNonOverlapConstraints(clusteredCustomers, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
 
-    // Step 5: Enforce minimum cluster size constraint
-    const finalClusters = enforceMinimumClusterSize(clusteredCustomers, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
-
-    // Step 6: Validate non-overlapping nature
-    validateNonOverlapping(finalClusters);
-
-    // Step 7: Critical validation - ensure no customers are lost
-    if (finalClusters.length !== customers.length) {
-      console.warn(`Clustering incomplete: Input: ${customers.length}, Output: ${finalClusters.length}. Applying fallback recovery...`);
-      
-      // Find missing customers
-      const inputIds = new Set(customers.map(c => c.id));
-      const outputIds = new Set(finalClusters.map(c => c.id));
-      const missingIds = Array.from(inputIds).filter(id => !outputIds.has(id));
-      
-      if (missingIds.length > 0) {
-        console.warn('Missing customers after clustering:', missingIds);
-      }
-      
-      // Fallback to strict size-based clustering to preserve all customers
-      return strictFallbackClustering(customers, TARGET_MIN_SIZE);
+    // Step 5: Validate complete coverage and non-overlap
+    const validationResult = validateCompleteNonOverlappingCoverage(finalClusters, customers);
+    
+    if (!validationResult.isValid) {
+      console.warn(`Validation failed: ${validationResult.message}. Applying strict fallback...`);
+      return strictNonOverlappingFallback(customers, TARGET_MIN_SIZE);
     }
 
     const clusterCount = new Set(finalClusters.map(c => c.clusterId)).size;
     const clusterSizes = getClusterSizes(finalClusters);
     
-    console.log(`Final clustering result: ${clusterCount} clusters`);
+    console.log(`✅ Enhanced clustering result: ${clusterCount} non-overlapping clusters`);
     console.log('Cluster sizes:', clusterSizes);
     console.log('All clusters meet minimum size requirement:', clusterSizes.every(size => size >= TARGET_MIN_SIZE));
 
     return finalClusters;
 
   } catch (error) {
-    console.warn('Enhanced clustering failed, using fallback:', error);
-    // Fallback to strict size-based clustering
-    return strictFallbackClustering(customers, 180);
+    console.warn('Enhanced clustering failed, using strict fallback:', error);
+    return strictNonOverlappingFallback(customers, 180);
   }
 };
 
-interface SpatialAnalysis {
-  spread: number;
-  density: number;
-  aspectRatio: number;
-  outlierThreshold: number;
-  recommendedPartitions: number;
-  partitioningStrategy: 'radial' | 'grid' | 'adaptive';
-  minPartitionSize: number;
-}
-
-interface SpatialPartition {
+interface SpatialZone {
   id: number;
   customers: Customer[];
   bounds: {
@@ -92,7 +65,8 @@ interface SpatialPartition {
     lat: number;
     lng: number;
   };
-  isLocked: boolean; // Prevents overlap
+  isLocked: boolean;
+  boundaryBuffer: number; // Buffer zone to prevent overlap
 }
 
 function computeMedianCoordinates(customers: Customer[]): { medianLat: number; medianLng: number } {
@@ -112,358 +86,284 @@ function getMedian(values: number[]): number {
     : values[mid];
 }
 
-function analyzeSpatialDistribution(
-  customers: Customer[], 
-  medianLat: number, 
-  medianLng: number,
-  minClusterSize: number
-): SpatialAnalysis {
-  // Calculate distances from median point
-  const distances = customers.map(customer => 
-    calculateDistance(medianLat, medianLng, customer.latitude, customer.longitude)
-  );
-  
-  // Calculate spatial spread
-  const maxDistance = Math.max(...distances);
-  const avgDistance = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-  const spread = maxDistance;
-  
-  // Calculate density (customers per square km)
-  const area = Math.PI * Math.pow(maxDistance, 2);
-  const density = customers.length / area;
-  
-  // Calculate aspect ratio (elongation of distribution)
-  const latRange = Math.max(...customers.map(c => c.latitude)) - Math.min(...customers.map(c => c.latitude));
-  const lngRange = Math.max(...customers.map(c => c.longitude)) - Math.min(...customers.map(c => c.longitude));
-  const aspectRatio = Math.max(latRange, lngRange) / Math.min(latRange, lngRange);
-  
-  // Determine outlier threshold (95th percentile of distances)
-  const sortedDistances = [...distances].sort((a, b) => a - b);
-  const outlierThreshold = sortedDistances[Math.floor(sortedDistances.length * 0.95)];
-  
-  // Calculate maximum possible clusters based on minimum size constraint
-  const maxPossibleClusters = Math.floor(customers.length / minClusterSize);
-  
-  // Recommend number of partitions ensuring each can meet minimum size
-  let recommendedPartitions: number;
-  let partitioningStrategy: 'radial' | 'grid' | 'adaptive';
-  
-  if (customers.length < minClusterSize * 2) {
-    // Too few customers for multiple clusters
-    recommendedPartitions = 1;
-    partitioningStrategy = 'adaptive';
-  } else if (aspectRatio > 2.5) {
-    // Elongated distribution - use grid approach
-    const gridSize = Math.ceil(Math.sqrt(maxPossibleClusters));
-    recommendedPartitions = Math.min(gridSize * gridSize, maxPossibleClusters);
-    partitioningStrategy = 'grid';
-  } else if (density > 15) {
-    // High density - use radial sectors
-    recommendedPartitions = Math.min(8, maxPossibleClusters);
-    partitioningStrategy = 'radial';
-  } else {
-    // Adaptive approach for complex distributions
-    recommendedPartitions = Math.min(6, maxPossibleClusters);
-    partitioningStrategy = 'adaptive';
-  }
-  
-  // Ensure we don't create too many partitions
-  recommendedPartitions = Math.max(1, Math.min(recommendedPartitions, maxPossibleClusters));
-  
-  return {
-    spread,
-    density,
-    aspectRatio,
-    outlierThreshold,
-    recommendedPartitions,
-    partitioningStrategy,
-    minPartitionSize: minClusterSize
-  };
-}
-
-function createNonOverlappingSpatialPartitions(
+function createStrictNonOverlappingZones(
   customers: Customer[],
   medianLat: number,
   medianLng: number,
-  analysis: SpatialAnalysis
-): SpatialPartition[] {
-  // Ensure partitions are non-overlapping by using strict boundaries
-  switch (analysis.partitioningStrategy) {
-    case 'radial':
-      return createNonOverlappingRadialPartitions(customers, medianLat, medianLng, analysis);
-    case 'grid':
-      return createNonOverlappingGridPartitions(customers, medianLat, medianLng, analysis);
-    case 'adaptive':
-      return createNonOverlappingAdaptivePartitions(customers, medianLat, medianLng, analysis);
-    default:
-      return createNonOverlappingRadialPartitions(customers, medianLat, medianLng, analysis);
-  }
+  minZoneSize: number
+): SpatialZone[] {
+  console.log('Creating strictly non-overlapping spatial zones...');
+  
+  // Calculate optimal number of zones based on minimum size constraint
+  const maxPossibleZones = Math.floor(customers.length / minZoneSize);
+  const optimalZoneCount = Math.max(1, Math.min(maxPossibleZones, 8)); // Cap at 8 zones for manageability
+  
+  console.log(`Target zones: ${optimalZoneCount} (max possible: ${maxPossibleZones})`);
+  
+  // Use enhanced k-means with strict boundary enforcement
+  return createVoronoiLikeZones(customers, medianLat, medianLng, optimalZoneCount, minZoneSize);
 }
 
-function createNonOverlappingRadialPartitions(
+function createVoronoiLikeZones(
   customers: Customer[],
   medianLat: number,
   medianLng: number,
-  analysis: SpatialAnalysis
-): SpatialPartition[] {
-  const partitions: SpatialPartition[] = [];
-  const sectorCount = analysis.recommendedPartitions;
-  const sectorAngle = (2 * Math.PI) / sectorCount;
+  zoneCount: number,
+  minZoneSize: number
+): SpatialZone[] {
+  const maxIterations = 20;
+  const convergenceThreshold = 0.0001; // ~10 meters
   
-  // Create non-overlapping radial sectors
-  for (let i = 0; i < sectorCount; i++) {
-    const startAngle = i * sectorAngle;
-    const endAngle = (i + 1) * sectorAngle;
-    
-    const sectorCustomers = customers.filter(customer => {
-      const angle = Math.atan2(
-        customer.latitude - medianLat,
-        customer.longitude - medianLng
-      );
-      const normalizedAngle = angle < 0 ? angle + 2 * Math.PI : angle;
-      
-      // Strict boundary check - no overlap
-      return normalizedAngle >= startAngle && normalizedAngle < endAngle;
-    });
-    
-    if (sectorCustomers.length >= analysis.minPartitionSize) {
-      partitions.push(createPartition(i, sectorCustomers, true));
-    }
-  }
+  // Initialize zone centers using k-means++ for better distribution
+  let zoneCenters = initializeZoneCentersKMeansPlusPlus(customers, zoneCount, medianLat, medianLng);
   
-  // Handle customers not assigned to any partition
-  const assignedCustomers = new Set(partitions.flatMap(p => p.customers.map(c => c.id)));
-  const unassignedCustomers = customers.filter(c => !assignedCustomers.has(c.id));
+  let previousCenters = [...zoneCenters];
+  let iteration = 0;
   
-  if (unassignedCustomers.length > 0) {
-    // Assign to nearest partition or create new one if large enough
-    if (unassignedCustomers.length >= analysis.minPartitionSize) {
-      partitions.push(createPartition(partitions.length, unassignedCustomers, true));
-    } else {
-      // Distribute to existing partitions
-      distributeToNearestPartitions(unassignedCustomers, partitions);
-    }
-  }
-  
-  return partitions;
-}
-
-function createNonOverlappingGridPartitions(
-  customers: Customer[],
-  medianLat: number,
-  medianLng: number,
-  analysis: SpatialAnalysis
-): SpatialPartition[] {
-  const partitions: SpatialPartition[] = [];
-  const gridSize = Math.ceil(Math.sqrt(analysis.recommendedPartitions));
-  
-  // Calculate bounds
-  const minLat = Math.min(...customers.map(c => c.latitude));
-  const maxLat = Math.max(...customers.map(c => c.latitude));
-  const minLng = Math.min(...customers.map(c => c.longitude));
-  const maxLng = Math.max(...customers.map(c => c.longitude));
-  
-  const latStep = (maxLat - minLat) / gridSize;
-  const lngStep = (maxLng - minLng) / gridSize;
-  
-  let partitionId = 0;
-  
-  // Create non-overlapping grid cells
-  for (let i = 0; i < gridSize; i++) {
-    for (let j = 0; j < gridSize; j++) {
-      const cellMinLat = minLat + i * latStep;
-      const cellMaxLat = minLat + (i + 1) * latStep;
-      const cellMinLng = minLng + j * lngStep;
-      const cellMaxLng = minLng + (j + 1) * lngStep;
-      
-      const cellCustomers = customers.filter(customer =>
-        customer.latitude >= cellMinLat &&
-        customer.latitude < cellMaxLat &&
-        customer.longitude >= cellMinLng &&
-        customer.longitude < cellMaxLng
-      );
-      
-      if (cellCustomers.length >= analysis.minPartitionSize) {
-        partitions.push(createPartition(partitionId++, cellCustomers, true));
-      }
-    }
-  }
-  
-  // Handle small cells by merging with adjacent cells
-  const assignedCustomers = new Set(partitions.flatMap(p => p.customers.map(c => c.id)));
-  const unassignedCustomers = customers.filter(c => !assignedCustomers.has(c.id));
-  
-  if (unassignedCustomers.length > 0) {
-    if (unassignedCustomers.length >= analysis.minPartitionSize) {
-      partitions.push(createPartition(partitionId, unassignedCustomers, true));
-    } else {
-      distributeToNearestPartitions(unassignedCustomers, partitions);
-    }
-  }
-  
-  return partitions;
-}
-
-function createNonOverlappingAdaptivePartitions(
-  customers: Customer[],
-  medianLat: number,
-  medianLng: number,
-  analysis: SpatialAnalysis
-): SpatialPartition[] {
-  // Use modified k-means with minimum size constraints
-  const k = analysis.recommendedPartitions;
-  const maxIterations = 15;
-  const minPartitionSize = analysis.minPartitionSize;
-  
-  // Initialize centroids using k-means++
-  let centroids = initializeRandomCentroids(customers, k);
-  
-  for (let iteration = 0; iteration < maxIterations; iteration++) {
-    // Assign customers to nearest centroid
+  while (iteration < maxIterations) {
+    // Assign customers to nearest zone center (Voronoi assignment)
     const assignments = customers.map(customer => {
-      let nearestCentroid = 0;
+      let nearestZone = 0;
       let minDistance = Infinity;
       
-      centroids.forEach((centroid, index) => {
+      zoneCenters.forEach((center, index) => {
         const distance = calculateDistance(
           customer.latitude, customer.longitude,
-          centroid.lat, centroid.lng
+          center.lat, center.lng
         );
         if (distance < minDistance) {
           minDistance = distance;
-          nearestCentroid = index;
+          nearestZone = index;
         }
       });
       
-      return nearestCentroid;
+      return nearestZone;
     });
     
-    // Check partition sizes and redistribute if necessary
-    const partitionSizes = new Array(k).fill(0);
-    assignments.forEach(assignment => partitionSizes[assignment]++);
+    // Check zone sizes and enforce minimum size constraint
+    const zoneSizes = new Array(zoneCount).fill(0);
+    assignments.forEach(assignment => zoneSizes[assignment]++);
     
-    // Redistribute customers from oversized partitions to undersized ones
-    const redistributedAssignments = redistributeForMinimumSize(
-      customers, assignments, partitionSizes, minPartitionSize
+    // Redistribute customers to ensure minimum zone sizes
+    const balancedAssignments = enforceMinimumZoneSizes(
+      customers, assignments, zoneSizes, minZoneSize
     );
     
-    // Update centroids based on redistributed assignments
-    const newCentroids = centroids.map((_, index) => {
-      const assignedCustomers = customers.filter((_, i) => redistributedAssignments[i] === index);
-      if (assignedCustomers.length === 0) return centroids[index];
+    // Update zone centers based on balanced assignments
+    zoneCenters = zoneCenters.map((_, index) => {
+      const zoneCustomers = customers.filter((_, i) => balancedAssignments[i] === index);
+      if (zoneCustomers.length === 0) return zoneCenters[index];
       
-      const avgLat = assignedCustomers.reduce((sum, c) => sum + c.latitude, 0) / assignedCustomers.length;
-      const avgLng = assignedCustomers.reduce((sum, c) => sum + c.longitude, 0) / assignedCustomers.length;
+      const avgLat = zoneCustomers.reduce((sum, c) => sum + c.latitude, 0) / zoneCustomers.length;
+      const avgLng = zoneCustomers.reduce((sum, c) => sum + c.longitude, 0) / zoneCustomers.length;
       
       return { lat: avgLat, lng: avgLng };
     });
     
     // Check for convergence
-    const converged = centroids.every((centroid, index) => {
+    const converged = zoneCenters.every((center, index) => {
       const distance = calculateDistance(
-        centroid.lat, centroid.lng,
-        newCentroids[index].lat, newCentroids[index].lng
+        center.lat, center.lng,
+        previousCenters[index].lat, previousCenters[index].lng
       );
-      return distance < 0.001; // 1 meter threshold
+      return distance < convergenceThreshold;
     });
     
-    centroids = newCentroids;
+    if (converged) {
+      console.log(`Zone creation converged after ${iteration + 1} iterations`);
+      break;
+    }
     
-    if (converged) break;
+    previousCenters = [...zoneCenters];
+    iteration++;
   }
   
-  // Create final partitions with strict non-overlap
+  // Create final zones with strict boundaries
   const finalAssignments = customers.map(customer => {
-    let nearestCentroid = 0;
+    let nearestZone = 0;
     let minDistance = Infinity;
     
-    centroids.forEach((centroid, index) => {
+    zoneCenters.forEach((center, index) => {
       const distance = calculateDistance(
         customer.latitude, customer.longitude,
-        centroid.lat, centroid.lng
+        center.lat, center.lng
       );
       if (distance < minDistance) {
         minDistance = distance;
-        nearestCentroid = index;
+        nearestZone = index;
       }
     });
     
-    return nearestCentroid;
+    return nearestZone;
   });
   
-  const partitions: SpatialPartition[] = [];
+  // Build zones with buffer zones to prevent overlap
+  const zones: SpatialZone[] = [];
+  const bufferDistance = 0.1; // 100 meter buffer between zones
   
-  centroids.forEach((centroid, index) => {
-    const partitionCustomers = customers.filter((_, i) => finalAssignments[i] === index);
+  zoneCenters.forEach((center, index) => {
+    const zoneCustomers = customers.filter((_, i) => finalAssignments[i] === index);
     
-    if (partitionCustomers.length >= minPartitionSize) {
-      partitions.push(createPartition(index, partitionCustomers, true));
+    if (zoneCustomers.length >= minZoneSize) {
+      zones.push(createZoneWithBuffer(index, zoneCustomers, bufferDistance));
     }
   });
   
-  return partitions;
+  // Handle any remaining customers not in valid zones
+  const assignedCustomers = new Set(zones.flatMap(z => z.customers.map(c => c.id)));
+  const unassignedCustomers = customers.filter(c => !assignedCustomers.has(c.id));
+  
+  if (unassignedCustomers.length > 0) {
+    console.log(`Handling ${unassignedCustomers.length} unassigned customers...`);
+    
+    if (unassignedCustomers.length >= minZoneSize) {
+      // Create new zone for unassigned customers
+      zones.push(createZoneWithBuffer(zones.length, unassignedCustomers, bufferDistance));
+    } else {
+      // Distribute to nearest zones while maintaining non-overlap
+      distributeToNearestZonesWithoutOverlap(unassignedCustomers, zones);
+    }
+  }
+  
+  return zones;
 }
 
-function redistributeForMinimumSize(
+function initializeZoneCentersKMeansPlusPlus(
+  customers: Customer[],
+  k: number,
+  medianLat: number,
+  medianLng: number
+): { lat: number; lng: number }[] {
+  const centers: { lat: number; lng: number }[] = [];
+  
+  // Start with median point as first center
+  centers.push({ lat: medianLat, lng: medianLng });
+  
+  // Use k-means++ for remaining centers
+  for (let i = 1; i < k; i++) {
+    const distances = customers.map(customer => {
+      let minDistance = Infinity;
+      centers.forEach(center => {
+        const distance = calculateDistance(
+          customer.latitude, customer.longitude,
+          center.lat, center.lng
+        );
+        minDistance = Math.min(minDistance, distance);
+      });
+      return minDistance * minDistance; // Square for k-means++
+    });
+    
+    const totalDistance = distances.reduce((sum, d) => sum + d, 0);
+    const random = Math.random() * totalDistance;
+    
+    let cumulativeDistance = 0;
+    for (let j = 0; j < customers.length; j++) {
+      cumulativeDistance += distances[j];
+      if (cumulativeDistance >= random) {
+        centers.push({ lat: customers[j].latitude, lng: customers[j].longitude });
+        break;
+      }
+    }
+  }
+  
+  return centers;
+}
+
+function enforceMinimumZoneSizes(
   customers: Customer[],
   assignments: number[],
-  partitionSizes: number[],
-  minPartitionSize: number
+  zoneSizes: number[],
+  minZoneSize: number
 ): number[] {
-  const redistributed = [...assignments];
+  const balancedAssignments = [...assignments];
   
-  // Find undersized and oversized partitions
-  const undersized = partitionSizes
-    .map((size, index) => ({ index, size, deficit: minPartitionSize - size }))
-    .filter(p => p.deficit > 0);
+  // Find undersized and oversized zones
+  const undersized = zoneSizes
+    .map((size, index) => ({ index, size, deficit: minZoneSize - size }))
+    .filter(z => z.deficit > 0)
+    .sort((a, b) => b.deficit - a.deficit); // Prioritize zones with larger deficits
   
-  const oversized = partitionSizes
-    .map((size, index) => ({ index, size, surplus: size - minPartitionSize }))
-    .filter(p => p.surplus > 0);
+  const oversized = zoneSizes
+    .map((size, index) => ({ index, size, surplus: size - minZoneSize }))
+    .filter(z => z.surplus > 0)
+    .sort((a, b) => b.surplus - a.surplus); // Prioritize zones with larger surplus
   
-  // Redistribute from oversized to undersized
+  // Redistribute from oversized to undersized zones
   for (const under of undersized) {
     let needed = under.deficit;
     
     for (const over of oversized) {
       if (needed <= 0 || over.surplus <= 0) continue;
       
-      // Find customers in oversized partition closest to undersized partition centroid
+      // Find customers in oversized zone that are closest to undersized zone
       const oversizedCustomers = customers
         .map((customer, index) => ({ customer, index }))
-        .filter(({ index }) => redistributed[index] === over.index);
+        .filter(({ index }) => balancedAssignments[index] === over.index);
       
       const undersizedCustomers = customers
-        .filter((_, index) => redistributed[index] === under.index);
+        .filter((_, index) => balancedAssignments[index] === under.index);
       
-      if (undersizedCustomers.length === 0) continue;
-      
-      const underCentroid = calculateCentroid(undersizedCustomers);
-      
-      // Sort by distance to undersized centroid
-      oversizedCustomers.sort((a, b) => {
-        const distA = calculateDistance(
-          a.customer.latitude, a.customer.longitude,
-          underCentroid.lat, underCentroid.lng
-        );
-        const distB = calculateDistance(
-          b.customer.latitude, b.customer.longitude,
-          underCentroid.lat, underCentroid.lng
-        );
-        return distA - distB;
-      });
+      if (undersizedCustomers.length === 0) {
+        // If undersized zone is empty, use zone center
+        const underCenter = calculateZoneCenter(customers, balancedAssignments, under.index);
+        
+        // Sort by distance to undersized zone center
+        oversizedCustomers.sort((a, b) => {
+          const distA = calculateDistance(
+            a.customer.latitude, a.customer.longitude,
+            underCenter.lat, underCenter.lng
+          );
+          const distB = calculateDistance(
+            b.customer.latitude, b.customer.longitude,
+            underCenter.lat, underCenter.lng
+          );
+          return distA - distB;
+        });
+      } else {
+        // Sort by distance to undersized zone centroid
+        const underCentroid = calculateCentroid(undersizedCustomers);
+        
+        oversizedCustomers.sort((a, b) => {
+          const distA = calculateDistance(
+            a.customer.latitude, a.customer.longitude,
+            underCentroid.lat, underCentroid.lng
+          );
+          const distB = calculateDistance(
+            b.customer.latitude, b.customer.longitude,
+            underCentroid.lat, underCentroid.lng
+          );
+          return distA - distB;
+        });
+      }
       
       // Transfer closest customers
       const toTransfer = Math.min(needed, over.surplus);
       for (let i = 0; i < toTransfer; i++) {
-        redistributed[oversizedCustomers[i].index] = under.index;
-        needed--;
-        over.surplus--;
+        if (oversizedCustomers[i]) {
+          balancedAssignments[oversizedCustomers[i].index] = under.index;
+          needed--;
+          over.surplus--;
+        }
       }
     }
   }
   
-  return redistributed;
+  return balancedAssignments;
+}
+
+function calculateZoneCenter(
+  customers: Customer[],
+  assignments: number[],
+  zoneIndex: number
+): { lat: number; lng: number } {
+  const zoneCustomers = customers.filter((_, i) => assignments[i] === zoneIndex);
+  
+  if (zoneCustomers.length === 0) {
+    // Return a default center if zone is empty
+    return { lat: 0, lng: 0 };
+  }
+  
+  return calculateCentroid(zoneCustomers);
 }
 
 function calculateCentroid(customers: Customer[]): { lat: number; lng: number } {
@@ -472,83 +372,11 @@ function calculateCentroid(customers: Customer[]): { lat: number; lng: number } 
   return { lat: avgLat, lng: avgLng };
 }
 
-function distributeToNearestPartitions(unassignedCustomers: Customer[], partitions: SpatialPartition[]): void {
-  unassignedCustomers.forEach(customer => {
-    let nearestPartition = partitions[0];
-    let minDistance = Infinity;
-    
-    partitions.forEach(partition => {
-      const distance = calculateDistance(
-        customer.latitude, customer.longitude,
-        partition.center.lat, partition.center.lng
-      );
-      
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearestPartition = partition;
-      }
-    });
-    
-    nearestPartition.customers.push(customer);
-    // Update partition bounds and center
-    updatePartitionBounds(nearestPartition);
-  });
-}
-
-function updatePartitionBounds(partition: SpatialPartition): void {
-  const lats = partition.customers.map(c => c.latitude);
-  const lngs = partition.customers.map(c => c.longitude);
-  
-  partition.bounds = {
-    minLat: Math.min(...lats),
-    maxLat: Math.max(...lats),
-    minLng: Math.min(...lngs),
-    maxLng: Math.max(...lngs)
-  };
-  
-  partition.center = {
-    lat: lats.reduce((sum, lat) => sum + lat, 0) / lats.length,
-    lng: lngs.reduce((sum, lng) => sum + lng, 0) / lngs.length
-  };
-}
-
-function initializeRandomCentroids(customers: Customer[], k: number): { lat: number; lng: number }[] {
-  const centroids: { lat: number; lng: number }[] = [];
-  
-  // Use k-means++ initialization for better initial placement
-  const firstCustomer = customers[Math.floor(Math.random() * customers.length)];
-  centroids.push({ lat: firstCustomer.latitude, lng: firstCustomer.longitude });
-  
-  for (let i = 1; i < k; i++) {
-    const distances = customers.map(customer => {
-      let minDistance = Infinity;
-      centroids.forEach(centroid => {
-        const distance = calculateDistance(
-          customer.latitude, customer.longitude,
-          centroid.lat, centroid.lng
-        );
-        minDistance = Math.min(minDistance, distance);
-      });
-      return minDistance;
-    });
-    
-    const totalDistance = distances.reduce((sum, d) => sum + d * d, 0);
-    const random = Math.random() * totalDistance;
-    
-    let cumulativeDistance = 0;
-    for (let j = 0; j < customers.length; j++) {
-      cumulativeDistance += distances[j] * distances[j];
-      if (cumulativeDistance >= random) {
-        centroids.push({ lat: customers[j].latitude, lng: customers[j].longitude });
-        break;
-      }
-    }
-  }
-  
-  return centroids;
-}
-
-function createPartition(id: number, customers: Customer[], isLocked: boolean = false): SpatialPartition {
+function createZoneWithBuffer(
+  id: number,
+  customers: Customer[],
+  bufferDistance: number
+): SpatialZone {
   const lats = customers.map(c => c.latitude);
   const lngs = customers.map(c => c.longitude);
   
@@ -556,43 +384,86 @@ function createPartition(id: number, customers: Customer[], isLocked: boolean = 
     id,
     customers,
     bounds: {
-      minLat: Math.min(...lats),
-      maxLat: Math.max(...lats),
-      minLng: Math.min(...lngs),
-      maxLng: Math.max(...lngs)
+      minLat: Math.min(...lats) - bufferDistance,
+      maxLat: Math.max(...lats) + bufferDistance,
+      minLng: Math.min(...lngs) - bufferDistance,
+      maxLng: Math.max(...lngs) + bufferDistance
     },
     center: {
       lat: lats.reduce((sum, lat) => sum + lat, 0) / lats.length,
       lng: lngs.reduce((sum, lng) => sum + lng, 0) / lngs.length
     },
-    isLocked
+    isLocked: true,
+    boundaryBuffer: bufferDistance
   };
 }
 
-async function clusterWithinPartitionsStrict(
-  partitions: SpatialPartition[],
+function distributeToNearestZonesWithoutOverlap(
+  unassignedCustomers: Customer[],
+  zones: SpatialZone[]
+): void {
+  unassignedCustomers.forEach(customer => {
+    let nearestZone = zones[0];
+    let minDistance = Infinity;
+    
+    zones.forEach(zone => {
+      const distance = calculateDistance(
+        customer.latitude, customer.longitude,
+        zone.center.lat, zone.center.lng
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearestZone = zone;
+      }
+    });
+    
+    nearestZone.customers.push(customer);
+    updateZoneBounds(nearestZone);
+  });
+}
+
+function updateZoneBounds(zone: SpatialZone): void {
+  const lats = zone.customers.map(c => c.latitude);
+  const lngs = zone.customers.map(c => c.longitude);
+  
+  zone.bounds = {
+    minLat: Math.min(...lats) - zone.boundaryBuffer,
+    maxLat: Math.max(...lats) + zone.boundaryBuffer,
+    minLng: Math.min(...lngs) - zone.boundaryBuffer,
+    maxLng: Math.max(...lngs) + zone.boundaryBuffer
+  };
+  
+  zone.center = {
+    lat: lats.reduce((sum, lat) => sum + lat, 0) / lats.length,
+    lng: lngs.reduce((sum, lng) => sum + lng, 0) / lngs.length
+  };
+}
+
+async function clusterWithinZonesStrict(
+  zones: SpatialZone[],
   targetMinSize: number,
   targetMaxSize: number
 ): Promise<ClusteredCustomer[]> {
   const clusteredCustomers: ClusteredCustomer[] = [];
   let globalClusterId = 0;
   
-  for (const partition of partitions) {
-    console.log(`Processing partition ${partition.id} with ${partition.customers.length} customers`);
+  for (const zone of zones) {
+    console.log(`Processing zone ${zone.id} with ${zone.customers.length} customers`);
     
-    if (partition.customers.length >= targetMinSize && partition.customers.length <= targetMaxSize) {
-      // Partition is already optimal size - treat as single cluster
-      partition.customers.forEach(customer => {
+    if (zone.customers.length >= targetMinSize && zone.customers.length <= targetMaxSize) {
+      // Zone is optimal size - treat as single cluster
+      zone.customers.forEach(customer => {
         clusteredCustomers.push({
           ...customer,
           clusterId: globalClusterId
         });
       });
       globalClusterId++;
-    } else if (partition.customers.length < targetMinSize) {
-      // Partition too small - this should be handled in partition creation
-      console.warn(`Partition ${partition.id} has only ${partition.customers.length} customers (< ${targetMinSize})`);
-      partition.customers.forEach(customer => {
+    } else if (zone.customers.length < targetMinSize) {
+      // This should not happen due to zone creation constraints
+      console.warn(`Zone ${zone.id} has only ${zone.customers.length} customers (< ${targetMinSize})`);
+      zone.customers.forEach(customer => {
         clusteredCustomers.push({
           ...customer,
           clusterId: globalClusterId
@@ -600,10 +471,10 @@ async function clusterWithinPartitionsStrict(
       });
       globalClusterId++;
     } else {
-      // Large partition - split into multiple clusters
-      const partitionClusters = await splitPartitionIntoValidClusters(partition, targetMinSize, targetMaxSize);
+      // Large zone - split into multiple non-overlapping clusters
+      const zoneClusters = await splitZoneIntoNonOverlappingClusters(zone, targetMinSize, targetMaxSize);
       
-      partitionClusters.forEach(cluster => {
+      zoneClusters.forEach(cluster => {
         cluster.forEach(customer => {
           clusteredCustomers.push({
             ...customer,
@@ -621,134 +492,93 @@ async function clusterWithinPartitionsStrict(
   return clusteredCustomers;
 }
 
-async function splitPartitionIntoValidClusters(
-  partition: SpatialPartition,
+async function splitZoneIntoNonOverlappingClusters(
+  zone: SpatialZone,
   targetMinSize: number,
   targetMaxSize: number
 ): Promise<Customer[][]> {
-  const customers = partition.customers;
+  const customers = zone.customers;
   
-  // Calculate optimal number of clusters
-  const optimalClusterCount = Math.ceil(customers.length / targetMaxSize);
-  const customersPerCluster = Math.ceil(customers.length / optimalClusterCount);
+  // Calculate optimal number of clusters ensuring minimum size
+  const maxClusters = Math.floor(customers.length / targetMinSize);
+  const optimalClusterCount = Math.min(maxClusters, Math.ceil(customers.length / targetMaxSize));
   
-  // Ensure each cluster meets minimum size
-  if (customersPerCluster < targetMinSize) {
-    // Reduce cluster count to meet minimum size requirement
-    const adjustedClusterCount = Math.floor(customers.length / targetMinSize);
-    if (adjustedClusterCount === 0) {
-      // Return as single cluster if we can't meet minimum
-      return [customers];
-    }
-    
-    const adjustedCustomersPerCluster = Math.ceil(customers.length / adjustedClusterCount);
-    return createEvenClusters(customers, adjustedClusterCount, adjustedCustomersPerCluster);
+  if (optimalClusterCount <= 1) {
+    return [customers];
   }
   
-  // Try DBSCAN first
-  try {
-    const dbscanClusters = await applyDBSCANToPartitionStrict(partition, targetMinSize, targetMaxSize);
-    
-    // Critical fix: Ensure ALL customers are accounted for
-    const totalCustomersInClusters = dbscanClusters.reduce((sum, cluster) => sum + cluster.length, 0);
-    
-    if (dbscanClusters.length > 0 && 
-        dbscanClusters.every(cluster => cluster.length >= targetMinSize) &&
-        totalCustomersInClusters === customers.length) { // This is the key fix
-      return dbscanClusters;
-    }
-    
-    console.warn(`DBSCAN failed validation: clusters=${dbscanClusters.length}, total customers in clusters=${totalCustomersInClusters}, original=${customers.length}`);
-  } catch (error) {
-    console.warn('DBSCAN failed, falling back to even split');
-  }
-  
-  // Fallback to even split which guarantees all customers are included
-  return createEvenClusters(customers, optimalClusterCount, customersPerCluster);
+  // Use spatial sorting to create geographically coherent, non-overlapping clusters
+  return createSpatiallyCoherentClusters(customers, optimalClusterCount, targetMinSize);
 }
 
-function createEvenClusters(customers: Customer[], clusterCount: number, customersPerCluster: number): Customer[][] {
-  const clusters: Customer[][] = [];
-  
-  // Sort customers geographically for better coherence
+function createSpatiallyCoherentClusters(
+  customers: Customer[],
+  clusterCount: number,
+  minSize: number
+): Customer[][] {
+  // Sort customers using space-filling curve (Z-order/Morton order) for spatial coherence
   const sortedCustomers = [...customers].sort((a, b) => {
-    // Sort by latitude first, then longitude
-    if (Math.abs(a.latitude - b.latitude) > 0.001) {
-      return a.latitude - b.latitude;
-    }
-    return a.longitude - b.longitude;
+    // Normalize coordinates to [0, 1] range
+    const minLat = Math.min(...customers.map(c => c.latitude));
+    const maxLat = Math.max(...customers.map(c => c.latitude));
+    const minLng = Math.min(...customers.map(c => c.longitude));
+    const maxLng = Math.max(...customers.map(c => c.longitude));
+    
+    const normLatA = (a.latitude - minLat) / (maxLat - minLat);
+    const normLngA = (a.longitude - minLng) / (maxLng - minLng);
+    const normLatB = (b.latitude - minLat) / (maxLat - minLat);
+    const normLngB = (b.longitude - minLng) / (maxLng - minLng);
+    
+    // Calculate Morton codes for spatial ordering
+    const mortonA = calculateMortonCode(normLatA, normLngA);
+    const mortonB = calculateMortonCode(normLatB, normLngB);
+    
+    return mortonA - mortonB;
   });
   
+  // Create clusters with guaranteed minimum size
+  const clusters: Customer[][] = [];
+  const customersPerCluster = Math.floor(sortedCustomers.length / clusterCount);
+  const remainder = sortedCustomers.length % clusterCount;
+  
+  let currentIndex = 0;
+  
   for (let i = 0; i < clusterCount; i++) {
-    const start = i * customersPerCluster;
-    const end = Math.min(start + customersPerCluster, sortedCustomers.length);
+    const clusterSize = customersPerCluster + (i < remainder ? 1 : 0);
+    const cluster = sortedCustomers.slice(currentIndex, currentIndex + clusterSize);
     
-    if (start < sortedCustomers.length) {
-      clusters.push(sortedCustomers.slice(start, end));
+    // Ensure minimum size constraint
+    if (cluster.length >= minSize || i === clusterCount - 1) {
+      clusters.push(cluster);
+    } else {
+      // Merge with previous cluster if too small
+      if (clusters.length > 0) {
+        clusters[clusters.length - 1].push(...cluster);
+      } else {
+        clusters.push(cluster);
+      }
     }
+    
+    currentIndex += clusterSize;
   }
   
   return clusters;
 }
 
-async function applyDBSCANToPartitionStrict(
-  partition: SpatialPartition,
-  targetMinSize: number,
-  targetMaxSize: number
-): Promise<Customer[][]> {
-  const customers = partition.customers;
-  let maxDistance = 1.5; // Start with 1.5km radius
-  let attempts = 0;
-  const MAX_ATTEMPTS = 3;
+function calculateMortonCode(x: number, y: number): number {
+  // Simple Morton code calculation for 2D spatial ordering
+  const intX = Math.floor(x * 1024) & 0x3FF; // 10 bits
+  const intY = Math.floor(y * 1024) & 0x3FF; // 10 bits
   
-  while (attempts < MAX_ATTEMPTS) {
-    // Convert to GeoJSON points
-    const points = customers.map(customer => 
-      point([customer.longitude, customer.latitude], { 
-        customerId: customer.id 
-      })
-    );
-    
-    const pointCollection = featureCollection(points);
-    
-    // Apply DBSCAN
-    const clustered = clustersDbscan(pointCollection, maxDistance, {
-      minPoints: Math.max(5, Math.floor(targetMinSize * 0.1)),
-      units: 'kilometers'
-    });
-    
-    // Group by cluster
-    const clusterMap = new Map<number, Customer[]>();
-    
-    clustered.features.forEach((feature, index) => {
-      const clusterNum = feature.properties?.cluster ?? -1;
-      if (!clusterMap.has(clusterNum)) {
-        clusterMap.set(clusterNum, []);
-      }
-      clusterMap.get(clusterNum)!.push(customers[index]);
-    });
-    
-    // Filter valid clusters (excluding noise cluster -1)
-    const validClusters = Array.from(clusterMap.entries())
-      .filter(([clusterId, cluster]) => clusterId !== -1 && cluster.length >= targetMinSize && cluster.length <= targetMaxSize)
-      .map(([_, cluster]) => cluster);
-    
-    // Check if we've assigned ALL customers to valid clusters
-    const assignedCount = validClusters.reduce((sum, cluster) => sum + cluster.length, 0);
-    
-    if (validClusters.length > 0 && assignedCount === customers.length) {
-      return validClusters;
-    }
-    
-    // Adjust parameters
-    maxDistance *= 1.3;
-    attempts++;
+  let morton = 0;
+  for (let i = 0; i < 10; i++) {
+    morton |= ((intX & (1 << i)) << i) | ((intY & (1 << i)) << (i + 1));
   }
   
-  throw new Error('DBSCAN failed to create valid clusters that include all customers');
+  return morton;
 }
 
-function enforceMinimumClusterSize(
+function enforceStrictNonOverlapConstraints(
   customers: ClusteredCustomer[],
   targetMinSize: number,
   targetMaxSize: number
@@ -769,7 +599,7 @@ function enforceMinimumClusterSize(
   const clusters = Array.from(clusterMap.values());
   const smallClusters: ClusteredCustomer[][] = [];
   
-  // Process clusters
+  // Process clusters with strict constraints
   clusters.forEach(cluster => {
     if (cluster.length >= targetMinSize && cluster.length <= targetMaxSize) {
       // Cluster meets requirements
@@ -784,8 +614,8 @@ function enforceMinimumClusterSize(
       // Store small clusters for merging
       smallClusters.push(cluster);
     } else {
-      // Split large cluster
-      const subClusters = splitLargeCluster(cluster, targetMinSize, targetMaxSize);
+      // Split large cluster using spatial coherence
+      const subClusters = splitLargeClusterSpatially(cluster, targetMinSize, targetMaxSize);
       subClusters.forEach(subCluster => {
         subCluster.forEach(customer => {
           optimizedCustomers.push({
@@ -798,8 +628,8 @@ function enforceMinimumClusterSize(
     }
   });
   
-  // Merge small clusters
-  const mergedClusters = mergeSmallClusters(smallClusters, targetMinSize, targetMaxSize);
+  // Merge small clusters with spatial awareness
+  const mergedClusters = mergeSmallClustersSpatially(smallClusters, targetMinSize, targetMaxSize);
   mergedClusters.forEach(mergedCluster => {
     mergedCluster.forEach(customer => {
       optimizedCustomers.push({
@@ -813,41 +643,22 @@ function enforceMinimumClusterSize(
   return optimizedCustomers;
 }
 
-function splitLargeCluster(
+function splitLargeClusterSpatially(
   cluster: ClusteredCustomer[],
   targetMinSize: number,
   targetMaxSize: number
 ): ClusteredCustomer[][] {
-  const subClusterCount = Math.ceil(cluster.length / targetMaxSize);
-  const customersPerSubCluster = Math.ceil(cluster.length / subClusterCount);
+  const maxSubClusters = Math.floor(cluster.length / targetMinSize);
+  const optimalSubClusters = Math.min(maxSubClusters, Math.ceil(cluster.length / targetMaxSize));
   
-  // Ensure each sub-cluster meets minimum size
-  const adjustedSubClusterCount = Math.max(1, Math.floor(cluster.length / targetMinSize));
-  const adjustedCustomersPerSubCluster = Math.ceil(cluster.length / adjustedSubClusterCount);
-  
-  const subClusters: ClusteredCustomer[][] = [];
-  
-  // Sort customers geographically within cluster
-  const sortedCluster = [...cluster].sort((a, b) => {
-    if (Math.abs(a.latitude - b.latitude) > 0.001) {
-      return a.latitude - b.latitude;
-    }
-    return a.longitude - b.longitude;
-  });
-  
-  for (let i = 0; i < adjustedSubClusterCount; i++) {
-    const start = i * adjustedCustomersPerSubCluster;
-    const end = Math.min(start + adjustedCustomersPerSubCluster, sortedCluster.length);
-    
-    if (start < sortedCluster.length) {
-      subClusters.push(sortedCluster.slice(start, end));
-    }
+  if (optimalSubClusters <= 1) {
+    return [cluster];
   }
   
-  return subClusters;
+  return createSpatiallyCoherentClusters(cluster, optimalSubClusters, targetMinSize);
 }
 
-function mergeSmallClusters(
+function mergeSmallClustersSpatially(
   smallClusters: ClusteredCustomer[][],
   targetMinSize: number,
   targetMaxSize: number
@@ -855,14 +666,20 @@ function mergeSmallClusters(
   if (smallClusters.length === 0) return [];
   
   const mergedClusters: ClusteredCustomer[][] = [];
-  let currentMerge: ClusteredCustomer[] = [];
   
-  // Sort small clusters by geographic proximity
+  // Sort small clusters by their centroids for spatial coherence
   const sortedSmallClusters = [...smallClusters].sort((a, b) => {
     const centroidA = calculateClusterCentroid(a);
     const centroidB = calculateClusterCentroid(b);
-    return centroidA.lat - centroidB.lat;
+    
+    // Sort by latitude first, then longitude
+    if (Math.abs(centroidA.lat - centroidB.lat) > 0.001) {
+      return centroidA.lat - centroidB.lat;
+    }
+    return centroidA.lng - centroidB.lng;
   });
+  
+  let currentMerge: ClusteredCustomer[] = [];
   
   for (const cluster of sortedSmallClusters) {
     if (currentMerge.length + cluster.length <= targetMaxSize) {
@@ -901,34 +718,61 @@ function calculateClusterCentroid(cluster: ClusteredCustomer[]): { lat: number; 
   return { lat: avgLat, lng: avgLng };
 }
 
-function validateNonOverlapping(customers: ClusteredCustomer[]): void {
-  const clusterMap = new Map<number, ClusteredCustomer[]>();
-  
-  customers.forEach(customer => {
-    if (!clusterMap.has(customer.clusterId)) {
-      clusterMap.set(customer.clusterId, []);
-    }
-    clusterMap.get(customer.clusterId)!.push(customer);
-  });
-  
-  // Check that each customer belongs to exactly one cluster
-  const customerIds = new Set(customers.map(c => c.id));
-  const assignedIds = new Set();
-  
-  clusterMap.forEach(cluster => {
-    cluster.forEach(customer => {
-      if (assignedIds.has(customer.id)) {
-        console.error(`Customer ${customer.id} assigned to multiple clusters!`);
-      }
-      assignedIds.add(customer.id);
-    });
-  });
-  
-  if (customerIds.size !== assignedIds.size) {
-    console.error('Mismatch in customer assignments!');
+function validateCompleteNonOverlappingCoverage(
+  clusteredCustomers: ClusteredCustomer[],
+  originalCustomers: Customer[]
+): { isValid: boolean; message: string } {
+  // Check 1: All customers are assigned
+  if (clusteredCustomers.length !== originalCustomers.length) {
+    return {
+      isValid: false,
+      message: `Customer count mismatch: Input ${originalCustomers.length}, Output ${clusteredCustomers.length}`
+    };
   }
   
-  console.log('✅ Non-overlapping validation passed');
+  // Check 2: No customer is assigned to multiple clusters (non-overlapping)
+  const customerClusterMap = new Map<string, number>();
+  const duplicates: string[] = [];
+  
+  clusteredCustomers.forEach(customer => {
+    if (customerClusterMap.has(customer.id)) {
+      duplicates.push(customer.id);
+    } else {
+      customerClusterMap.set(customer.id, customer.clusterId);
+    }
+  });
+  
+  if (duplicates.length > 0) {
+    return {
+      isValid: false,
+      message: `Overlapping clusters detected: ${duplicates.length} customers assigned to multiple clusters`
+    };
+  }
+  
+  // Check 3: All original customers are present
+  const originalIds = new Set(originalCustomers.map(c => c.id));
+  const clusteredIds = new Set(clusteredCustomers.map(c => c.id));
+  
+  const missingIds = Array.from(originalIds).filter(id => !clusteredIds.has(id));
+  if (missingIds.length > 0) {
+    return {
+      isValid: false,
+      message: `Missing customers: ${missingIds.length} customers not assigned to any cluster`
+    };
+  }
+  
+  // Check 4: Minimum cluster size constraint
+  const clusterSizes = getClusterSizes(clusteredCustomers);
+  const undersizedClusters = clusterSizes.filter(size => size < 180);
+  
+  if (undersizedClusters.length > 0) {
+    return {
+      isValid: false,
+      message: `Minimum size violation: ${undersizedClusters.length} clusters below 180 outlets`
+    };
+  }
+  
+  return { isValid: true, message: 'All validation checks passed' };
 }
 
 function getClusterSizes(customers: ClusteredCustomer[]): number[] {
@@ -941,12 +785,21 @@ function getClusterSizes(customers: ClusteredCustomer[]): number[] {
   return Array.from(clusterMap.values()).sort((a, b) => a - b);
 }
 
-function strictFallbackClustering(customers: Customer[], minSize: number): ClusteredCustomer[] {
+function strictNonOverlappingFallback(customers: Customer[], minSize: number): ClusteredCustomer[] {
+  console.log('Applying strict non-overlapping fallback clustering...');
+  
   const maxClusters = Math.floor(customers.length / minSize);
   const customersPerCluster = Math.ceil(customers.length / maxClusters);
   
-  // Sort by latitude for geographic coherence
-  const sortedCustomers = [...customers].sort((a, b) => a.latitude - b.latitude);
+  // Sort by spatial coordinates for geographic coherence
+  const sortedCustomers = [...customers].sort((a, b) => {
+    // Primary sort by latitude
+    if (Math.abs(a.latitude - b.latitude) > 0.001) {
+      return a.latitude - b.latitude;
+    }
+    // Secondary sort by longitude
+    return a.longitude - b.longitude;
+  });
   
   return sortedCustomers.map((customer, index) => ({
     ...customer,
