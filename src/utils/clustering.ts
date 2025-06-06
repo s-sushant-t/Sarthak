@@ -34,7 +34,7 @@ export const clusterCustomers = async (
     const circularSectors = createCircularSectorsFromMedian(customers, medianCenter, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER);
     console.log(`🔄 Created ${circularSectors.length} circular sectors from median center`);
 
-    // Step 3: Enforce strict sales constraints on circular sectors
+    // Step 3: Enforce sales constraints on circular sectors while maintaining structure
     const salesValidatedSectors = enforceCircularSectorSalesConstraints(circularSectors, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER, medianCenter);
     console.log(`💰 Sales enforcement on circular sectors complete: ${salesValidatedSectors.length} sectors meet requirements`);
 
@@ -54,8 +54,7 @@ export const clusterCustomers = async (
     
     if (!finalValidation.isValid) {
       console.error(`❌ CRITICAL: Final validation failed: ${finalValidation.message}`);
-      console.error('Applying emergency redistribution to meet 180 outlet minimum...');
-      return emergencyRedistributionToMeetMinimum(customers, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER);
+      throw new Error(finalValidation.message);
     }
 
     // Step 8: Sales validation with error margin
@@ -76,8 +75,8 @@ export const clusterCustomers = async (
     return clusteredCustomers;
 
   } catch (error) {
-    console.warn('🚨 Circular sector clustering failed, using emergency redistribution:', error);
-    return emergencyRedistributionToMeetMinimum(customers, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER);
+    console.error('🚨 Circular sector clustering failed:', error);
+    throw error;
   }
 };
 
@@ -273,54 +272,6 @@ function createCircularSectorsFromMedian(
   return sectors;
 }
 
-function enforceStrictMinimumOutletRequirement(
-  sectors: CircularSector[],
-  allCustomers: Customer[],
-  minSize: number,
-  maxSize: number,
-  medianCenter: MedianCenter
-): CircularSector[] {
-  console.log(`📏 ENFORCING STRICT MINIMUM OUTLET REQUIREMENT: ${minSize} outlets per cluster (NO EXCEPTIONS)`);
-  
-  const validSectors: CircularSector[] = [];
-  const undersizedSectors: CircularSector[] = [];
-  
-  // Classify sectors by size
-  sectors.forEach(sector => {
-    if (sector.customers.length >= minSize) {
-      validSectors.push(sector);
-      console.log(`📏 Sector ${sector.id}: ✅ Valid size (${sector.customers.length} outlets)`);
-    } else {
-      undersizedSectors.push(sector);
-      console.warn(`📏 Sector ${sector.id}: ❌ UNDERSIZED (${sector.customers.length} outlets < ${minSize})`);
-    }
-  });
-  
-  if (undersizedSectors.length === 0) {
-    console.log(`📏 All sectors meet minimum size requirement`);
-    return validSectors;
-  }
-  
-  console.log(`📏 CRITICAL: ${undersizedSectors.length} sectors are undersized. Applying emergency redistribution...`);
-  
-  // Collect all customers from undersized sectors
-  const customersToRedistribute = undersizedSectors.flatMap(sector => sector.customers);
-  console.log(`📏 Redistributing ${customersToRedistribute.length} customers from undersized sectors`);
-  
-  // Strategy 1: Try to merge undersized sectors with valid sectors that have capacity
-  const redistributedCustomers = distributeCustomersToExistingCircularSectors(
-    customersToRedistribute, 
-    validSectors, 
-    maxSize, 
-    minSize, 
-    medianCenter
-  );
-  
-  console.log(`📏 Redistributed ${redistributedCustomers.length}/${customersToRedistribute.length} customers to existing valid sectors`);
-  
-  return validSectors;
-}
-
 function enforceCircularSectorSalesConstraints(
   sectors: CircularSector[],
   minSize: number,
@@ -427,6 +378,196 @@ function enforceCircularSectorSalesConstraints(
   }
   
   return validSectors;
+}
+
+function enforceStrictMinimumOutletRequirement(
+  sectors: CircularSector[],
+  allCustomers: Customer[],
+  minSize: number,
+  maxSize: number,
+  medianCenter: MedianCenter
+): CircularSector[] {
+  console.log(`📏 ENFORCING STRICT MINIMUM OUTLET REQUIREMENT: ${minSize} outlets per cluster (NO EXCEPTIONS)`);
+  
+  const validSectors: CircularSector[] = [];
+  const undersizedSectors: CircularSector[] = [];
+  
+  // Classify sectors by size
+  sectors.forEach(sector => {
+    if (sector.customers.length >= minSize) {
+      validSectors.push(sector);
+      console.log(`📏 Sector ${sector.id}: ✅ Valid size (${sector.customers.length} outlets)`);
+    } else {
+      undersizedSectors.push(sector);
+      console.warn(`📏 Sector ${sector.id}: ❌ UNDERSIZED (${sector.customers.length} outlets < ${minSize})`);
+    }
+  });
+  
+  if (undersizedSectors.length === 0) {
+    console.log(`📏 All sectors meet minimum size requirement`);
+    return validSectors;
+  }
+  
+  console.log(`📏 CRITICAL: ${undersizedSectors.length} sectors are undersized. Applying emergency redistribution...`);
+  
+  // Collect all customers from undersized sectors
+  const customersToRedistribute = undersizedSectors.flatMap(sector => sector.customers);
+  console.log(`📏 Redistributing ${customersToRedistribute.length} customers from undersized sectors`);
+  
+  // Strategy: Try to merge undersized sectors with valid sectors that have capacity
+  distributeCustomersToExistingCircularSectors(
+    customersToRedistribute, 
+    validSectors, 
+    maxSize, 
+    minSize, 
+    medianCenter
+  );
+  
+  return validSectors;
+}
+
+function finalCircularSectorBalancing(
+  sectors: CircularSector[],
+  minSize: number,
+  maxSize: number,
+  medianCenter: MedianCenter
+): CircularSector[] {
+  console.log('⚖️ Final circular sector balancing (with STRICT size enforcement)...');
+  
+  // CRITICAL: First check that ALL sectors meet minimum size requirement
+  const undersizedSectors = sectors.filter(sector => sector.customers.length < minSize);
+  
+  if (undersizedSectors.length > 0) {
+    console.error(`⚖️ CRITICAL: ${undersizedSectors.length} sectors still undersized in final balancing!`);
+    undersizedSectors.forEach(sector => {
+      console.error(`Sector ${sector.id}: ${sector.customers.length} outlets (required: ${minSize})`);
+    });
+    
+    // Emergency redistribution
+    return emergencyFinalRedistribution(sectors, minSize, maxSize, medianCenter);
+  }
+  
+  // Validate all sectors meet sales constraints (using effective minimums)
+  const invalidSectors = sectors.filter(sector => 
+    sector.gr1Total < EFFECTIVE_MIN_GR1 || sector.gr2Total < EFFECTIVE_MIN_GR2
+  );
+  
+  if (invalidSectors.length > 0) {
+    console.warn(`💰 WARNING: ${invalidSectors.length} circular sectors don't meet sales constraints (with 5% margin)!`);
+    invalidSectors.forEach(sector => {
+      console.warn(`Circular Sector ${sector.id}: GR1=${sector.gr1Total.toLocaleString()} (required: ${EFFECTIVE_MIN_GR1.toLocaleString()}), GR2=${sector.gr2Total.toLocaleString()} (required: ${EFFECTIVE_MIN_GR2.toLocaleString()})`);
+    });
+    // Continue with warning - size is more critical than sales
+  }
+  
+  // Check for size violations and fix them while maintaining minimum size requirement
+  const balancedSectors: CircularSector[] = [];
+  
+  sectors.forEach(sector => {
+    if (sector.customers.length >= minSize && sector.customers.length <= maxSize) {
+      balancedSectors.push(sector);
+    } else if (sector.customers.length > maxSize) {
+      // Split oversized sector while maintaining minimum size requirement
+      const splitSectors = splitCircularSectorWithStrictSizeConstraints(sector, maxSize, minSize);
+      balancedSectors.push(...splitSectors);
+    } else {
+      // This should not happen after strict enforcement, but handle it
+      console.error(`⚖️ UNEXPECTED: Undersized sector ${sector.id} in final balancing!`);
+      balancedSectors.push(sector);
+    }
+  });
+  
+  return balancedSectors;
+}
+
+function emergencyFinalRedistribution(
+  sectors: CircularSector[],
+  minSize: number,
+  maxSize: number,
+  medianCenter: MedianCenter
+): CircularSector[] {
+  console.log('🚨 Emergency final redistribution to meet minimum size requirements...');
+  
+  const validSectors: CircularSector[] = [];
+  const undersizedSectors: CircularSector[] = [];
+  
+  sectors.forEach(sector => {
+    if (sector.customers.length >= minSize) {
+      validSectors.push(sector);
+    } else {
+      undersizedSectors.push(sector);
+    }
+  });
+  
+  // Collect all customers from undersized sectors
+  const customersToRedistribute = undersizedSectors.flatMap(sector => sector.customers);
+  
+  // Redistribute to valid sectors with capacity, ensuring no customers are lost
+  distributeCustomersToExistingCircularSectors(customersToRedistribute, validSectors, maxSize, minSize, medianCenter);
+  
+  return validSectors;
+}
+
+function splitCircularSectorWithStrictSizeConstraints(
+  sector: CircularSector,
+  maxSize: number,
+  minSize: number
+): CircularSector[] {
+  const customers = sector.customers;
+  
+  // Calculate how many sectors we need
+  const numSectors = Math.ceil(customers.length / maxSize);
+  const customersPerSector = Math.floor(customers.length / numSectors);
+  
+  // Ensure each sector will have at least minSize customers
+  if (customersPerSector < minSize) {
+    console.warn(`Cannot split sector ${sector.id} while maintaining minimum size. Keeping as oversized.`);
+    return [sector];
+  }
+  
+  // Sort customers by angular position to maintain circular structure
+  const customersWithAngles = customers.map(customer => {
+    const angle = calculateAngle(sector.center.latitude, sector.center.longitude, customer.latitude, customer.longitude);
+    return {
+      customer,
+      angle: normalizeAngle(angle),
+      salesScore: (customer.gr1Sale || 0) + (customer.gr2Sale || 0)
+    };
+  });
+  
+  customersWithAngles.sort((a, b) => a.angle - b.angle);
+  
+  const sectors: CircularSector[] = [];
+  let sectorId = sector.id;
+  
+  // Distribute customers ensuring each group meets minimum size
+  for (let i = 0; i < numSectors; i++) {
+    const startIndex = i * customersPerSector;
+    let endIndex = (i + 1) * customersPerSector;
+    
+    // For the last sector, include all remaining customers
+    if (i === numSectors - 1) {
+      endIndex = customers.length;
+    }
+    
+    const sectorCustomers = customersWithAngles.slice(startIndex, endIndex).map(item => item.customer);
+    
+    if (sectorCustomers.length >= minSize) {
+      const startAngle = customersWithAngles[startIndex].angle;
+      const endAngle = customersWithAngles[Math.min(endIndex - 1, customersWithAngles.length - 1)].angle;
+      
+      const newSector = createCircularSectorWithAngles(
+        sectorCustomers,
+        sector.center,
+        sectorId++,
+        startAngle,
+        endAngle
+      );
+      sectors.push(newSector);
+    }
+  }
+  
+  return sectors.length > 0 ? sectors : [sector]; // Return original if split failed
 }
 
 function findAngularlyAdjacentSectors(
@@ -605,240 +746,6 @@ function distributeCustomersToExistingCircularSectors(
   return redistributedCustomers;
 }
 
-function finalCircularSectorBalancing(
-  sectors: CircularSector[],
-  minSize: number,
-  maxSize: number,
-  medianCenter: MedianCenter
-): CircularSector[] {
-  console.log('⚖️ Final circular sector balancing (with STRICT size enforcement)...');
-  
-  // CRITICAL: First check that ALL sectors meet minimum size requirement
-  const undersizedSectors = sectors.filter(sector => sector.customers.length < minSize);
-  
-  if (undersizedSectors.length > 0) {
-    console.error(`⚖️ CRITICAL: ${undersizedSectors.length} sectors still undersized in final balancing!`);
-    undersizedSectors.forEach(sector => {
-      console.error(`Sector ${sector.id}: ${sector.customers.length} outlets (required: ${minSize})`);
-    });
-    
-    // Emergency redistribution
-    return emergencyFinalRedistribution(sectors, minSize, maxSize, medianCenter);
-  }
-  
-  // Validate all sectors meet sales constraints (using effective minimums)
-  const invalidSectors = sectors.filter(sector => 
-    sector.gr1Total < EFFECTIVE_MIN_GR1 || sector.gr2Total < EFFECTIVE_MIN_GR2
-  );
-  
-  if (invalidSectors.length > 0) {
-    console.warn(`💰 WARNING: ${invalidSectors.length} circular sectors don't meet sales constraints (with 5% margin)!`);
-    invalidSectors.forEach(sector => {
-      console.warn(`Circular Sector ${sector.id}: GR1=${sector.gr1Total.toLocaleString()} (required: ${EFFECTIVE_MIN_GR1.toLocaleString()}), GR2=${sector.gr2Total.toLocaleString()} (required: ${EFFECTIVE_MIN_GR2.toLocaleString()})`);
-    });
-    // Continue with warning - size is more critical than sales
-  }
-  
-  // Check for size violations and fix them while maintaining minimum size requirement
-  const balancedSectors: CircularSector[] = [];
-  
-  sectors.forEach(sector => {
-    if (sector.customers.length >= minSize && sector.customers.length <= maxSize) {
-      balancedSectors.push(sector);
-    } else if (sector.customers.length > maxSize) {
-      // Split oversized sector while maintaining minimum size requirement
-      const splitSectors = splitCircularSectorWithStrictSizeConstraints(sector, maxSize, minSize);
-      balancedSectors.push(...splitSectors);
-    } else {
-      // This should not happen after strict enforcement, but handle it
-      console.error(`⚖️ UNEXPECTED: Undersized sector ${sector.id} in final balancing!`);
-      balancedSectors.push(sector);
-    }
-  });
-  
-  return balancedSectors;
-}
-
-function emergencyFinalRedistribution(
-  sectors: CircularSector[],
-  minSize: number,
-  maxSize: number,
-  medianCenter: MedianCenter
-): CircularSector[] {
-  console.log('🚨 Emergency final redistribution to meet minimum size requirements...');
-  
-  const validSectors: CircularSector[] = [];
-  const undersizedSectors: CircularSector[] = [];
-  
-  sectors.forEach(sector => {
-    if (sector.customers.length >= minSize) {
-      validSectors.push(sector);
-    } else {
-      undersizedSectors.push(sector);
-    }
-  });
-  
-  // Collect all customers from undersized sectors
-  const customersToRedistribute = undersizedSectors.flatMap(sector => sector.customers);
-  
-  // Redistribute to valid sectors with capacity, ensuring no customers are lost
-  distributeCustomersToExistingCircularSectors(customersToRedistribute, validSectors, maxSize, minSize, medianCenter);
-  
-  return validSectors;
-}
-
-function splitCircularSectorWithStrictSizeConstraints(
-  sector: CircularSector,
-  maxSize: number,
-  minSize: number
-): CircularSector[] {
-  const customers = sector.customers;
-  
-  // Calculate how many sectors we need
-  const numSectors = Math.ceil(customers.length / maxSize);
-  const customersPerSector = Math.floor(customers.length / numSectors);
-  
-  // Ensure each sector will have at least minSize customers
-  if (customersPerSector < minSize) {
-    console.warn(`Cannot split sector ${sector.id} while maintaining minimum size. Keeping as oversized.`);
-    return [sector];
-  }
-  
-  // Sort customers by angular position to maintain circular structure
-  const customersWithAngles = customers.map(customer => {
-    const angle = calculateAngle(sector.center.latitude, sector.center.longitude, customer.latitude, customer.longitude);
-    return {
-      customer,
-      angle: normalizeAngle(angle),
-      salesScore: (customer.gr1Sale || 0) + (customer.gr2Sale || 0)
-    };
-  });
-  
-  customersWithAngles.sort((a, b) => a.angle - b.angle);
-  
-  const sectors: CircularSector[] = [];
-  let sectorId = sector.id;
-  
-  // Distribute customers ensuring each group meets minimum size
-  for (let i = 0; i < numSectors; i++) {
-    const startIndex = i * customersPerSector;
-    let endIndex = (i + 1) * customersPerSector;
-    
-    // For the last sector, include all remaining customers
-    if (i === numSectors - 1) {
-      endIndex = customers.length;
-    }
-    
-    const sectorCustomers = customersWithAngles.slice(startIndex, endIndex).map(item => item.customer);
-    
-    if (sectorCustomers.length >= minSize) {
-      const startAngle = customersWithAngles[startIndex].angle;
-      const endAngle = customersWithAngles[Math.min(endIndex - 1, customersWithAngles.length - 1)].angle;
-      
-      const newSector = createCircularSectorWithAngles(
-        sectorCustomers,
-        sector.center,
-        sectorId++,
-        startAngle,
-        endAngle
-      );
-      sectors.push(newSector);
-    }
-  }
-  
-  return sectors.length > 0 ? sectors : [sector]; // Return original if split failed
-}
-
-function emergencyRedistributionToMeetMinimum(
-  customers: Customer[],
-  minSize: number,
-  maxSize: number
-): ClusteredCustomer[] {
-  console.log(`🚨 EMERGENCY REDISTRIBUTION: Creating clusters with STRICT ${minSize} outlet minimum`);
-  
-  // Calculate the maximum number of clusters we can create while meeting minimum size
-  const maxClusters = Math.floor(customers.length / minSize);
-  const customersPerCluster = Math.floor(customers.length / maxClusters);
-  
-  console.log(`🚨 Emergency parameters: ${customers.length} customers, max ${maxClusters} clusters, ~${customersPerCluster} customers per cluster`);
-  
-  // Sort customers by combined sales to optimize distribution
-  const sortedCustomers = [...customers].sort((a, b) => {
-    const aSales = (a.gr1Sale || 0) + (a.gr2Sale || 0);
-    const bSales = (b.gr1Sale || 0) + (b.gr2Sale || 0);
-    return bSales - aSales;
-  });
-  
-  const clusters: Customer[][] = [];
-  
-  // Create clusters ensuring each has at least minSize customers
-  for (let i = 0; i < maxClusters; i++) {
-    const startIndex = i * customersPerCluster;
-    let endIndex = (i + 1) * customersPerCluster;
-    
-    // For the last cluster, include all remaining customers
-    if (i === maxClusters - 1) {
-      endIndex = sortedCustomers.length;
-    }
-    
-    const clusterCustomers = sortedCustomers.slice(startIndex, endIndex);
-    
-    if (clusterCustomers.length >= minSize) {
-      clusters.push(clusterCustomers);
-      
-      const gr1Total = clusterCustomers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-      const gr2Total = clusterCustomers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-      
-      console.log(`🚨 Emergency cluster ${i}: ${clusterCustomers.length} outlets, GR1=${gr1Total.toLocaleString()}, GR2=${gr2Total.toLocaleString()}`);
-    }
-  }
-  
-  // Convert to clustered customers
-  const clusteredCustomers: ClusteredCustomer[] = [];
-  
-  clusters.forEach((cluster, clusterIndex) => {
-    cluster.forEach(customer => {
-      clusteredCustomers.push({
-        ...customer,
-        clusterId: clusterIndex
-      });
-    });
-  });
-  
-  console.log(`🚨 Emergency redistribution complete: ${clusters.length} clusters, ${clusteredCustomers.length} customers`);
-  
-  return clusteredCustomers;
-}
-
-function validateStrictOutletRequirement(
-  clusteredCustomers: ClusteredCustomer[],
-  originalCustomers: Customer[],
-  minSize: number
-): { isValid: boolean; message: string } {
-  // Check customer count
-  if (clusteredCustomers.length !== originalCustomers.length) {
-    return {
-      isValid: false,
-      message: `Customer count mismatch: Input ${originalCustomers.length}, Output ${clusteredCustomers.length}`
-    };
-  }
-  
-  // Check cluster sizes - ZERO TOLERANCE for undersized clusters
-  const clusterSizes = getClusterSizes(clusteredCustomers);
-  const undersizedClusters = clusterSizes.filter(size => size < minSize);
-  
-  if (undersizedClusters.length > 0) {
-    return {
-      isValid: false,
-      message: `CRITICAL SIZE VIOLATION: ${undersizedClusters.length} clusters below ${minSize} outlets. Sizes: ${undersizedClusters.join(', ')}`
-    };
-  }
-  
-  console.log(`✅ STRICT VALIDATION PASSED: All clusters have ≥${minSize} outlets. Sizes: ${clusterSizes.join(', ')}`);
-  
-  return { isValid: true, message: 'All clusters meet strict minimum outlet requirement' };
-}
-
 function createNewCircularSector(
   customers: Customer[],
   center: MedianCenter,
@@ -920,11 +827,10 @@ function convertSectorsToCustomers(sectors: CircularSector[]): ClusteredCustomer
   return clusteredCustomers;
 }
 
-function validateCircularClustering(
+function validateStrictOutletRequirement(
   clusteredCustomers: ClusteredCustomer[],
   originalCustomers: Customer[],
-  minSize: number,
-  maxSize: number
+  minSize: number
 ): { isValid: boolean; message: string } {
   // Check customer count
   if (clusteredCustomers.length !== originalCustomers.length) {
@@ -934,48 +840,20 @@ function validateCircularClustering(
     };
   }
   
-  // Check for duplicates
-  const customerIds = clusteredCustomers.map(c => c.id);
-  const uniqueIds = new Set(customerIds);
-  if (customerIds.length !== uniqueIds.size) {
-    return {
-      isValid: false,
-      message: `Duplicate customers detected in circular clustering`
-    };
-  }
-  
-  // Check for missing customers
-  const originalIds = new Set(originalCustomers.map(c => c.id));
-  const clusteredIds = new Set(clusteredCustomers.map(c => c.id));
-  
-  const missingIds = Array.from(originalIds).filter(id => !clusteredIds.has(id));
-  if (missingIds.length > 0) {
-    return {
-      isValid: false,
-      message: `Missing customers: ${missingIds.length} customers not assigned to any circular sector`
-    };
-  }
-  
-  // Check cluster sizes
+  // Check cluster sizes - ZERO TOLERANCE for undersized clusters
   const clusterSizes = getClusterSizes(clusteredCustomers);
   const undersizedClusters = clusterSizes.filter(size => size < minSize);
-  const oversizedClusters = clusterSizes.filter(size => size > maxSize);
   
   if (undersizedClusters.length > 0) {
     return {
       isValid: false,
-      message: `Size violation: ${undersizedClusters.length} circular sectors below ${minSize} outlets`
+      message: `CRITICAL SIZE VIOLATION: ${undersizedClusters.length} clusters below ${minSize} outlets. Sizes: ${undersizedClusters.join(', ')}`
     };
   }
   
-  if (oversizedClusters.length > 0) {
-    return {
-      isValid: false,
-      message: `Size violation: ${oversizedClusters.length} circular sectors above ${maxSize} outlets`
-    };
-  }
+  console.log(`✅ STRICT VALIDATION PASSED: All clusters have ≥${minSize} outlets. Sizes: ${clusterSizes.join(', ')}`);
   
-  return { isValid: true, message: 'All circular sector validation checks passed' };
+  return { isValid: true, message: 'All clusters meet strict minimum outlet requirement' };
 }
 
 function validateSalesConstraints(clusteredCustomers: ClusteredCustomer[]): SalesValidation {
@@ -1028,18 +906,6 @@ function getClusterSizes(customers: ClusteredCustomer[]): number[] {
   });
   
   return Array.from(clusterMap.values()).sort((a, b) => a - b);
-}
-
-function circularSectorFallback(
-  customers: Customer[],
-  center: MedianCenter,
-  minSize: number,
-  maxSize: number
-): ClusteredCustomer[] {
-  console.log('🚨 Applying circular sector fallback clustering (STRICT size enforcement)...');
-  
-  // Use emergency redistribution which guarantees minimum size
-  return emergencyRedistributionToMeetMinimum(customers, minSize, maxSize);
 }
 
 // Utility functions for circular geometry
