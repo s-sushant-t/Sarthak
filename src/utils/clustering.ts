@@ -38,7 +38,7 @@ export const clusterCustomers = async (
 
     // Step 7: Critical validation - ensure no customers are lost
     if (finalClusters.length !== customers.length) {
-      console.error(`CRITICAL: Clustering lost customers! Input: ${customers.length}, Output: ${finalClusters.length}`);
+      console.warn(`Clustering incomplete: Input: ${customers.length}, Output: ${finalClusters.length}. Applying fallback recovery...`);
       
       // Find missing customers
       const inputIds = new Set(customers.map(c => c.id));
@@ -46,7 +46,7 @@ export const clusterCustomers = async (
       const missingIds = Array.from(inputIds).filter(id => !outputIds.has(id));
       
       if (missingIds.length > 0) {
-        console.error('Missing customers after clustering:', missingIds);
+        console.warn('Missing customers after clustering:', missingIds);
       }
       
       // Fallback to strict size-based clustering to preserve all customers
@@ -63,7 +63,7 @@ export const clusterCustomers = async (
     return finalClusters;
 
   } catch (error) {
-    console.error('Enhanced clustering error:', error);
+    console.warn('Enhanced clustering failed, using fallback:', error);
     // Fallback to strict size-based clustering
     return strictFallbackClustering(customers, 180);
   }

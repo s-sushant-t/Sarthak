@@ -123,41 +123,6 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
         
         console.log(`Clustering complete: ${clusteredCustomers.length} customers clustered`);
         
-        // Final verification that all customers are included
-        if (clusteredCustomers.length !== customers.length) {
-          console.error(`CRITICAL: Clustering lost customers! Input: ${customers.length}, Output: ${clusteredCustomers.length}`);
-          
-          // Find missing customers
-          const clusteredIds = new Set(clusteredCustomers.map(c => c.id));
-          const missingCustomers = customers.filter(c => !clusteredIds.has(c.id));
-          
-          console.error('Missing customers after clustering:', missingCustomers.map(c => c.id));
-          
-          // Add missing customers with default cluster assignment
-          const maxClusterId = Math.max(...clusteredCustomers.map(c => c.clusterId), -1);
-          missingCustomers.forEach((customer, index) => {
-            clusteredCustomers.push({
-              ...customer,
-              clusterId: maxClusterId + 1 + Math.floor(index / 180) // Ensure minimum cluster size
-            });
-          });
-          
-          console.log(`Recovery complete: ${clusteredCustomers.length} customers now included`);
-        }
-        
-        // Verify cluster sizes meet minimum requirements
-        const clusterSizes = clusteredCustomers.reduce((acc, customer) => {
-          acc[customer.clusterId] = (acc[customer.clusterId] || 0) + 1;
-          return acc;
-        }, {} as Record<number, number>);
-        
-        console.log('Final cluster sizes:', clusterSizes);
-        
-        const smallClusters = Object.entries(clusterSizes).filter(([_, size]) => size < 180);
-        if (smallClusters.length > 0) {
-          console.warn('Clusters below minimum size detected:', smallClusters);
-        }
-        
         resolve({ 
           distributor, 
           customers: clusteredCustomers 
