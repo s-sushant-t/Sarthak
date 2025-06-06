@@ -44,7 +44,7 @@ export const clusterCustomers = async (
     console.log(`💰 Sales enforcement on 6 circular sectors complete: ${salesValidatedSectors.length} sectors meet requirements`);
 
     // Step 4: CRITICAL - Ensure exactly 6 clusters with minimum outlet requirement
-    const sizeEnforcedSectors = enforceExactSixClustersWithMinimumSize(salesValidatedSectors, customers, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER, medianCenter);
+    const sizeEnforcedSectors = enforceExactSixClustersWithMinimumSize(salesValidatedSectors, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER, medianCenter);
     console.log(`📏 STRICT size enforcement complete: ${sizeEnforcedSectors.length} sectors (target: ${TARGET_CLUSTERS})`);
 
     // Step 5: Final balancing to ensure exactly 6 clusters
@@ -335,7 +335,6 @@ function createExactSixCircularSectors(
 
 function enforceExactSixClustersWithMinimumSize(
   sectors: CircularSector[],
-  allCustomers: Customer[],
   minSize: number,
   maxSize: number,
   medianCenter: MedianCenter
@@ -387,62 +386,150 @@ function enforceExactSixClustersWithMinimumSize(
     });
   }
   
-  // Now ensure each of the 6 sectors has at least minSize customers
-  const undersizedSectors = sectors.filter(sector => sector.customers.length < minSize);
-  const oversizedSectors = sectors.filter(sector => sector.customers.length > maxSize);
+  // Implement robust iterative balancing to ensure all clusters meet minimum size
+  let maxIterations = 50;
+  let iteration = 0;
   
-  console.log(`📏 Found ${undersizedSectors.length} undersized and ${oversizedSectors.length} oversized sectors`);
-  
-  // Redistribute customers to meet size requirements
-  if (undersizedSectors.length > 0) {
-    // Collect customers from oversized sectors
-    const redistributableCustomers: Customer[] = [];
+  while (iteration < maxIterations) {
+    iteration++;
     
-    oversizedSectors.forEach(sector => {
-      const excess = sector.customers.length - maxSize;
-      if (excess > 0) {
-        const customersToMove = sector.customers.splice(-excess, excess);
-        redistributableCustomers.push(...customersToMove);
-        sector.gr1Total = sector.customers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-        sector.gr2Total = sector.customers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-        updateSectorBounds(sector);
-      }
-    });
+    // Find undersized and oversized sectors
+    const undersizedSectors = sectors.filter(sector => sector.customers.length < minSize);
+    const oversizedSectors = sectors.filter(sector => sector.customers.length > maxSize);
+    const normalSectors = sectors.filter(sector => sector.customers.length >= minSize && sector.customers.length <= maxSize);
     
-    // Distribute to undersized sectors
-    undersizedSectors.forEach(sector => {
-      const needed = minSize - sector.customers.length;
-      const customersToAdd = redistributableCustomers.splice(0, Math.min(needed, redistributableCustomers.length));
+    console.log(`📏 Iteration ${iteration}: ${undersizedSectors.length} undersized, ${oversizedSectors.length} oversized, ${normalSectors.length} normal`);
+    
+    if (undersizedSectors.length === 0) {
+      console.log(`✅ All sectors meet minimum size requirement after ${iteration} iterations`);
+      break;
+    }
+    
+    // Calculate total deficit and surplus
+    const totalDeficit = undersizedSectors.reduce((sum, sector) => sum + (minSize - sector.customers.length), 0);
+    const totalSurplus = oversizedSectors.reduce((sum, sector) => sum + (sector.customers.length - maxSize), 0);
+    const normalSurplus = normalSectors.reduce((sum, sector) => sum + Math.max(0, sector.customers.length - minSize), 0);
+    
+    console.log(`📏 Total deficit: ${totalDeficit}, oversized surplus: ${totalSurplus}, normal surplus: ${normalSurplus}`);
+    
+    // If we can't meet the deficit from oversized sectors, try to redistribute from normal sectors
+    if (totalDeficit > totalSurplus) {
+      console.log(`📏 Insufficient surplus in oversized sectors, redistributing from normal sectors`);
       
-      sector.customers.push(...customersToAdd);
-      sector.gr1Total += customersToAdd.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-      sector.gr2Total += customersToAdd.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-      updateSectorBounds(sector);
-    });
-    
-    // If there are still redistributable customers, distribute them evenly
-    if (redistributableCustomers.length > 0) {
-      let sectorIndex = 0;
-      redistributableCustomers.forEach(customer => {
-        const targetSector = sectors[sectorIndex % TARGET_CLUSTERS];
-        if (targetSector.customers.length < maxSize) {
-          targetSector.customers.push(customer);
-          targetSector.gr1Total += customer.gr1Sale || 0;
-          targetSector.gr2Total += customer.gr2Sale || 0;
-          updateSectorBounds(targetSector);
+      // Sort normal sectors by size (largest first) to take from bigger ones
+      const sortedNormalSectors = normalSectors.sort((a, b) => b.customers.length - a.customers.length);
+      
+      for (const undersizedSector of undersizedSectors) {
+        const needed = minSize - undersizedSector.customers.length;
+        let collected = 0;
+        
+        // First, collect from oversized sectors
+        for (const oversizedSector of oversizedSectors) {
+          const available = oversizedSector.customers.length - maxSize;
+          const toTake = Math.min(available, needed - collected);
+          
+          if (toTake > 0) {
+            const customersToMove = oversizedSector.customers.splice(-toTake, toTake);
+            undersizedSector.customers.push(...customersToMove);
+            
+            // Update totals
+            const gr1Moved = customersToMove.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
+            const gr2Moved = customersToMove.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
+            
+            oversizedSector.gr1Total -= gr1Moved;
+            oversizedSector.gr2Total -= gr2Moved;
+            undersizedSector.gr1Total += gr1Moved;
+            undersizedSector.gr2Total += gr2Moved;
+            
+            updateSectorBounds(oversizedSector);
+            updateSectorBounds(undersizedSector);
+            
+            collected += toTake;
+            
+            if (collected >= needed) break;
+          }
         }
-        sectorIndex++;
-      });
+        
+        // If still need more, take from normal sectors (but keep them above minimum)
+        if (collected < needed) {
+          for (const normalSector of sortedNormalSectors) {
+            const available = normalSector.customers.length - minSize;
+            const toTake = Math.min(available, needed - collected);
+            
+            if (toTake > 0) {
+              const customersToMove = normalSector.customers.splice(-toTake, toTake);
+              undersizedSector.customers.push(...customersToMove);
+              
+              // Update totals
+              const gr1Moved = customersToMove.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
+              const gr2Moved = customersToMove.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
+              
+              normalSector.gr1Total -= gr1Moved;
+              normalSector.gr2Total -= gr2Moved;
+              undersizedSector.gr1Total += gr1Moved;
+              undersizedSector.gr2Total += gr2Moved;
+              
+              updateSectorBounds(normalSector);
+              updateSectorBounds(undersizedSector);
+              
+              collected += toTake;
+              
+              if (collected >= needed) break;
+            }
+          }
+        }
+      }
+    } else {
+      // Standard redistribution from oversized to undersized
+      for (const undersizedSector of undersizedSectors) {
+        const needed = minSize - undersizedSector.customers.length;
+        let collected = 0;
+        
+        for (const oversizedSector of oversizedSectors) {
+          const available = oversizedSector.customers.length - maxSize;
+          const toTake = Math.min(available, needed - collected);
+          
+          if (toTake > 0) {
+            const customersToMove = oversizedSector.customers.splice(-toTake, toTake);
+            undersizedSector.customers.push(...customersToMove);
+            
+            // Update totals
+            const gr1Moved = customersToMove.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
+            const gr2Moved = customersToMove.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
+            
+            oversizedSector.gr1Total -= gr1Moved;
+            oversizedSector.gr2Total -= gr2Moved;
+            undersizedSector.gr1Total += gr1Moved;
+            undersizedSector.gr2Total += gr2Moved;
+            
+            updateSectorBounds(oversizedSector);
+            updateSectorBounds(undersizedSector);
+            
+            collected += toTake;
+            
+            if (collected >= needed) break;
+          }
+        }
+      }
     }
   }
   
-  // Final check: ensure all sectors meet minimum size
+  // Final validation
   const finalUndersized = sectors.filter(sector => sector.customers.length < minSize);
   if (finalUndersized.length > 0) {
-    console.error(`❌ CRITICAL: ${finalUndersized.length} sectors still undersized after redistribution!`);
+    const totalCustomers = sectors.reduce((sum, sector) => sum + sector.customers.length, 0);
+    const averageSize = totalCustomers / TARGET_CLUSTERS;
+    
+    console.error(`❌ CRITICAL: ${finalUndersized.length} sectors still undersized after ${iteration} iterations!`);
+    console.error(`Total customers: ${totalCustomers}, Average per cluster: ${averageSize.toFixed(1)}, Required minimum: ${minSize}`);
+    
     finalUndersized.forEach(sector => {
       console.error(`Sector ${sector.id}: ${sector.customers.length} outlets (required: ${minSize})`);
     });
+    
+    // If we can't meet the minimum requirements, throw an error with detailed information
+    const clusterSizes = sectors.map(s => s.customers.length);
+    throw new Error(`CRITICAL SIZE VIOLATION: ${finalUndersized.length} clusters below ${minSize} outlets. Sizes: ${clusterSizes.join(', ')}. Total customers: ${totalCustomers}, Average: ${averageSize.toFixed(1)}`);
   }
   
   console.log(`📏 Final sector sizes: ${sectors.map(s => s.customers.length).join(', ')}`);
@@ -523,12 +610,6 @@ function finalSixClusterBalancing(
     sectors.forEach((sector, index) => {
       sector.id = index;
     });
-  }
-  
-  // Final size validation
-  const undersizedSectors = sectors.filter(sector => sector.customers.length < minSize);
-  if (undersizedSectors.length > 0) {
-    console.error(`❌ FINAL ERROR: ${undersizedSectors.length} sectors still undersized!`);
   }
   
   console.log(`✅ Final balancing complete: ${sectors.length} sectors with sizes: ${sectors.map(s => s.customers.length).join(', ')}`);
