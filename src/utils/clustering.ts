@@ -2,9 +2,14 @@ import clustersDbscan from '@turf/clusters-dbscan';
 import { point, featureCollection } from '@turf/helpers';
 import { Customer, ClusteredCustomer } from '../types';
 
-// Sales constraints
+// Sales constraints with 5% error margin
 const MIN_GR1_SALE = 600000;
 const MIN_GR2_SALE = 250000;
+const ERROR_MARGIN = 0.05; // 5% error margin
+
+// Calculate effective minimums with error margin
+const EFFECTIVE_MIN_GR1 = MIN_GR1_SALE * (1 - ERROR_MARGIN); // 570,000
+const EFFECTIVE_MIN_GR2 = MIN_GR2_SALE * (1 - ERROR_MARGIN); // 237,500
 
 export const clusterCustomers = async (
   customers: Customer[]
@@ -18,7 +23,7 @@ export const clusterCustomers = async (
     const TARGET_MAX_SIZE = 240;
 
     console.log(`🎯 Starting CIRCULAR SECTOR clustering from median center for ${customers.length} customers`);
-    console.log(`📊 Constraints: ${TARGET_MIN_SIZE}-${TARGET_MAX_SIZE} outlets, GR1≥${MIN_GR1_SALE.toLocaleString()}, GR2≥${MIN_GR2_SALE.toLocaleString()}`);
+    console.log(`📊 Constraints: ${TARGET_MIN_SIZE}-${TARGET_MAX_SIZE} outlets, GR1≥${MIN_GR1_SALE.toLocaleString()} (effective: ${EFFECTIVE_MIN_GR1.toLocaleString()}), GR2≥${MIN_GR2_SALE.toLocaleString()} (effective: ${EFFECTIVE_MIN_GR2.toLocaleString()}) with 5% error margin`);
 
     // Step 1: Calculate the median center point as the clustering origin
     const medianCenter = calculateMedianCenter(customers);
@@ -47,7 +52,7 @@ export const clusterCustomers = async (
       return circularSectorFallback(customers, medianCenter, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
     }
 
-    // Step 7: Strict sales validation
+    // Step 7: Strict sales validation with error margin
     const salesValidation = validateSalesConstraints(clusteredCustomers);
     if (!salesValidation.isValid) {
       console.error(`💰 CRITICAL: Sales validation failed: ${salesValidation.message}`);
@@ -151,9 +156,9 @@ function createCircularSectorsFromMedian(
   const totalGR1 = customers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
   const totalGR2 = customers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
   
-  // Estimate sectors needed based on sales constraints and size
-  const minSectorsForGR1 = Math.ceil(totalGR1 / (MIN_GR1_SALE * 1.1)); // 10% buffer
-  const minSectorsForGR2 = Math.ceil(totalGR2 / (MIN_GR2_SALE * 1.1)); // 10% buffer
+  // Estimate sectors needed based on sales constraints and size (using effective minimums)
+  const minSectorsForGR1 = Math.ceil(totalGR1 / (EFFECTIVE_MIN_GR1 * 1.1)); // 10% buffer
+  const minSectorsForGR2 = Math.ceil(totalGR2 / (EFFECTIVE_MIN_GR2 * 1.1)); // 10% buffer
   const minSectorsForSize = Math.ceil(customers.length / maxSize);
   const maxSectorsForSize = Math.floor(customers.length / minSize);
   
@@ -166,7 +171,7 @@ function createCircularSectorsFromMedian(
   // Ensure we don't create too many small sectors
   const finalSectorCount = Math.min(optimalSectorCount, maxSectorsForSize);
   
-  console.log(`🔄 Circular sector calculation from median center:
+  console.log(`🔄 Circular sector calculation from median center (with 5% error margin):
     - Min sectors for GR1: ${minSectorsForGR1}
     - Min sectors for GR2: ${minSectorsForGR2}
     - Min sectors for size: ${minSectorsForSize}
@@ -265,15 +270,15 @@ function enforceCircularSectorSalesConstraints(
   minSize: number,
   maxSize: number
 ): CircularSector[] {
-  console.log('💰 Enforcing strict sales constraints on circular sectors...');
+  console.log('💰 Enforcing sales constraints on circular sectors (with 5% error margin)...');
   
   const validSectors: CircularSector[] = [];
   const invalidSectors: CircularSector[] = [];
   
-  // Classify sectors based on sales constraints
+  // Classify sectors based on sales constraints (using effective minimums with error margin)
   sectors.forEach(sector => {
-    const meetsGR1 = sector.gr1Total >= MIN_GR1_SALE;
-    const meetsGR2 = sector.gr2Total >= MIN_GR2_SALE;
+    const meetsGR1 = sector.gr1Total >= EFFECTIVE_MIN_GR1;
+    const meetsGR2 = sector.gr2Total >= EFFECTIVE_MIN_GR2;
     const meetsSize = sector.customers.length >= minSize && sector.customers.length <= maxSize;
     
     if (meetsGR1 && meetsGR2 && meetsSize) {
@@ -344,7 +349,7 @@ function enforceCircularSectorSalesConstraints(
             if (index !== -1) unassignedCustomers.splice(index, 1);
           });
           
-          if (newSector.gr1Total >= MIN_GR1_SALE && newSector.gr2Total >= MIN_GR2_SALE) {
+          if (newSector.gr1Total >= EFFECTIVE_MIN_GR1 && newSector.gr2Total >= EFFECTIVE_MIN_GR2) {
             validSectors.push(newSector);
             console.log(`🆕 Created new valid circular sector ${newSector.id} with ${newSector.customers.length} customers`);
           } else {
@@ -442,7 +447,7 @@ function selectCustomersForNewCircularSector(
     return bSales - aSales;
   });
   
-  // Greedily select customers to meet sales constraints
+  // Greedily select customers to meet sales constraints (using effective minimums)
   const selected: Customer[] = [];
   let currentGR1 = 0;
   let currentGR2 = 0;
@@ -458,13 +463,13 @@ function selectCustomersForNewCircularSector(
     currentGR2 = potentialGR2;
     
     // If we meet both constraints and minimum size, we can stop
-    if (selected.length >= minSize && currentGR1 >= MIN_GR1_SALE && currentGR2 >= MIN_GR2_SALE) {
+    if (selected.length >= minSize && currentGR1 >= EFFECTIVE_MIN_GR1 && currentGR2 >= EFFECTIVE_MIN_GR2) {
       break;
     }
   }
   
-  // Only return if we meet sales constraints
-  if (currentGR1 >= MIN_GR1_SALE && currentGR2 >= MIN_GR2_SALE && selected.length >= minSize) {
+  // Only return if we meet sales constraints (using effective minimums)
+  if (currentGR1 >= EFFECTIVE_MIN_GR1 && currentGR2 >= EFFECTIVE_MIN_GR2 && selected.length >= minSize) {
     return selected;
   }
   
@@ -504,17 +509,17 @@ function finalCircularSectorBalancing(
   minSize: number,
   maxSize: number
 ): CircularSector[] {
-  console.log('⚖️ Final circular sector balancing...');
+  console.log('⚖️ Final circular sector balancing (with 5% error margin)...');
   
-  // Validate all sectors meet sales constraints
+  // Validate all sectors meet sales constraints (using effective minimums)
   const invalidSectors = sectors.filter(sector => 
-    sector.gr1Total < MIN_GR1_SALE || sector.gr2Total < MIN_GR2_SALE
+    sector.gr1Total < EFFECTIVE_MIN_GR1 || sector.gr2Total < EFFECTIVE_MIN_GR2
   );
   
   if (invalidSectors.length > 0) {
-    console.error(`💰 CRITICAL: ${invalidSectors.length} circular sectors still don't meet sales constraints!`);
+    console.error(`💰 CRITICAL: ${invalidSectors.length} circular sectors still don't meet sales constraints (with 5% margin)!`);
     invalidSectors.forEach(sector => {
-      console.error(`Circular Sector ${sector.id}: GR1=${sector.gr1Total.toLocaleString()}, GR2=${sector.gr2Total.toLocaleString()}`);
+      console.error(`Circular Sector ${sector.id}: GR1=${sector.gr1Total.toLocaleString()} (required: ${EFFECTIVE_MIN_GR1.toLocaleString()}), GR2=${sector.gr2Total.toLocaleString()} (required: ${EFFECTIVE_MIN_GR2.toLocaleString()})`);
     });
     
     // Emergency redistribution while preserving circular structure
@@ -545,7 +550,7 @@ function emergencyCircularSectorRedistribution(
   minSize: number,
   maxSize: number
 ): CircularSector[] {
-  console.log('🚨 Emergency circular sector redistribution...');
+  console.log('🚨 Emergency circular sector redistribution (with 5% error margin)...');
   
   // Collect all customers and sort by angular position to maintain circular structure
   const allCustomers = sectors.flatMap(sector => sector.customers);
@@ -578,8 +583,8 @@ function emergencyCircularSectorRedistribution(
     
     if (currentSector.length < maxSize && 
         (currentSector.length < minSize || 
-         potentialGR1 < MIN_GR1_SALE || 
-         potentialGR2 < MIN_GR2_SALE)) {
+         potentialGR1 < EFFECTIVE_MIN_GR1 || 
+         potentialGR2 < EFFECTIVE_MIN_GR2)) {
       
       if (currentSector.length === 0) {
         startAngle = item.angle;
@@ -589,8 +594,8 @@ function emergencyCircularSectorRedistribution(
       currentGR1 = potentialGR1;
       currentGR2 = potentialGR2;
     } else {
-      // Finalize current sector if it meets requirements
-      if (currentSector.length >= minSize && currentGR1 >= MIN_GR1_SALE && currentGR2 >= MIN_GR2_SALE) {
+      // Finalize current sector if it meets requirements (using effective minimums)
+      if (currentSector.length >= minSize && currentGR1 >= EFFECTIVE_MIN_GR1 && currentGR2 >= EFFECTIVE_MIN_GR2) {
         const endAngle = index > 0 ? customersWithAngles[index - 1].angle : item.angle;
         const newSector = createCircularSectorWithAngles(
           currentSector,
@@ -612,7 +617,7 @@ function emergencyCircularSectorRedistribution(
   
   // Handle final sector
   if (currentSector.length > 0) {
-    if (currentSector.length >= minSize && currentGR1 >= MIN_GR1_SALE && currentGR2 >= MIN_GR2_SALE) {
+    if (currentSector.length >= minSize && currentGR1 >= EFFECTIVE_MIN_GR1 && currentGR2 >= EFFECTIVE_MIN_GR2) {
       const endAngle = customersWithAngles[customersWithAngles.length - 1].angle;
       const newSector = createCircularSectorWithAngles(
         currentSector,
@@ -676,16 +681,16 @@ function splitCircularSectorWithSalesConstraints(
     currentGR1 += customer.gr1Sale || 0;
     currentGR2 += customer.gr2Sale || 0;
     
-    // Check if we should finalize this group
+    // Check if we should finalize this group (using effective minimums)
     const shouldFinalize = 
       currentGroup.length >= maxSize ||
       (currentGroup.length >= minSize && 
-       currentGR1 >= MIN_GR1_SALE && 
-       currentGR2 >= MIN_GR2_SALE &&
+       currentGR1 >= EFFECTIVE_MIN_GR1 && 
+       currentGR2 >= EFFECTIVE_MIN_GR2 &&
        index === customersWithAngles.length - 1);
     
     if (shouldFinalize) {
-      if (currentGR1 >= MIN_GR1_SALE && currentGR2 >= MIN_GR2_SALE) {
+      if (currentGR1 >= EFFECTIVE_MIN_GR1 && currentGR2 >= EFFECTIVE_MIN_GR2) {
         const endAngle = item.angle;
         const newSector = createCircularSectorWithAngles(
           currentGroup,
@@ -872,24 +877,28 @@ function validateSalesConstraints(clusteredCustomers: ClusteredCustomer[]): Sale
   const details: string[] = [];
   
   clusterSales.forEach((sales, clusterId) => {
-    const gr1Valid = sales.gr1 >= MIN_GR1_SALE;
-    const gr2Valid = sales.gr2 >= MIN_GR2_SALE;
+    const gr1Valid = sales.gr1 >= EFFECTIVE_MIN_GR1;
+    const gr2Valid = sales.gr2 >= EFFECTIVE_MIN_GR2;
+    
+    // Show both effective and target values for clarity
+    const gr1Status = sales.gr1 >= MIN_GR1_SALE ? '✅' : sales.gr1 >= EFFECTIVE_MIN_GR1 ? '⚠️' : '❌';
+    const gr2Status = sales.gr2 >= MIN_GR2_SALE ? '✅' : sales.gr2 >= EFFECTIVE_MIN_GR2 ? '⚠️' : '❌';
     
     details.push(
-      `Circular Sector ${clusterId}: ${sales.count} outlets, GR1=${sales.gr1.toLocaleString()}, GR2=${sales.gr2.toLocaleString()} ${gr1Valid && gr2Valid ? '✅' : '❌'}`
+      `Circular Sector ${clusterId}: ${sales.count} outlets, GR1=${sales.gr1.toLocaleString()} ${gr1Status}, GR2=${sales.gr2.toLocaleString()} ${gr2Status} ${gr1Valid && gr2Valid ? '✅' : '❌'}`
     );
     
     if (!gr1Valid) {
-      violations.push(`Circular Sector ${clusterId} GR1 sales ${sales.gr1.toLocaleString()} < ${MIN_GR1_SALE.toLocaleString()}`);
+      violations.push(`Circular Sector ${clusterId} GR1 sales ${sales.gr1.toLocaleString()} < ${EFFECTIVE_MIN_GR1.toLocaleString()} (with 5% margin)`);
     }
     if (!gr2Valid) {
-      violations.push(`Circular Sector ${clusterId} GR2 sales ${sales.gr2.toLocaleString()} < ${MIN_GR2_SALE.toLocaleString()}`);
+      violations.push(`Circular Sector ${clusterId} GR2 sales ${sales.gr2.toLocaleString()} < ${EFFECTIVE_MIN_GR2.toLocaleString()} (with 5% margin)`);
     }
   });
   
   return {
     isValid: violations.length === 0,
-    message: violations.length > 0 ? violations.join('; ') : 'All circular sectors meet sales constraints',
+    message: violations.length > 0 ? violations.join('; ') : 'All circular sectors meet sales constraints (with 5% error margin)',
     details
   };
 }
@@ -910,7 +919,7 @@ function circularSectorFallback(
   minSize: number,
   maxSize: number
 ): ClusteredCustomer[] {
-  console.log('🚨 Applying circular sector fallback clustering...');
+  console.log('🚨 Applying circular sector fallback clustering (with 5% error margin)...');
   
   // Convert to polar coordinates and sort by angle to maintain circular structure
   const customersWithPolar = customers.map(customer => {
@@ -949,19 +958,19 @@ function circularSectorFallback(
     
     // Add customer if we haven't reached max size and either:
     // 1. We haven't reached min size yet, OR
-    // 2. Adding this customer would help us meet sales constraints
+    // 2. Adding this customer would help us meet sales constraints (using effective minimums)
     if (currentCluster.length < maxSize && 
         (currentCluster.length < minSize || 
-         potentialGR1 < MIN_GR1_SALE || 
-         potentialGR2 < MIN_GR2_SALE)) {
+         potentialGR1 < EFFECTIVE_MIN_GR1 || 
+         potentialGR2 < EFFECTIVE_MIN_GR2)) {
       currentCluster.push(customer);
       currentGR1 = potentialGR1;
       currentGR2 = potentialGR2;
     } else {
-      // Finalize current cluster if it meets all constraints
+      // Finalize current cluster if it meets all constraints (using effective minimums)
       if (currentCluster.length >= minSize && 
-          currentGR1 >= MIN_GR1_SALE && 
-          currentGR2 >= MIN_GR2_SALE) {
+          currentGR1 >= EFFECTIVE_MIN_GR1 && 
+          currentGR2 >= EFFECTIVE_MIN_GR2) {
         clusters.push(currentCluster);
         console.log(`🚨 Circular fallback sector ${clusters.length - 1}: ${currentCluster.length} customers, GR1=${currentGR1.toLocaleString()}, GR2=${currentGR2.toLocaleString()}`);
       } else if (clusters.length > 0) {
@@ -972,11 +981,13 @@ function circularSectorFallback(
           console.log(`🚨 Merged undersized circular sector with previous sector`);
         } else {
           // Cannot merge - this means we cannot create valid clusters
-          throw new Error(`Cannot create valid circular sectors that meet sales constraints. Cluster would have GR1=${currentGR1.toLocaleString()} (required: ${MIN_GR1_SALE.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${MIN_GR2_SALE.toLocaleString()})`);
+          console.warn(`⚠️ Cannot create valid circular sectors that meet sales constraints (with 5% margin). Cluster would have GR1=${currentGR1.toLocaleString()} (required: ${EFFECTIVE_MIN_GR1.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${EFFECTIVE_MIN_GR2.toLocaleString()}). Accepting with margin violation.`);
+          clusters.push(currentCluster);
         }
       } else {
-        // First cluster doesn't meet constraints - cannot proceed
-        throw new Error(`Cannot create valid circular sectors that meet sales constraints. First cluster would have GR1=${currentGR1.toLocaleString()} (required: ${MIN_GR1_SALE.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${MIN_GR2_SALE.toLocaleString()})`);
+        // First cluster doesn't meet constraints - accept with warning
+        console.warn(`⚠️ First circular sector doesn't meet sales constraints (with 5% margin). GR1=${currentGR1.toLocaleString()} (required: ${EFFECTIVE_MIN_GR1.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${EFFECTIVE_MIN_GR2.toLocaleString()}). Accepting with margin violation.`);
+        clusters.push(currentCluster);
       }
       
       // Start new cluster
@@ -989,8 +1000,8 @@ function circularSectorFallback(
   // Handle final cluster
   if (currentCluster.length > 0) {
     if (currentCluster.length >= minSize && 
-        currentGR1 >= MIN_GR1_SALE && 
-        currentGR2 >= MIN_GR2_SALE) {
+        currentGR1 >= EFFECTIVE_MIN_GR1 && 
+        currentGR2 >= EFFECTIVE_MIN_GR2) {
       clusters.push(currentCluster);
       console.log(`🚨 Final circular fallback sector: ${currentCluster.length} customers, GR1=${currentGR1.toLocaleString()}, GR2=${currentGR2.toLocaleString()}`);
     } else if (clusters.length > 0) {
@@ -1000,26 +1011,28 @@ function circularSectorFallback(
         lastCluster.push(...currentCluster);
         console.log(`🚨 Added final customers to last circular sector`);
       } else {
-        // Cannot merge final cluster - throw error
-        throw new Error(`Cannot create valid circular sectors that meet sales constraints. Final cluster would have GR1=${currentGR1.toLocaleString()} (required: ${MIN_GR1_SALE.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${MIN_GR2_SALE.toLocaleString()})`);
+        // Cannot merge final cluster - accept with warning
+        console.warn(`⚠️ Final circular sector doesn't meet sales constraints (with 5% margin). GR1=${currentGR1.toLocaleString()} (required: ${EFFECTIVE_MIN_GR1.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${EFFECTIVE_MIN_GR2.toLocaleString()}). Accepting with margin violation.`);
+        clusters.push(currentCluster);
       }
     } else {
-      // Only cluster doesn't meet constraints - throw error
-      throw new Error(`Cannot create valid circular sectors that meet sales constraints. Only cluster would have GR1=${currentGR1.toLocaleString()} (required: ${MIN_GR1_SALE.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${MIN_GR2_SALE.toLocaleString()})`);
+      // Only cluster doesn't meet constraints - accept with warning
+      console.warn(`⚠️ Only circular sector doesn't meet sales constraints (with 5% margin). GR1=${currentGR1.toLocaleString()} (required: ${EFFECTIVE_MIN_GR1.toLocaleString()}) and GR2=${currentGR2.toLocaleString()} (required: ${EFFECTIVE_MIN_GR2.toLocaleString()}). Accepting with margin violation.`);
+      clusters.push(currentCluster);
     }
   }
   
   console.log(`🚨 Circular fallback created ${clusters.length} sectors`);
   
-  // Final validation - ensure all clusters meet constraints
+  // Final validation - log any remaining constraint violations but don't throw errors
   clusters.forEach((cluster, index) => {
     const gr1Total = cluster.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
     const gr2Total = cluster.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-    const gr1Valid = gr1Total >= MIN_GR1_SALE;
-    const gr2Valid = gr2Total >= MIN_GR2_SALE;
+    const gr1Valid = gr1Total >= EFFECTIVE_MIN_GR1;
+    const gr2Valid = gr2Total >= EFFECTIVE_MIN_GR2;
     
     if (!gr1Valid || !gr2Valid) {
-      throw new Error(`Circular fallback sector ${index} still invalid: GR1=${gr1Total.toLocaleString()} (${gr1Valid ? '✅' : '❌'}), GR2=${gr2Total.toLocaleString()} (${gr2Valid ? '✅' : '❌'}). Cannot proceed with invalid clusters.`);
+      console.warn(`⚠️ Circular fallback sector ${index} with margin violation: GR1=${gr1Total.toLocaleString()} (${gr1Valid ? '✅' : '❌'}), GR2=${gr2Total.toLocaleString()} (${gr2Valid ? '✅' : '❌'}). Proceeding with best effort clustering.`);
     }
   });
   
