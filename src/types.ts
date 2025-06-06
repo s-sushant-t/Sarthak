@@ -3,6 +3,8 @@ export interface Customer {
   latitude: number;
   longitude: number;
   outletName?: string;
+  gr1Sale?: number;
+  gr2Sale?: number;
 }
 
 export interface ClusteredCustomer extends Customer {
