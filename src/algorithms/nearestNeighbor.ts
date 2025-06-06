@@ -11,6 +11,12 @@ const MAX_DISTANCE_VARIANCE = 5; // Maximum allowed distance variance between be
 export const nearestNeighbor = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
+  console.log(`Starting nearest neighbor algorithm with ${customers.length} total customers`);
+  
+  // Create a copy of all customers to track which ones have been assigned
+  const allCustomers = [...customers];
+  const assignedCustomerIds = new Set<string>();
+  
   // Group customers by cluster
   const customersByCluster = customers.reduce((acc, customer) => {
     if (!acc[customer.clusterId]) {
@@ -20,12 +26,17 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
     return acc;
   }, {} as Record<number, ClusteredCustomer[]>);
   
+  console.log('Customers by cluster:', Object.entries(customersByCluster).map(([id, custs]) => 
+    `Cluster ${id}: ${custs.length} customers`
+  ));
+  
   const routes: SalesmanRoute[] = [];
   let currentSalesmanId = 1;
   
   // Process each cluster
   for (const clusterId of Object.keys(customersByCluster)) {
     const clusterCustomers = [...customersByCluster[Number(clusterId)]];
+    console.log(`Processing cluster ${clusterId} with ${clusterCustomers.length} customers`);
     
     while (clusterCustomers.length > 0) {
       const currentRoute: SalesmanRoute = {
@@ -80,6 +91,9 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         const nearestCustomer = clusterCustomers.splice(nearestIndex, 1)[0];
         const travelTime = calculateTravelTime(shortestDistance, TRAVEL_SPEED);
         
+        // Track that this customer has been assigned
+        assignedCustomerIds.add(nearestCustomer.id);
+        
         currentRoute.stops.push({
           customerId: nearestCustomer.id,
           latitude: nearestCustomer.latitude,
@@ -101,13 +115,138 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       
       if (currentRoute.stops.length > 0) {
         routes.push(currentRoute);
+        console.log(`Created route ${currentRoute.salesmanId} with ${currentRoute.stops.length} stops`);
       }
+    }
+  }
+  
+  // CRITICAL: Check for any unassigned customers and force them into routes
+  const unassignedCustomers = allCustomers.filter(customer => !assignedCustomerIds.has(customer.id));
+  
+  if (unassignedCustomers.length > 0) {
+    console.warn(`Found ${unassignedCustomers.length} unassigned customers! Force-assigning them...`);
+    
+    // Force assign unassigned customers to existing routes or create new ones
+    while (unassignedCustomers.length > 0) {
+      // Try to add to existing routes first
+      let assigned = false;
+      
+      for (const route of routes) {
+        if (route.stops.length < MAX_OUTLETS_PER_BEAT && unassignedCustomers.length > 0) {
+          const customer = unassignedCustomers.shift()!;
+          
+          route.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: CUSTOMER_VISIT_TIME,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          
+          assignedCustomerIds.add(customer.id);
+          assigned = true;
+          console.log(`Force-assigned customer ${customer.id} to route ${route.salesmanId}`);
+        }
+      }
+      
+      // If no existing route can accommodate, create a new route
+      if (!assigned && unassignedCustomers.length > 0) {
+        const newRoute: SalesmanRoute = {
+          salesmanId: currentSalesmanId++,
+          stops: [],
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        
+        // Add up to MAX_OUTLETS_PER_BEAT customers to this new route
+        const customersToAdd = Math.min(MAX_OUTLETS_PER_BEAT, unassignedCustomers.length);
+        const clusterIds = new Set<number>();
+        
+        for (let i = 0; i < customersToAdd; i++) {
+          const customer = unassignedCustomers.shift()!;
+          clusterIds.add(customer.clusterId);
+          
+          newRoute.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: CUSTOMER_VISIT_TIME,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          
+          assignedCustomerIds.add(customer.id);
+        }
+        
+        newRoute.clusterIds = Array.from(clusterIds);
+        routes.push(newRoute);
+        console.log(`Created new route ${newRoute.salesmanId} for ${customersToAdd} unassigned customers`);
+      }
+    }
+  }
+  
+  // Final verification: ensure all customers are assigned
+  const finalAssignedCount = assignedCustomerIds.size;
+  const totalCustomers = allCustomers.length;
+  
+  console.log(`Assignment verification: ${finalAssignedCount}/${totalCustomers} customers assigned`);
+  
+  if (finalAssignedCount !== totalCustomers) {
+    console.error(`CRITICAL: Missing ${totalCustomers - finalAssignedCount} customers in route assignment!`);
+    
+    // Emergency fallback: find missing customers and force assign them
+    const missingCustomers = allCustomers.filter(customer => !assignedCustomerIds.has(customer.id));
+    console.error('Missing customers:', missingCustomers.map(c => c.id));
+    
+    // Add missing customers to the last route or create a new one
+    if (missingCustomers.length > 0) {
+      let targetRoute = routes[routes.length - 1];
+      
+      if (!targetRoute || targetRoute.stops.length >= MAX_OUTLETS_PER_BEAT) {
+        targetRoute = {
+          salesmanId: currentSalesmanId++,
+          stops: [],
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        routes.push(targetRoute);
+      }
+      
+      missingCustomers.forEach(customer => {
+        targetRoute.stops.push({
+          customerId: customer.id,
+          latitude: customer.latitude,
+          longitude: customer.longitude,
+          distanceToNext: 0,
+          timeToNext: 0,
+          visitTime: CUSTOMER_VISIT_TIME,
+          clusterId: customer.clusterId,
+          outletName: customer.outletName
+        });
+        
+        if (!targetRoute.clusterIds.includes(customer.clusterId)) {
+          targetRoute.clusterIds.push(customer.clusterId);
+        }
+      });
+      
+      console.log(`Emergency assignment: Added ${missingCustomers.length} missing customers to route ${targetRoute.salesmanId}`);
     }
   }
   
   // Balance routes within clusters
   const routesByCluster = routes.reduce((acc, route) => {
-    const clusterId = route.clusterIds[0];
+    const clusterId = route.clusterIds[0] || 0;
     if (!acc[clusterId]) acc[clusterId] = [];
     acc[clusterId].push(route);
     return acc;
@@ -224,6 +363,14 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
     ...route,
     salesmanId: index + 1
   }));
+  
+  // Final verification of customer assignment
+  const finalCustomerCount = finalRoutes.reduce((count, route) => count + route.stops.length, 0);
+  console.log(`Final verification: ${finalCustomerCount}/${totalCustomers} customers in final routes`);
+  
+  if (finalCustomerCount !== totalCustomers) {
+    console.error(`FINAL ERROR: Route generation lost ${totalCustomers - finalCustomerCount} customers!`);
+  }
   
   // Calculate total distance
   const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);

@@ -80,39 +80,91 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
         }
         
         const customers: Customer[] = [];
+        const processedCustomerIds = new Set<string>();
+        
+        console.log(`Processing ${dataRows.length} data rows from Excel file...`);
         
         for (const row of dataRows) {
           if (!Array.isArray(row)) continue;
           
           const lat = parseFloat(row[headerMap.get('OL_Latitude')] || '');
           const lng = parseFloat(row[headerMap.get('OL_Longitude')] || '');
-          const id = row[headerMap.get('DMS Customer ID')]?.toString();
-          const outletName = row[headerMap.get('Outlet_Name')]?.toString() || '';
+          const id = row[headerMap.get('DMS Customer ID')]?.toString()?.trim();
+          const outletName = row[headerMap.get('Outlet_Name')]?.toString()?.trim() || '';
           
-          if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0 && id) {
+          // Validate data quality
+          if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0 && id && !processedCustomerIds.has(id)) {
             customers.push({
               id,
               latitude: lat,
               longitude: lng,
               outletName
             });
+            processedCustomerIds.add(id);
+          } else if (id && processedCustomerIds.has(id)) {
+            console.warn(`Duplicate customer ID found: ${id} - skipping duplicate entry`);
           }
         }
+        
+        console.log(`Extracted ${customers.length} unique valid customers from Excel file`);
         
         if (customers.length === 0) {
           throw new Error(
             'No valid customer data found. Please ensure:\n' +
             '- OL_Latitude and OL_Longitude contain valid numbers\n' +
             '- Coordinates are not zero (0)\n' +
-            '- Each customer has a valid DMS Customer ID'
+            '- Each customer has a valid DMS Customer ID\n' +
+            '- No duplicate customer IDs exist'
           );
         }
         
+        console.log('Starting clustering process...');
         const clusteredCustomers = await clusterCustomers(customers);
         
-        resolve({ distributor, customers: clusteredCustomers });
+        console.log(`Clustering complete: ${clusteredCustomers.length} customers clustered`);
+        
+        // Final verification that all customers are included
+        if (clusteredCustomers.length !== customers.length) {
+          console.error(`CRITICAL: Clustering lost customers! Input: ${customers.length}, Output: ${clusteredCustomers.length}`);
+          
+          // Find missing customers
+          const clusteredIds = new Set(clusteredCustomers.map(c => c.id));
+          const missingCustomers = customers.filter(c => !clusteredIds.has(c.id));
+          
+          console.error('Missing customers after clustering:', missingCustomers.map(c => c.id));
+          
+          // Add missing customers with default cluster assignment
+          const maxClusterId = Math.max(...clusteredCustomers.map(c => c.clusterId), -1);
+          missingCustomers.forEach((customer, index) => {
+            clusteredCustomers.push({
+              ...customer,
+              clusterId: maxClusterId + 1 + Math.floor(index / 180) // Ensure minimum cluster size
+            });
+          });
+          
+          console.log(`Recovery complete: ${clusteredCustomers.length} customers now included`);
+        }
+        
+        // Verify cluster sizes meet minimum requirements
+        const clusterSizes = clusteredCustomers.reduce((acc, customer) => {
+          acc[customer.clusterId] = (acc[customer.clusterId] || 0) + 1;
+          return acc;
+        }, {} as Record<number, number>);
+        
+        console.log('Final cluster sizes:', clusterSizes);
+        
+        const smallClusters = Object.entries(clusterSizes).filter(([_, size]) => size < 180);
+        if (smallClusters.length > 0) {
+          console.warn('Clusters below minimum size detected:', smallClusters);
+        }
+        
+        resolve({ 
+          distributor, 
+          customers: clusteredCustomers 
+        });
         
       } catch (error) {
+        console.error('Excel processing error:', error);
         reject(error instanceof Error ? error : new Error('Unknown error processing Excel file'));
       }
     };

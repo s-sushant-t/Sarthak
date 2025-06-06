@@ -20,6 +20,12 @@ const BATCH_SIZE = 20;
 export const simulatedAnnealing = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
+  console.log(`Starting simulated annealing with ${customers.length} total customers`);
+  
+  // Track all customers to ensure none are lost
+  const allCustomers = [...customers];
+  const assignedCustomerIds = new Set<string>();
+  
   // Group customers by cluster
   const customersByCluster = customers.reduce((acc, customer) => {
     if (!acc[customer.clusterId]) {
@@ -29,20 +35,117 @@ export const simulatedAnnealing = async (locationData: LocationData): Promise<Al
     return acc;
   }, {} as Record<number, ClusteredCustomer[]>);
   
+  console.log('Customers by cluster:', Object.entries(customersByCluster).map(([id, custs]) => 
+    `Cluster ${id}: ${custs.length} customers`
+  ));
+  
   // Process each cluster independently
   const clusterResults: SalesmanRoute[][] = await Promise.all(
     Object.entries(customersByCluster).map(async ([clusterId, clusterCustomers]) => {
-      return processCluster(
+      const routes = await processCluster(
         Number(clusterId),
         clusterCustomers,
         distributor
       );
+      
+      // Track assigned customers
+      routes.forEach(route => {
+        route.stops.forEach(stop => {
+          assignedCustomerIds.add(stop.customerId);
+        });
+      });
+      
+      return routes;
     })
   );
   
   // Combine and optimize routes across clusters
   let routes = clusterResults.flat();
+  
+  // CRITICAL: Check for any unassigned customers
+  const unassignedCustomers = allCustomers.filter(customer => !assignedCustomerIds.has(customer.id));
+  
+  if (unassignedCustomers.length > 0) {
+    console.warn(`Found ${unassignedCustomers.length} unassigned customers in simulated annealing! Force-assigning them...`);
+    
+    // Force assign unassigned customers
+    let currentSalesmanId = routes.length > 0 ? Math.max(...routes.map(r => r.salesmanId)) + 1 : 1;
+    
+    while (unassignedCustomers.length > 0) {
+      // Try to add to existing routes first
+      let assigned = false;
+      
+      for (const route of routes) {
+        if (route.stops.length < MAX_OUTLETS_PER_BEAT && unassignedCustomers.length > 0) {
+          const customer = unassignedCustomers.shift()!;
+          
+          route.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: CUSTOMER_VISIT_TIME,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          
+          assignedCustomerIds.add(customer.id);
+          assigned = true;
+          console.log(`Force-assigned customer ${customer.id} to route ${route.salesmanId}`);
+        }
+      }
+      
+      // If no existing route can accommodate, create a new route
+      if (!assigned && unassignedCustomers.length > 0) {
+        const newRoute: SalesmanRoute = {
+          salesmanId: currentSalesmanId++,
+          stops: [],
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        
+        // Add up to MAX_OUTLETS_PER_BEAT customers to this new route
+        const customersToAdd = Math.min(MAX_OUTLETS_PER_BEAT, unassignedCustomers.length);
+        const clusterIds = new Set<number>();
+        
+        for (let i = 0; i < customersToAdd; i++) {
+          const customer = unassignedCustomers.shift()!;
+          clusterIds.add(customer.clusterId);
+          
+          newRoute.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: CUSTOMER_VISIT_TIME,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          
+          assignedCustomerIds.add(customer.id);
+        }
+        
+        newRoute.clusterIds = Array.from(clusterIds);
+        routes.push(newRoute);
+        console.log(`Created new route ${newRoute.salesmanId} for ${customersToAdd} unassigned customers`);
+      }
+    }
+  }
+  
   routes = await optimizeAcrossClusters(routes, distributor);
+  
+  // Final verification
+  const finalCustomerCount = routes.reduce((count, route) => count + route.stops.length, 0);
+  console.log(`Simulated annealing verification: ${finalCustomerCount}/${allCustomers.length} customers in final routes`);
+  
+  if (finalCustomerCount !== allCustomers.length) {
+    console.error(`SIMULATED ANNEALING ERROR: Lost ${allCustomers.length - finalCustomerCount} customers!`);
+  }
   
   // Calculate total distance
   const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
@@ -61,6 +164,8 @@ async function processCluster(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number }
 ): Promise<SalesmanRoute[]> {
+  console.log(`Processing cluster ${clusterId} with ${customers.length} customers`);
+  
   // Create multiple initial solutions and select the best
   const numInitialSolutions = 5;
   let bestSolution = null;
@@ -113,6 +218,52 @@ async function processCluster(
     
     if (!improved) noImprovementCount++;
     temperature *= COOLING_RATE;
+  }
+  
+  // Ensure all customers are assigned in the final solution
+  const assignedCustomerIds = new Set<string>();
+  bestSolution!.forEach((route: SalesmanRoute) => {
+    route.stops.forEach(stop => {
+      assignedCustomerIds.add(stop.customerId);
+    });
+  });
+  
+  const unassignedInCluster = customers.filter(customer => !assignedCustomerIds.has(customer.id));
+  
+  if (unassignedInCluster.length > 0) {
+    console.warn(`Cluster ${clusterId}: ${unassignedInCluster.length} customers not assigned, force-assigning...`);
+    
+    // Add unassigned customers to routes
+    unassignedInCluster.forEach(customer => {
+      // Find route with space or create new one
+      let targetRoute = bestSolution!.find((route: SalesmanRoute) => route.stops.length < MAX_OUTLETS_PER_BEAT);
+      
+      if (!targetRoute) {
+        targetRoute = {
+          salesmanId: bestSolution!.length + 1,
+          stops: [],
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [clusterId],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        bestSolution!.push(targetRoute);
+      }
+      
+      targetRoute.stops.push({
+        customerId: customer.id,
+        latitude: customer.latitude,
+        longitude: customer.longitude,
+        distanceToNext: 0,
+        timeToNext: 0,
+        visitTime: CUSTOMER_VISIT_TIME,
+        clusterId: customer.clusterId,
+        outletName: customer.outletName
+      });
+      
+      updateRouteMetrics(targetRoute);
+    });
   }
   
   return bestSolution!;
