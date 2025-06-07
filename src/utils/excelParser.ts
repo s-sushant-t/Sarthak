@@ -35,9 +35,7 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           'WD_Latitude', 'WD_Longitude', 
           'OL_Latitude', 'OL_Longitude', 
           'DMS Customer ID',
-          'Outlet_Name',
-          'GR1_Sale',
-          'GR2_Sale'
+          'Outlet_Name'
         ];
         
         const headerMap = new Map(headers.map((header, index) => [header?.trim() || '', index]));
@@ -52,9 +50,7 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
             '- OL_Latitude (Customer latitude)\n' +
             '- OL_Longitude (Customer longitude)\n' +
             '- DMS Customer ID (Customer identifier)\n' +
-            '- Outlet_Name (Customer outlet name)\n' +
-            '- GR1_Sale (GR1 sales amount)\n' +
-            '- GR2_Sale (GR2 sales amount)'
+            '- Outlet_Name (Customer outlet name)'
           );
         }
         
@@ -95,8 +91,6 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
           const lng = parseFloat(row[headerMap.get('OL_Longitude')] || '');
           const id = row[headerMap.get('DMS Customer ID')]?.toString()?.trim();
           const outletName = row[headerMap.get('Outlet_Name')]?.toString()?.trim() || '';
-          const gr1Sale = parseFloat(row[headerMap.get('GR1_Sale')] || '0');
-          const gr2Sale = parseFloat(row[headerMap.get('GR2_Sale')] || '0');
           
           // Validate data quality
           if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0 && id && !processedCustomerIds.has(id)) {
@@ -104,9 +98,7 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
               id,
               latitude: lat,
               longitude: lng,
-              outletName,
-              gr1Sale: isNaN(gr1Sale) ? 0 : gr1Sale,
-              gr2Sale: isNaN(gr2Sale) ? 0 : gr2Sale
+              outletName
             });
             processedCustomerIds.add(id);
           } else if (id && processedCustomerIds.has(id)) {
@@ -122,17 +114,11 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
             '- OL_Latitude and OL_Longitude contain valid numbers\n' +
             '- Coordinates are not zero (0)\n' +
             '- Each customer has a valid DMS Customer ID\n' +
-            '- No duplicate customer IDs exist\n' +
-            '- GR1_Sale and GR2_Sale columns contain numeric values'
+            '- No duplicate customer IDs exist'
           );
         }
         
-        // Log sales data summary
-        const totalGR1 = customers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-        const totalGR2 = customers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-        console.log(`Sales summary - Total GR1: ${totalGR1.toLocaleString()}, Total GR2: ${totalGR2.toLocaleString()}`);
-        
-        console.log('Starting clustering process with sales constraints...');
+        console.log('Starting clustering process...');
         const clusteredCustomers = await clusterCustomers(customers);
         
         console.log(`Clustering complete: ${clusteredCustomers.length} customers clustered`);

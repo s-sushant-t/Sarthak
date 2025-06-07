@@ -64,7 +64,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
       <div className="mb-6">
         <h2 className="text-2xl font-semibold text-gray-800 mb-2">Upload Customer Data</h2>
         <p className="text-gray-600">
-          Upload an Excel file containing customer and distributor location data with sales information to generate optimized sales routes.
+          Upload an Excel file containing customer and distributor location data to generate optimized sales routes.
         </p>
       </div>
       
@@ -98,7 +98,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
           {isProcessing ? (
             <div className="flex flex-col items-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-2"></div>
-              <p className="text-blue-600">Processing file with sales constraints...</p>
+              <p className="text-blue-600">Processing file...</p>
             </div>
           ) : fileName ? (
             <>
@@ -126,16 +126,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
             <li>• <span className="font-medium">WD_Latitude, WD_Longitude</span> - Distributor coordinates</li>
             <li>• <span className="font-medium">DMS Customer ID</span> - Unique customer identifier</li>
             <li>• <span className="font-medium">OL_Latitude, OL_Longitude</span> - Customer coordinates</li>
-            <li>• <span className="font-medium">Outlet_Name</span> - Customer outlet name</li>
-            <li>• <span className="font-medium">GR1_Sale</span> - GR1 sales amount (minimum 600,000 per cluster)</li>
-            <li>• <span className="font-medium">GR2_Sale</span> - GR2 sales amount (minimum 250,000 per cluster)</li>
           </ul>
-          <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-            <p className="text-sm text-blue-800 font-medium">Sales Constraints:</p>
-            <p className="text-xs text-blue-700 mt-1">
-              Each cluster must have a total GR1_Sale ≥ 600,000 and GR2_Sale ≥ 250,000
-            </p>
-          </div>
         </div>
       </div>
     </div>

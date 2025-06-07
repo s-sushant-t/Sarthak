@@ -11,9 +11,7 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
     'OL_Longitude',
     'Distance to Next Node (km)',
     'Time to Next Node (min)',
-    'Cluster ID',
-    'GR1_Sale',
-    'GR2_Sale'
+    'Cluster ID'
   ].join(',');
   
   // Create rows for each stop in each route
@@ -40,9 +38,7 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         route.distributorLng,
         distanceToFirst.toFixed(2),
         timeToFirst.toFixed(2),
-        firstStop.clusterId,
-        0, // Distributor has no sales
-        0  // Distributor has no sales
+        firstStop.clusterId
       ].join(','));
     }
     
@@ -62,21 +58,16 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
         timeToNext = calculateTravelTime(distanceToNext);
       }
       
-      // Find the original customer data to get sales values
-      const customerData = findCustomerSalesData(stop.customerId);
-      
       rows.push([
         route.salesmanId,
         index + 1,
-        `"${stop.customerId}"`,
-        `"${stop.outletName || ''}"`,
+        stop.customerId,
+        stop.outletName || '',
         stop.latitude,
         stop.longitude,
         distanceToNext.toFixed(2),
         timeToNext.toFixed(2),
-        stop.clusterId,
-        customerData.gr1Sale || 0,
-        customerData.gr2Sale || 0
+        stop.clusterId
       ].join(','));
     });
   });
@@ -96,50 +87,7 @@ export const exportToCSV = (routes: RouteData, filename: string): void => {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  
-  // Log export summary
-  const totalCustomers = routes.reduce((sum, route) => sum + route.stops.length, 0);
-  const totalGR1 = routes.reduce((sum, route) => 
-    sum + route.stops.reduce((routeSum, stop) => {
-      const customerData = findCustomerSalesData(stop.customerId);
-      return routeSum + (customerData.gr1Sale || 0);
-    }, 0), 0
-  );
-  const totalGR2 = routes.reduce((sum, route) => 
-    sum + route.stops.reduce((routeSum, stop) => {
-      const customerData = findCustomerSalesData(stop.customerId);
-      return routeSum + (customerData.gr2Sale || 0);
-    }, 0), 0
-  );
-  
-  console.log(`📊 CSV Export Summary:
-    - Total customers: ${totalCustomers}
-    - Total beats: ${routes.length}
-    - Total GR1 sales: ${totalGR1.toLocaleString()}
-    - Total GR2 sales: ${totalGR2.toLocaleString()}
-    - File: ${filename}.csv`);
 };
-
-// Helper function to find customer sales data from localStorage
-function findCustomerSalesData(customerId: string): { gr1Sale?: number; gr2Sale?: number } {
-  try {
-    const locationData = localStorage.getItem('locationData');
-    if (locationData) {
-      const parsedData = JSON.parse(locationData);
-      const customer = parsedData.customers?.find((c: any) => c.id === customerId);
-      if (customer) {
-        return {
-          gr1Sale: customer.gr1Sale || 0,
-          gr2Sale: customer.gr2Sale || 0
-        };
-      }
-    }
-  } catch (error) {
-    console.warn(`Could not find sales data for customer ${customerId}:`, error);
-  }
-  
-  return { gr1Sale: 0, gr2Sale: 0 };
-}
 
 // Helper function to calculate Haversine distance
 const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
