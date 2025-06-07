@@ -28,41 +28,33 @@ export const clusterCustomers = async (
       return [];
     }
 
-    console.log(`🎯 Starting FIXED CIRCULAR SECTOR clustering: ${TARGET_CLUSTERS} clusters, ${TARGET_BEATS} beats for ${customers.length} customers`);
+    console.log(`🎯 Starting NON-OVERLAPPING GEOGRAPHIC clustering: ${TARGET_CLUSTERS} clusters, ${TARGET_BEATS} beats for ${customers.length} customers`);
     console.log(`📊 STRICT Constraints: ${MIN_OUTLETS_PER_CLUSTER}-${MAX_OUTLETS_PER_CLUSTER} outlets per cluster, GR1≥${MIN_GR1_SALE.toLocaleString()}, GR2≥${MIN_GR2_SALE.toLocaleString()} with 5% error margin`);
 
-    // Step 1: Calculate the median center point as the clustering origin
-    const medianCenter = calculateMedianCenter(customers);
-    console.log('📍 Median center calculated as clustering origin:', medianCenter);
+    // Step 1: Create initial geographic clusters using K-means with geographic constraints
+    const geographicClusters = createNonOverlappingGeographicClusters(customers);
+    console.log(`🗺️ Created ${geographicClusters.length} non-overlapping geographic clusters`);
 
-    // Step 2: Create EXACTLY 6 circular sectors from median center
-    const circularSectors = createExactSixCircularSectors(customers, medianCenter);
-    console.log(`🔄 Created EXACTLY ${circularSectors.length} circular sectors from median center`);
+    // Step 2: Enforce size constraints while maintaining geographic boundaries
+    const sizeEnforcedClusters = enforceClusterSizeConstraints(geographicClusters);
+    console.log(`📏 Size enforcement complete: ${sizeEnforcedClusters.length} clusters meet size requirements`);
 
-    // Step 3: Enforce sales constraints on the 6 sectors
-    const salesValidatedSectors = enforceCircularSectorSalesConstraints(circularSectors, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER, medianCenter);
-    console.log(`💰 Sales enforcement on 6 circular sectors complete: ${salesValidatedSectors.length} sectors meet requirements`);
+    // Step 3: Validate and adjust for sales constraints
+    const salesValidatedClusters = enforceSalesConstraints(sizeEnforcedClusters);
+    console.log(`💰 Sales validation complete: ${salesValidatedClusters.length} clusters meet sales requirements`);
 
-    // Step 4: CRITICAL - Ensure exactly 6 clusters with minimum outlet requirement
-    const sizeEnforcedSectors = enforceExactSixClustersWithMinimumSize(salesValidatedSectors, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER, medianCenter);
-    console.log(`📏 STRICT size enforcement complete: ${sizeEnforcedSectors.length} sectors (target: ${TARGET_CLUSTERS})`);
+    // Step 4: Final validation and conversion
+    const clusteredCustomers = convertClustersToCustomers(salesValidatedClusters);
 
-    // Step 5: Final balancing to ensure exactly 6 clusters
-    const balancedSectors = finalSixClusterBalancing(sizeEnforcedSectors, MIN_OUTLETS_PER_CLUSTER, MAX_OUTLETS_PER_CLUSTER, medianCenter);
-    console.log(`⚖️ Final balancing complete: ${balancedSectors.length} sectors (target: ${TARGET_CLUSTERS})`);
-
-    // Step 6: Convert sectors to clustered customers
-    const clusteredCustomers = convertSectorsToCustomers(balancedSectors);
-
-    // Step 7: FINAL VALIDATION - Must have exactly 6 clusters
-    const finalValidation = validateExactClusterCount(clusteredCustomers, customers, TARGET_CLUSTERS, MIN_OUTLETS_PER_CLUSTER);
+    // Step 5: FINAL VALIDATION
+    const finalValidation = validateFinalClusters(clusteredCustomers, customers);
     
     if (!finalValidation.isValid) {
       console.error(`❌ CRITICAL: Final validation failed: ${finalValidation.message}`);
       throw new Error(finalValidation.message);
     }
 
-    // Step 8: Sales validation with error margin
+    // Step 6: Sales validation with error margin
     const salesValidation = validateSalesConstraints(clusteredCustomers);
     if (!salesValidation.isValid) {
       console.warn(`💰 Sales validation warning: ${salesValidation.message}`);
@@ -72,41 +64,31 @@ export const clusterCustomers = async (
     const clusterCount = new Set(clusteredCustomers.map(c => c.clusterId)).size;
     const clusterSizes = getClusterSizes(clusteredCustomers);
     
-    console.log(`✅ FIXED clustering successful: ${clusterCount} clusters (target: ${TARGET_CLUSTERS}), ${TARGET_BEATS} beats expected`);
+    console.log(`✅ NON-OVERLAPPING clustering successful: ${clusterCount} clusters (target: ${TARGET_CLUSTERS}), ${TARGET_BEATS} beats expected`);
     console.log('📏 Cluster sizes:', clusterSizes);
     console.log('💰 Sales validation:', salesValidation.details);
 
     return clusteredCustomers;
 
   } catch (error) {
-    console.error('🚨 Fixed circular sector clustering failed:', error);
+    console.error('🚨 Non-overlapping geographic clustering failed:', error);
     throw error;
   }
 };
 
-interface MedianCenter {
-  latitude: number;
-  longitude: number;
-}
-
-interface CircularSector {
+interface GeographicCluster {
   id: number;
   customers: Customer[];
-  startAngle: number;
-  endAngle: number;
-  minRadius: number;
-  maxRadius: number;
-  center: MedianCenter;
-  gr1Total: number;
-  gr2Total: number;
-  avgRadius: number;
-  sectorAngle: number;
-  geographicBounds: {
+  centroid: { latitude: number; longitude: number };
+  bounds: {
     minLat: number;
     maxLat: number;
     minLng: number;
     maxLng: number;
   };
+  gr1Total: number;
+  gr2Total: number;
+  convexHull: Array<{ latitude: number; longitude: number }>;
 }
 
 interface SalesValidation {
@@ -115,542 +97,440 @@ interface SalesValidation {
   details?: string[];
 }
 
-function calculateMedianCenter(customers: Customer[]): MedianCenter {
-  console.log('📍 Calculating median center as clustering origin...');
+function createNonOverlappingGeographicClusters(customers: Customer[]): GeographicCluster[] {
+  console.log('🗺️ Creating non-overlapping geographic clusters using improved K-means...');
   
-  // Sort customers by latitude and longitude separately to find true median
-  const sortedByLat = [...customers].sort((a, b) => a.latitude - b.latitude);
-  const sortedByLng = [...customers].sort((a, b) => a.longitude - b.longitude);
+  // Step 1: Initialize cluster centroids using geographic distribution
+  const centroids = initializeGeographicCentroids(customers, TARGET_CLUSTERS);
+  console.log('📍 Initialized centroids:', centroids.map((c, i) => `Cluster ${i}: (${c.latitude.toFixed(4)}, ${c.longitude.toFixed(4)})`));
   
-  // Calculate true median for both coordinates
-  const medianLat = sortedByLat.length % 2 === 0
-    ? (sortedByLat[sortedByLat.length / 2 - 1].latitude + sortedByLat[sortedByLat.length / 2].latitude) / 2
-    : sortedByLat[Math.floor(sortedByLat.length / 2)].latitude;
+  let clusters: GeographicCluster[] = [];
+  let iterations = 0;
+  const maxIterations = 100;
+  let converged = false;
+  
+  while (!converged && iterations < maxIterations) {
+    iterations++;
     
-  const medianLng = sortedByLng.length % 2 === 0
-    ? (sortedByLng[sortedByLng.length / 2 - 1].longitude + sortedByLng[sortedByLng.length / 2].longitude) / 2
-    : sortedByLng[Math.floor(sortedByLng.length / 2)].longitude;
-  
-  const center = {
-    latitude: medianLat,
-    longitude: medianLng
-  };
-  
-  console.log(`📍 Median center (clustering origin): (${center.latitude.toFixed(6)}, ${center.longitude.toFixed(6)})`);
-  return center;
-}
-
-function createExactSixCircularSectors(
-  customers: Customer[],
-  medianCenter: MedianCenter
-): CircularSector[] {
-  console.log(`🔄 Creating EXACTLY ${TARGET_CLUSTERS} circular sectors from median center...`);
-  
-  // Convert all customers to polar coordinates relative to median center
-  const customersWithPolar = customers.map(customer => {
-    const distance = calculateDistance(medianCenter.latitude, medianCenter.longitude, customer.latitude, customer.longitude);
-    const angle = calculateAngle(medianCenter.latitude, medianCenter.longitude, customer.latitude, customer.longitude);
-    
-    return {
-      ...customer,
-      distance,
-      angle: normalizeAngle(angle),
-      salesScore: (customer.gr1Sale || 0) + (customer.gr2Sale || 0)
-    };
-  });
-  
-  // Sort by angle to create proper circular sectors radiating from median center
-  customersWithPolar.sort((a, b) => a.angle - b.angle);
-  
-  console.log(`🔄 Converted ${customersWithPolar.length} customers to polar coordinates from median center`);
-  
-  // Create EXACTLY 6 sectors by dividing the circle into 6 equal parts (60 degrees each)
-  const sectors: CircularSector[] = [];
-  const anglePerSector = (2 * Math.PI) / TARGET_CLUSTERS; // 60 degrees per sector
-  
-  console.log(`🔄 Creating ${TARGET_CLUSTERS} sectors with ${(anglePerSector * 180 / Math.PI).toFixed(1)}° per sector`);
-  
-  // Create sectors by dividing the circle into exactly 6 equal angular segments
-  for (let i = 0; i < TARGET_CLUSTERS; i++) {
-    const startAngle = i * anglePerSector;
-    const endAngle = (i + 1) * anglePerSector;
-    
-    // Find customers within this angular sector
-    const sectorCustomers = customersWithPolar.filter(customer => {
-      const angle = customer.angle;
-      
-      // Handle wrap-around at 0/2π for the last sector
-      if (i === TARGET_CLUSTERS - 1) {
-        // Last sector: from startAngle to 2π and from 0 to endAngle-2π
-        return angle >= startAngle || angle < (endAngle - 2 * Math.PI);
-      } else {
-        return angle >= startAngle && angle < endAngle;
-      }
-    });
-    
-    if (sectorCustomers.length > 0) {
-      const distances = sectorCustomers.map(c => c.distance);
-      const gr1Total = sectorCustomers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-      const gr2Total = sectorCustomers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-      const avgRadius = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-      
-      // Calculate geographic bounds for this sector
-      const latitudes = sectorCustomers.map(c => c.latitude);
-      const longitudes = sectorCustomers.map(c => c.longitude);
-      
-      const sector: CircularSector = {
-        id: i,
-        customers: sectorCustomers.map(({ distance, angle, salesScore, ...customer }) => customer),
-        startAngle,
-        endAngle,
-        minRadius: Math.min(...distances),
-        maxRadius: Math.max(...distances),
-        center: medianCenter,
-        gr1Total,
-        gr2Total,
-        avgRadius,
-        sectorAngle: anglePerSector,
-        geographicBounds: {
-          minLat: Math.min(...latitudes),
-          maxLat: Math.max(...latitudes),
-          minLng: Math.min(...longitudes),
-          maxLng: Math.max(...longitudes)
-        }
-      };
-      
-      sectors.push(sector);
-      
-      console.log(`🔄 Sector ${i}: ${sectorCustomers.length} customers, angles ${(startAngle * 180 / Math.PI).toFixed(1)}°-${(endAngle * 180 / Math.PI).toFixed(1)}°, GR1=${gr1Total.toLocaleString()}, GR2=${gr2Total.toLocaleString()}`);
-      console.log(`   Geographic bounds: Lat ${sector.geographicBounds.minLat.toFixed(4)}-${sector.geographicBounds.maxLat.toFixed(4)}, Lng ${sector.geographicBounds.minLng.toFixed(4)}-${sector.geographicBounds.maxLng.toFixed(4)}`);
-    }
-  }
-  
-  // Handle any customers that might have been missed due to floating point precision
-  const assignedCustomerIds = new Set(sectors.flatMap(s => s.customers.map(c => c.id)));
-  const unassignedCustomers = customersWithPolar.filter(c => !assignedCustomerIds.has(c.id));
-  
-  if (unassignedCustomers.length > 0) {
-    console.log(`🔄 Assigning ${unassignedCustomers.length} unassigned customers to nearest sectors`);
-    
-    unassignedCustomers.forEach(customer => {
-      // Find the sector with the closest angle
-      let nearestSector = sectors[0];
-      let minAngleDiff = Infinity;
-      
-      sectors.forEach(sector => {
-        const sectorMidAngle = (sector.startAngle + sector.endAngle) / 2;
-        let angleDiff = Math.abs(customer.angle - sectorMidAngle);
-        
-        // Handle wrap-around
-        if (angleDiff > Math.PI) {
-          angleDiff = 2 * Math.PI - angleDiff;
-        }
-        
-        if (angleDiff < minAngleDiff) {
-          minAngleDiff = angleDiff;
-          nearestSector = sector;
-        }
-      });
-      
-      nearestSector.customers.push({
-        id: customer.id,
-        latitude: customer.latitude,
-        longitude: customer.longitude,
-        outletName: customer.outletName,
-        gr1Sale: customer.gr1Sale,
-        gr2Sale: customer.gr2Sale
-      });
-      
-      nearestSector.gr1Total += customer.gr1Sale || 0;
-      nearestSector.gr2Total += customer.gr2Sale || 0;
-      updateSectorBounds(nearestSector);
-    });
-  }
-  
-  // Ensure we have exactly 6 sectors
-  if (sectors.length !== TARGET_CLUSTERS) {
-    console.warn(`⚠️ Created ${sectors.length} sectors instead of ${TARGET_CLUSTERS}. Adjusting...`);
-    
-    // If we have fewer than 6 sectors, create empty ones
-    while (sectors.length < TARGET_CLUSTERS) {
-      const emptySector: CircularSector = {
-        id: sectors.length,
-        customers: [],
-        startAngle: sectors.length * anglePerSector,
-        endAngle: (sectors.length + 1) * anglePerSector,
-        minRadius: 0,
-        maxRadius: 0,
-        center: medianCenter,
-        gr1Total: 0,
-        gr2Total: 0,
-        avgRadius: 0,
-        sectorAngle: anglePerSector,
-        geographicBounds: {
-          minLat: medianCenter.latitude,
-          maxLat: medianCenter.latitude,
-          minLng: medianCenter.longitude,
-          maxLng: medianCenter.longitude
-        }
-      };
-      sectors.push(emptySector);
-    }
-    
-    // If we have more than 6 sectors, merge the smallest ones
-    while (sectors.length > TARGET_CLUSTERS) {
-      // Find the two smallest adjacent sectors and merge them
-      let smallestIndex = 0;
-      let smallestSize = sectors[0].customers.length;
-      
-      for (let i = 1; i < sectors.length; i++) {
-        if (sectors[i].customers.length < smallestSize) {
-          smallestSize = sectors[i].customers.length;
-          smallestIndex = i;
-        }
-      }
-      
-      // Merge with adjacent sector
-      const adjacentIndex = smallestIndex === sectors.length - 1 ? smallestIndex - 1 : smallestIndex + 1;
-      const targetSector = sectors[adjacentIndex];
-      const sourceSector = sectors[smallestIndex];
-      
-      // Move all customers from source to target
-      targetSector.customers.push(...sourceSector.customers);
-      targetSector.gr1Total += sourceSector.gr1Total;
-      targetSector.gr2Total += sourceSector.gr2Total;
-      updateSectorBounds(targetSector);
-      
-      // Remove the merged sector
-      sectors.splice(smallestIndex, 1);
-      
-      // Update sector IDs
-      sectors.forEach((sector, index) => {
-        sector.id = index;
-      });
-    }
-  }
-  
-  console.log(`✅ Created exactly ${sectors.length} circular sectors`);
-  return sectors;
-}
-
-function enforceExactSixClustersWithMinimumSize(
-  sectors: CircularSector[],
-  minSize: number,
-  maxSize: number,
-  medianCenter: MedianCenter
-): CircularSector[] {
-  console.log(`📏 ENFORCING EXACTLY ${TARGET_CLUSTERS} CLUSTERS with minimum ${minSize} outlets each`);
-  
-  // Ensure we have exactly 6 sectors
-  while (sectors.length < TARGET_CLUSTERS) {
-    const emptySector: CircularSector = {
-      id: sectors.length,
+    // Assign customers to nearest centroid
+    const newClusters: GeographicCluster[] = centroids.map((centroid, id) => ({
+      id,
       customers: [],
-      startAngle: sectors.length * (2 * Math.PI / TARGET_CLUSTERS),
-      endAngle: (sectors.length + 1) * (2 * Math.PI / TARGET_CLUSTERS),
-      minRadius: 0,
-      maxRadius: 0,
-      center: medianCenter,
+      centroid,
+      bounds: { minLat: Infinity, maxLat: -Infinity, minLng: Infinity, maxLng: -Infinity },
       gr1Total: 0,
       gr2Total: 0,
-      avgRadius: 0,
-      sectorAngle: 2 * Math.PI / TARGET_CLUSTERS,
-      geographicBounds: {
-        minLat: medianCenter.latitude,
-        maxLat: medianCenter.latitude,
-        minLng: medianCenter.longitude,
-        maxLng: medianCenter.longitude
-      }
-    };
-    sectors.push(emptySector);
-  }
-  
-  // If we have more than 6, merge the smallest ones
-  while (sectors.length > TARGET_CLUSTERS) {
-    const smallestIndex = sectors.reduce((minIndex, sector, index) => 
-      sector.customers.length < sectors[minIndex].customers.length ? index : minIndex, 0);
+      convexHull: []
+    }));
     
-    const adjacentIndex = smallestIndex === sectors.length - 1 ? smallestIndex - 1 : smallestIndex + 1;
-    
-    // Merge smallest with adjacent
-    sectors[adjacentIndex].customers.push(...sectors[smallestIndex].customers);
-    sectors[adjacentIndex].gr1Total += sectors[smallestIndex].gr1Total;
-    sectors[adjacentIndex].gr2Total += sectors[smallestIndex].gr2Total;
-    updateSectorBounds(sectors[adjacentIndex]);
-    
-    sectors.splice(smallestIndex, 1);
-    
-    // Update IDs
-    sectors.forEach((sector, index) => {
-      sector.id = index;
+    // Assign each customer to the nearest cluster centroid
+    customers.forEach(customer => {
+      let nearestCluster = 0;
+      let minDistance = Infinity;
+      
+      centroids.forEach((centroid, index) => {
+        const distance = calculateDistance(
+          customer.latitude, customer.longitude,
+          centroid.latitude, centroid.longitude
+        );
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestCluster = index;
+        }
+      });
+      
+      newClusters[nearestCluster].customers.push(customer);
     });
+    
+    // Update cluster properties
+    newClusters.forEach(cluster => {
+      if (cluster.customers.length > 0) {
+        updateClusterProperties(cluster);
+      }
+    });
+    
+    // Check for convergence (centroids don't move significantly)
+    converged = true;
+    for (let i = 0; i < centroids.length; i++) {
+      const oldCentroid = centroids[i];
+      const newCentroid = newClusters[i].centroid;
+      
+      const distance = calculateDistance(
+        oldCentroid.latitude, oldCentroid.longitude,
+        newCentroid.latitude, newCentroid.longitude
+      );
+      
+      if (distance > 0.001) { // 1 meter threshold
+        converged = false;
+        centroids[i] = newCentroid;
+      }
+    }
+    
+    clusters = newClusters;
+    
+    if (iterations % 10 === 0) {
+      console.log(`🔄 K-means iteration ${iterations}: Cluster sizes: ${clusters.map(c => c.customers.length).join(', ')}`);
+    }
   }
   
-  // Implement robust iterative balancing to ensure all clusters meet minimum size
-  let maxIterations = 50;
-  let iteration = 0;
+  console.log(`✅ K-means converged after ${iterations} iterations`);
   
-  while (iteration < maxIterations) {
-    iteration++;
+  // Ensure we have exactly 6 clusters
+  clusters = ensureExactClusterCount(clusters, customers);
+  
+  // Calculate convex hulls for geographic boundaries
+  clusters.forEach(cluster => {
+    if (cluster.customers.length >= 3) {
+      cluster.convexHull = calculateConvexHull(cluster.customers);
+    }
+  });
+  
+  console.log(`🗺️ Final geographic clusters: ${clusters.map(c => `Cluster ${c.id}: ${c.customers.length} customers`).join(', ')}`);
+  
+  return clusters;
+}
+
+function initializeGeographicCentroids(customers: Customer[], numClusters: number): Array<{ latitude: number; longitude: number }> {
+  // Use K-means++ initialization for better centroid distribution
+  const centroids: Array<{ latitude: number; longitude: number }> = [];
+  
+  // Choose first centroid randomly
+  const firstCustomer = customers[Math.floor(Math.random() * customers.length)];
+  centroids.push({ latitude: firstCustomer.latitude, longitude: firstCustomer.longitude });
+  
+  // Choose remaining centroids using K-means++ (probability proportional to squared distance)
+  for (let i = 1; i < numClusters; i++) {
+    const distances = customers.map(customer => {
+      let minDistanceSquared = Infinity;
+      
+      centroids.forEach(centroid => {
+        const distance = calculateDistance(
+          customer.latitude, customer.longitude,
+          centroid.latitude, centroid.longitude
+        );
+        minDistanceSquared = Math.min(minDistanceSquared, distance * distance);
+      });
+      
+      return minDistanceSquared;
+    });
     
-    // Find undersized and oversized sectors
-    const undersizedSectors = sectors.filter(sector => sector.customers.length < minSize);
-    const oversizedSectors = sectors.filter(sector => sector.customers.length > maxSize);
-    const normalSectors = sectors.filter(sector => sector.customers.length >= minSize && sector.customers.length <= maxSize);
+    const totalDistance = distances.reduce((sum, d) => sum + d, 0);
+    const random = Math.random() * totalDistance;
     
-    console.log(`📏 Iteration ${iteration}: ${undersizedSectors.length} undersized, ${oversizedSectors.length} oversized, ${normalSectors.length} normal`);
+    let cumulativeDistance = 0;
+    for (let j = 0; j < customers.length; j++) {
+      cumulativeDistance += distances[j];
+      if (cumulativeDistance >= random) {
+        centroids.push({ 
+          latitude: customers[j].latitude, 
+          longitude: customers[j].longitude 
+        });
+        break;
+      }
+    }
+  }
+  
+  return centroids;
+}
+
+function updateClusterProperties(cluster: GeographicCluster): void {
+  if (cluster.customers.length === 0) return;
+  
+  // Calculate centroid
+  const totalLat = cluster.customers.reduce((sum, c) => sum + c.latitude, 0);
+  const totalLng = cluster.customers.reduce((sum, c) => sum + c.longitude, 0);
+  
+  cluster.centroid = {
+    latitude: totalLat / cluster.customers.length,
+    longitude: totalLng / cluster.customers.length
+  };
+  
+  // Calculate bounds
+  cluster.bounds = {
+    minLat: Math.min(...cluster.customers.map(c => c.latitude)),
+    maxLat: Math.max(...cluster.customers.map(c => c.latitude)),
+    minLng: Math.min(...cluster.customers.map(c => c.longitude)),
+    maxLng: Math.max(...cluster.customers.map(c => c.longitude))
+  };
+  
+  // Calculate sales totals
+  cluster.gr1Total = cluster.customers.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
+  cluster.gr2Total = cluster.customers.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
+}
+
+function ensureExactClusterCount(clusters: GeographicCluster[], customers: Customer[]): GeographicCluster[] {
+  // Remove empty clusters
+  let validClusters = clusters.filter(cluster => cluster.customers.length > 0);
+  
+  // If we have fewer than 6 clusters, split the largest ones
+  while (validClusters.length < TARGET_CLUSTERS) {
+    // Find the largest cluster
+    const largestCluster = validClusters.reduce((largest, cluster) => 
+      cluster.customers.length > largest.customers.length ? cluster : largest
+    );
     
-    if (undersizedSectors.length === 0) {
-      console.log(`✅ All sectors meet minimum size requirement after ${iteration} iterations`);
+    if (largestCluster.customers.length < 2) break; // Can't split further
+    
+    // Split the largest cluster into two
+    const splitClusters = splitClusterGeographically(largestCluster);
+    
+    // Remove the original cluster and add the split clusters
+    const index = validClusters.indexOf(largestCluster);
+    validClusters.splice(index, 1, ...splitClusters);
+    
+    console.log(`🔄 Split cluster ${largestCluster.id} (${largestCluster.customers.length} customers) into ${splitClusters.length} clusters`);
+  }
+  
+  // If we have more than 6 clusters, merge the smallest ones
+  while (validClusters.length > TARGET_CLUSTERS) {
+    // Find the two smallest adjacent clusters
+    const sortedClusters = validClusters.sort((a, b) => a.customers.length - b.customers.length);
+    const smallestCluster = sortedClusters[0];
+    
+    // Find the nearest cluster to merge with
+    let nearestCluster = sortedClusters[1];
+    let minDistance = calculateDistance(
+      smallestCluster.centroid.latitude, smallestCluster.centroid.longitude,
+      nearestCluster.centroid.latitude, nearestCluster.centroid.longitude
+    );
+    
+    for (let i = 2; i < sortedClusters.length; i++) {
+      const distance = calculateDistance(
+        smallestCluster.centroid.latitude, smallestCluster.centroid.longitude,
+        sortedClusters[i].centroid.latitude, sortedClusters[i].centroid.longitude
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearestCluster = sortedClusters[i];
+      }
+    }
+    
+    // Merge the clusters
+    nearestCluster.customers.push(...smallestCluster.customers);
+    updateClusterProperties(nearestCluster);
+    
+    // Remove the merged cluster
+    const index = validClusters.indexOf(smallestCluster);
+    validClusters.splice(index, 1);
+    
+    console.log(`🔄 Merged cluster ${smallestCluster.id} (${smallestCluster.customers.length} customers) into cluster ${nearestCluster.id}`);
+  }
+  
+  // Update cluster IDs to be sequential
+  validClusters.forEach((cluster, index) => {
+    cluster.id = index;
+  });
+  
+  return validClusters;
+}
+
+function splitClusterGeographically(cluster: GeographicCluster): GeographicCluster[] {
+  if (cluster.customers.length < 2) return [cluster];
+  
+  // Split along the longest geographic dimension
+  const latRange = cluster.bounds.maxLat - cluster.bounds.minLat;
+  const lngRange = cluster.bounds.maxLng - cluster.bounds.minLng;
+  
+  const splitByLatitude = latRange > lngRange;
+  
+  // Sort customers by the split dimension
+  const sortedCustomers = [...cluster.customers].sort((a, b) => {
+    return splitByLatitude ? a.latitude - b.latitude : a.longitude - b.longitude;
+  });
+  
+  // Split in the middle
+  const midPoint = Math.floor(sortedCustomers.length / 2);
+  
+  const cluster1: GeographicCluster = {
+    id: cluster.id,
+    customers: sortedCustomers.slice(0, midPoint),
+    centroid: { latitude: 0, longitude: 0 },
+    bounds: { minLat: Infinity, maxLat: -Infinity, minLng: Infinity, maxLng: -Infinity },
+    gr1Total: 0,
+    gr2Total: 0,
+    convexHull: []
+  };
+  
+  const cluster2: GeographicCluster = {
+    id: cluster.id + 1000, // Temporary ID
+    customers: sortedCustomers.slice(midPoint),
+    centroid: { latitude: 0, longitude: 0 },
+    bounds: { minLat: Infinity, maxLat: -Infinity, minLng: Infinity, maxLng: -Infinity },
+    gr1Total: 0,
+    gr2Total: 0,
+    convexHull: []
+  };
+  
+  updateClusterProperties(cluster1);
+  updateClusterProperties(cluster2);
+  
+  return [cluster1, cluster2];
+}
+
+function enforceClusterSizeConstraints(clusters: GeographicCluster[]): GeographicCluster[] {
+  console.log('📏 Enforcing cluster size constraints while maintaining geographic boundaries...');
+  
+  let iterations = 0;
+  const maxIterations = 50;
+  
+  while (iterations < maxIterations) {
+    iterations++;
+    
+    const undersizedClusters = clusters.filter(c => c.customers.length < MIN_OUTLETS_PER_CLUSTER);
+    const oversizedClusters = clusters.filter(c => c.customers.length > MAX_OUTLETS_PER_CLUSTER);
+    
+    if (undersizedClusters.length === 0 && oversizedClusters.length === 0) {
+      console.log(`✅ All clusters meet size constraints after ${iterations} iterations`);
       break;
     }
     
-    // Calculate total deficit and surplus
-    const totalDeficit = undersizedSectors.reduce((sum, sector) => sum + (minSize - sector.customers.length), 0);
-    const totalSurplus = oversizedSectors.reduce((sum, sector) => sum + (sector.customers.length - maxSize), 0);
-    const normalSurplus = normalSectors.reduce((sum, sector) => sum + Math.max(0, sector.customers.length - minSize), 0);
+    console.log(`📏 Iteration ${iterations}: ${undersizedClusters.length} undersized, ${oversizedClusters.length} oversized`);
     
-    console.log(`📏 Total deficit: ${totalDeficit}, oversized surplus: ${totalSurplus}, normal surplus: ${normalSurplus}`);
-    
-    // If we can't meet the deficit from oversized sectors, try to redistribute from normal sectors
-    if (totalDeficit > totalSurplus) {
-      console.log(`📏 Insufficient surplus in oversized sectors, redistributing from normal sectors`);
+    // Move customers from oversized to undersized clusters, prioritizing geographic proximity
+    for (const undersizedCluster of undersizedClusters) {
+      const needed = MIN_OUTLETS_PER_CLUSTER - undersizedCluster.customers.length;
+      let collected = 0;
       
-      // Sort normal sectors by size (largest first) to take from bigger ones
-      const sortedNormalSectors = normalSectors.sort((a, b) => b.customers.length - a.customers.length);
+      // Sort oversized clusters by distance to undersized cluster
+      const sortedOversized = oversizedClusters
+        .filter(c => c.customers.length > MAX_OUTLETS_PER_CLUSTER)
+        .sort((a, b) => {
+          const distA = calculateDistance(
+            a.centroid.latitude, a.centroid.longitude,
+            undersizedCluster.centroid.latitude, undersizedCluster.centroid.longitude
+          );
+          const distB = calculateDistance(
+            b.centroid.latitude, b.centroid.longitude,
+            undersizedCluster.centroid.latitude, undersizedCluster.centroid.longitude
+          );
+          return distA - distB;
+        });
       
-      for (const undersizedSector of undersizedSectors) {
-        const needed = minSize - undersizedSector.customers.length;
-        let collected = 0;
+      for (const oversizedCluster of sortedOversized) {
+        const available = oversizedCluster.customers.length - MAX_OUTLETS_PER_CLUSTER;
+        const toMove = Math.min(available, needed - collected);
         
-        // First, collect from oversized sectors
-        for (const oversizedSector of oversizedSectors) {
-          const available = oversizedSector.customers.length - maxSize;
-          const toTake = Math.min(available, needed - collected);
+        if (toMove > 0) {
+          // Find customers in oversized cluster that are closest to undersized cluster
+          const customersWithDistance = oversizedCluster.customers.map(customer => ({
+            customer,
+            distance: calculateDistance(
+              customer.latitude, customer.longitude,
+              undersizedCluster.centroid.latitude, undersizedCluster.centroid.longitude
+            )
+          }));
           
-          if (toTake > 0) {
-            const customersToMove = oversizedSector.customers.splice(-toTake, toTake);
-            undersizedSector.customers.push(...customersToMove);
+          customersWithDistance.sort((a, b) => a.distance - b.distance);
+          
+          // Move the closest customers
+          for (let i = 0; i < toMove; i++) {
+            const customerToMove = customersWithDistance[i].customer;
+            const index = oversizedCluster.customers.indexOf(customerToMove);
             
-            // Update totals
-            const gr1Moved = customersToMove.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-            const gr2Moved = customersToMove.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-            
-            oversizedSector.gr1Total -= gr1Moved;
-            oversizedSector.gr2Total -= gr2Moved;
-            undersizedSector.gr1Total += gr1Moved;
-            undersizedSector.gr2Total += gr2Moved;
-            
-            updateSectorBounds(oversizedSector);
-            updateSectorBounds(undersizedSector);
-            
-            collected += toTake;
-            
-            if (collected >= needed) break;
-          }
-        }
-        
-        // If still need more, take from normal sectors (but keep them above minimum)
-        if (collected < needed) {
-          for (const normalSector of sortedNormalSectors) {
-            const available = normalSector.customers.length - minSize;
-            const toTake = Math.min(available, needed - collected);
-            
-            if (toTake > 0) {
-              const customersToMove = normalSector.customers.splice(-toTake, toTake);
-              undersizedSector.customers.push(...customersToMove);
-              
-              // Update totals
-              const gr1Moved = customersToMove.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-              const gr2Moved = customersToMove.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-              
-              normalSector.gr1Total -= gr1Moved;
-              normalSector.gr2Total -= gr2Moved;
-              undersizedSector.gr1Total += gr1Moved;
-              undersizedSector.gr2Total += gr2Moved;
-              
-              updateSectorBounds(normalSector);
-              updateSectorBounds(undersizedSector);
-              
-              collected += toTake;
-              
-              if (collected >= needed) break;
+            if (index !== -1) {
+              oversizedCluster.customers.splice(index, 1);
+              undersizedCluster.customers.push(customerToMove);
+              collected++;
             }
           }
-        }
-      }
-    } else {
-      // Standard redistribution from oversized to undersized
-      for (const undersizedSector of undersizedSectors) {
-        const needed = minSize - undersizedSector.customers.length;
-        let collected = 0;
-        
-        for (const oversizedSector of oversizedSectors) {
-          const available = oversizedSector.customers.length - maxSize;
-          const toTake = Math.min(available, needed - collected);
           
-          if (toTake > 0) {
-            const customersToMove = oversizedSector.customers.splice(-toTake, toTake);
-            undersizedSector.customers.push(...customersToMove);
-            
-            // Update totals
-            const gr1Moved = customersToMove.reduce((sum, c) => sum + (c.gr1Sale || 0), 0);
-            const gr2Moved = customersToMove.reduce((sum, c) => sum + (c.gr2Sale || 0), 0);
-            
-            oversizedSector.gr1Total -= gr1Moved;
-            oversizedSector.gr2Total -= gr2Moved;
-            undersizedSector.gr1Total += gr1Moved;
-            undersizedSector.gr2Total += gr2Moved;
-            
-            updateSectorBounds(oversizedSector);
-            updateSectorBounds(undersizedSector);
-            
-            collected += toTake;
-            
-            if (collected >= needed) break;
-          }
+          // Update cluster properties
+          updateClusterProperties(oversizedCluster);
+          updateClusterProperties(undersizedCluster);
+          
+          if (collected >= needed) break;
         }
       }
     }
   }
   
   // Final validation
-  const finalUndersized = sectors.filter(sector => sector.customers.length < minSize);
+  const finalUndersized = clusters.filter(c => c.customers.length < MIN_OUTLETS_PER_CLUSTER);
   if (finalUndersized.length > 0) {
-    const totalCustomers = sectors.reduce((sum, sector) => sum + sector.customers.length, 0);
+    const totalCustomers = clusters.reduce((sum, c) => sum + c.customers.length, 0);
     const averageSize = totalCustomers / TARGET_CLUSTERS;
     
-    console.error(`❌ CRITICAL: ${finalUndersized.length} sectors still undersized after ${iteration} iterations!`);
-    console.error(`Total customers: ${totalCustomers}, Average per cluster: ${averageSize.toFixed(1)}, Required minimum: ${minSize}`);
-    
-    finalUndersized.forEach(sector => {
-      console.error(`Sector ${sector.id}: ${sector.customers.length} outlets (required: ${minSize})`);
+    console.error(`❌ CRITICAL: ${finalUndersized.length} clusters still undersized after ${iterations} iterations!`);
+    finalUndersized.forEach(cluster => {
+      console.error(`Cluster ${cluster.id}: ${cluster.customers.length} outlets (required: ${MIN_OUTLETS_PER_CLUSTER})`);
     });
     
-    // If we can't meet the minimum requirements, throw an error with detailed information
-    const clusterSizes = sectors.map(s => s.customers.length);
-    throw new Error(`CRITICAL SIZE VIOLATION: ${finalUndersized.length} clusters below ${minSize} outlets. Sizes: ${clusterSizes.join(', ')}. Total customers: ${totalCustomers}, Average: ${averageSize.toFixed(1)}`);
+    throw new Error(`CRITICAL SIZE VIOLATION: ${finalUndersized.length} clusters below ${MIN_OUTLETS_PER_CLUSTER} outlets. Total customers: ${totalCustomers}, Average: ${averageSize.toFixed(1)}`);
   }
   
-  console.log(`📏 Final sector sizes: ${sectors.map(s => s.customers.length).join(', ')}`);
-  return sectors;
+  console.log(`📏 Final cluster sizes: ${clusters.map(c => c.customers.length).join(', ')}`);
+  return clusters;
 }
 
-function enforceCircularSectorSalesConstraints(
-  sectors: CircularSector[],
-  minSize: number,
-  maxSize: number,
-  medianCenter: MedianCenter
-): CircularSector[] {
-  console.log('💰 Enforcing sales constraints on 6 circular sectors (with 5% error margin)...');
+function enforceSalesConstraints(clusters: GeographicCluster[]): GeographicCluster[] {
+  console.log('💰 Validating sales constraints (with 5% error margin)...');
   
-  sectors.forEach((sector, index) => {
-    const meetsGR1 = sector.gr1Total >= EFFECTIVE_MIN_GR1;
-    const meetsGR2 = sector.gr2Total >= EFFECTIVE_MIN_GR2;
-    const meetsSize = sector.customers.length >= minSize && sector.customers.length <= maxSize;
+  clusters.forEach((cluster, index) => {
+    const meetsGR1 = cluster.gr1Total >= EFFECTIVE_MIN_GR1;
+    const meetsGR2 = cluster.gr2Total >= EFFECTIVE_MIN_GR2;
+    const meetsSize = cluster.customers.length >= MIN_OUTLETS_PER_CLUSTER && cluster.customers.length <= MAX_OUTLETS_PER_CLUSTER;
     
     const status = meetsGR1 && meetsGR2 && meetsSize ? '✅' : '⚠️';
-    console.log(`💰 Sector ${index}: ${status} ${sector.customers.length} customers, GR1=${sector.gr1Total.toLocaleString()}, GR2=${sector.gr2Total.toLocaleString()}`);
+    console.log(`💰 Cluster ${index}: ${status} ${cluster.customers.length} customers, GR1=${cluster.gr1Total.toLocaleString()}, GR2=${cluster.gr2Total.toLocaleString()}`);
   });
   
-  return sectors;
+  return clusters;
 }
 
-function finalSixClusterBalancing(
-  sectors: CircularSector[],
-  minSize: number,
-  maxSize: number,
-  medianCenter: MedianCenter
-): CircularSector[] {
-  console.log(`⚖️ Final balancing to ensure exactly ${TARGET_CLUSTERS} clusters...`);
+function calculateConvexHull(customers: Customer[]): Array<{ latitude: number; longitude: number }> {
+  if (customers.length < 3) {
+    return customers.map(c => ({ latitude: c.latitude, longitude: c.longitude }));
+  }
   
-  // Ensure exactly 6 sectors
-  if (sectors.length !== TARGET_CLUSTERS) {
-    console.error(`❌ CRITICAL: Have ${sectors.length} sectors, need exactly ${TARGET_CLUSTERS}!`);
-    
-    while (sectors.length < TARGET_CLUSTERS) {
-      const emptySector: CircularSector = {
-        id: sectors.length,
-        customers: [],
-        startAngle: sectors.length * (2 * Math.PI / TARGET_CLUSTERS),
-        endAngle: (sectors.length + 1) * (2 * Math.PI / TARGET_CLUSTERS),
-        minRadius: 0,
-        maxRadius: 0,
-        center: medianCenter,
-        gr1Total: 0,
-        gr2Total: 0,
-        avgRadius: 0,
-        sectorAngle: 2 * Math.PI / TARGET_CLUSTERS,
-        geographicBounds: {
-          minLat: medianCenter.latitude,
-          maxLat: medianCenter.latitude,
-          minLng: medianCenter.longitude,
-          maxLng: medianCenter.longitude
-        }
-      };
-      sectors.push(emptySector);
+  // Convert to points for hull calculation
+  const points = customers.map(c => ({ latitude: c.latitude, longitude: c.longitude }));
+  
+  // Find the bottom-most point (or left most in case of tie)
+  let bottomPoint = points[0];
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].latitude < bottomPoint.latitude || 
+       (points[i].latitude === bottomPoint.latitude && points[i].longitude < bottomPoint.longitude)) {
+      bottomPoint = points[i];
     }
-    
-    while (sectors.length > TARGET_CLUSTERS) {
-      // Merge smallest sector with its neighbor
-      const smallestIndex = sectors.reduce((minIndex, sector, index) => 
-        sector.customers.length < sectors[minIndex].customers.length ? index : minIndex, 0);
-      
-      const adjacentIndex = smallestIndex === 0 ? 1 : smallestIndex - 1;
-      
-      sectors[adjacentIndex].customers.push(...sectors[smallestIndex].customers);
-      sectors[adjacentIndex].gr1Total += sectors[smallestIndex].gr1Total;
-      sectors[adjacentIndex].gr2Total += sectors[smallestIndex].gr2Total;
-      updateSectorBounds(sectors[adjacentIndex]);
-      
-      sectors.splice(smallestIndex, 1);
-    }
-    
-    // Update sector IDs to be sequential
-    sectors.forEach((sector, index) => {
-      sector.id = index;
+  }
+  
+  // Sort points by polar angle with respect to bottom point
+  const sortedPoints = points
+    .filter(p => p !== bottomPoint)
+    .sort((a, b) => {
+      const angleA = Math.atan2(a.latitude - bottomPoint.latitude, a.longitude - bottomPoint.longitude);
+      const angleB = Math.atan2(b.latitude - bottomPoint.latitude, b.longitude - bottomPoint.longitude);
+      return angleA - angleB;
     });
+  
+  // Graham scan
+  const hull = [bottomPoint, sortedPoints[0]];
+  
+  for (let i = 1; i < sortedPoints.length; i++) {
+    while (hull.length > 1 && !isLeftTurn(
+      hull[hull.length - 2],
+      hull[hull.length - 1],
+      sortedPoints[i]
+    )) {
+      hull.pop();
+    }
+    hull.push(sortedPoints[i]);
   }
   
-  console.log(`✅ Final balancing complete: ${sectors.length} sectors with sizes: ${sectors.map(s => s.customers.length).join(', ')}`);
-  return sectors;
+  return hull;
 }
 
-function updateSectorBounds(sector: CircularSector): void {
-  if (sector.customers.length === 0) {
-    sector.geographicBounds = {
-      minLat: sector.center.latitude,
-      maxLat: sector.center.latitude,
-      minLng: sector.center.longitude,
-      maxLng: sector.center.longitude
-    };
-    return;
-  }
-  
-  const distances = sector.customers.map(c => 
-    calculateDistance(sector.center.latitude, sector.center.longitude, c.latitude, c.longitude)
-  );
-  
-  const latitudes = sector.customers.map(c => c.latitude);
-  const longitudes = sector.customers.map(c => c.longitude);
-  
-  sector.minRadius = Math.min(...distances);
-  sector.maxRadius = Math.max(...distances);
-  sector.avgRadius = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-  
-  sector.geographicBounds = {
-    minLat: Math.min(...latitudes),
-    maxLat: Math.max(...latitudes),
-    minLng: Math.min(...longitudes),
-    maxLng: Math.max(...longitudes)
-  };
+function isLeftTurn(p1: { latitude: number; longitude: number }, p2: { latitude: number; longitude: number }, p3: { latitude: number; longitude: number }): boolean {
+  return ((p2.longitude - p1.longitude) * (p3.latitude - p1.latitude) - (p2.latitude - p1.latitude) * (p3.longitude - p1.longitude)) > 0;
 }
 
-function convertSectorsToCustomers(sectors: CircularSector[]): ClusteredCustomer[] {
+function convertClustersToCustomers(clusters: GeographicCluster[]): ClusteredCustomer[] {
   const clusteredCustomers: ClusteredCustomer[] = [];
   
-  sectors.forEach((sector, index) => {
-    sector.customers.forEach(customer => {
+  clusters.forEach((cluster, index) => {
+    cluster.customers.forEach(customer => {
       clusteredCustomers.push({
         ...customer,
         clusterId: index
@@ -661,11 +541,9 @@ function convertSectorsToCustomers(sectors: CircularSector[]): ClusteredCustomer
   return clusteredCustomers;
 }
 
-function validateExactClusterCount(
+function validateFinalClusters(
   clusteredCustomers: ClusteredCustomer[],
-  originalCustomers: Customer[],
-  targetClusters: number,
-  minSize: number
+  originalCustomers: Customer[]
 ): { isValid: boolean; message: string } {
   // Check customer count
   if (clusteredCustomers.length !== originalCustomers.length) {
@@ -677,27 +555,27 @@ function validateExactClusterCount(
   
   // Check exact cluster count
   const actualClusters = new Set(clusteredCustomers.map(c => c.clusterId)).size;
-  if (actualClusters !== targetClusters) {
+  if (actualClusters !== TARGET_CLUSTERS) {
     return {
       isValid: false,
-      message: `Cluster count mismatch: Expected ${targetClusters}, Got ${actualClusters}`
+      message: `Cluster count mismatch: Expected ${TARGET_CLUSTERS}, Got ${actualClusters}`
     };
   }
   
-  // Check cluster sizes - ZERO TOLERANCE for undersized clusters
+  // Check cluster sizes
   const clusterSizes = getClusterSizes(clusteredCustomers);
-  const undersizedClusters = clusterSizes.filter(size => size < minSize);
+  const undersizedClusters = clusterSizes.filter(size => size < MIN_OUTLETS_PER_CLUSTER);
   
   if (undersizedClusters.length > 0) {
     return {
       isValid: false,
-      message: `CRITICAL SIZE VIOLATION: ${undersizedClusters.length} clusters below ${minSize} outlets. Sizes: ${undersizedClusters.join(', ')}`
+      message: `CRITICAL SIZE VIOLATION: ${undersizedClusters.length} clusters below ${MIN_OUTLETS_PER_CLUSTER} outlets. Sizes: ${undersizedClusters.join(', ')}`
     };
   }
   
-  console.log(`✅ EXACT VALIDATION PASSED: ${actualClusters} clusters (target: ${targetClusters}), all clusters have ≥${minSize} outlets. Sizes: ${clusterSizes.join(', ')}`);
+  console.log(`✅ FINAL VALIDATION PASSED: ${actualClusters} clusters (target: ${TARGET_CLUSTERS}), all clusters have ≥${MIN_OUTLETS_PER_CLUSTER} outlets. Sizes: ${clusterSizes.join(', ')}`);
   
-  return { isValid: true, message: `Exactly ${targetClusters} clusters created with proper sizes` };
+  return { isValid: true, message: `Exactly ${TARGET_CLUSTERS} non-overlapping clusters created with proper sizes` };
 }
 
 function validateSalesConstraints(clusteredCustomers: ClusteredCustomer[]): SalesValidation {
@@ -751,7 +629,7 @@ function getClusterSizes(customers: ClusteredCustomer[]): number[] {
   return Array.from(clusterMap.values()).sort((a, b) => a - b);
 }
 
-// Utility functions for circular geometry
+// Utility function for distance calculation
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371; // Earth's radius in kilometers
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -764,23 +642,4 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
-}
-
-function calculateAngle(centerLat: number, centerLon: number, pointLat: number, pointLon: number): number {
-  const dLon = (pointLon - centerLon) * Math.PI / 180;
-  const dLat = (pointLat - centerLat) * Math.PI / 180;
-  
-  let angle = Math.atan2(dLon, dLat);
-  
-  if (angle < 0) {
-    angle += 2 * Math.PI;
-  }
-  
-  return angle;
-}
-
-function normalizeAngle(angle: number): number {
-  while (angle < 0) angle += 2 * Math.PI;
-  while (angle >= 2 * Math.PI) angle -= 2 * Math.PI;
-  return angle;
 }
