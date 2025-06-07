@@ -8,10 +8,15 @@ const MAX_WORKING_TIME = 360; // 6 hours in minutes
 const TRAVEL_SPEED = 30; // km/h
 const MAX_DISTANCE_VARIANCE = 5; // Maximum allowed distance variance between beats (in km)
 
+// Target configuration: 6 clusters, 6 beats per cluster = 36 total beats
+const TARGET_BEATS_PER_CLUSTER = 6;
+const EXPECTED_TOTAL_BEATS = 36;
+
 export const nearestNeighbor = async (locationData: LocationData): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
   console.log(`Starting nearest neighbor algorithm with ${customers.length} total customers`);
+  console.log(`Target: ${EXPECTED_TOTAL_BEATS} total beats (${TARGET_BEATS_PER_CLUSTER} per cluster)`);
   
   // Create a copy of all customers to track which ones have been assigned
   const allCustomers = [...customers];
@@ -33,12 +38,21 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   const routes: SalesmanRoute[] = [];
   let currentSalesmanId = 1;
   
-  // Process each cluster
+  // Process each cluster to create exactly 6 beats per cluster
   for (const clusterId of Object.keys(customersByCluster)) {
     const clusterCustomers = [...customersByCluster[Number(clusterId)]];
-    console.log(`Processing cluster ${clusterId} with ${clusterCustomers.length} customers`);
+    const clusterSize = clusterCustomers.length;
     
-    while (clusterCustomers.length > 0) {
+    console.log(`Processing cluster ${clusterId} with ${clusterCustomers.length} customers`);
+    console.log(`Target: ${TARGET_BEATS_PER_CLUSTER} beats for this cluster`);
+    
+    // Calculate optimal outlets per beat for this cluster
+    const outletsPerBeat = Math.ceil(clusterSize / TARGET_BEATS_PER_CLUSTER);
+    console.log(`Target outlets per beat in cluster ${clusterId}: ${outletsPerBeat}`);
+    
+    let beatsCreatedInCluster = 0;
+    
+    while (clusterCustomers.length > 0 && beatsCreatedInCluster < TARGET_BEATS_PER_CLUSTER) {
       const currentRoute: SalesmanRoute = {
         salesmanId: currentSalesmanId++,
         stops: [],
@@ -53,16 +67,15 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       let currentLng = distributor.longitude;
       let remainingTime = MAX_WORKING_TIME;
       
-      // Calculate target outlets for this route
+      // Calculate target outlets for this specific beat
       const remainingOutlets = clusterCustomers.length;
-      let targetOutlets = MAX_OUTLETS_PER_BEAT;
+      const remainingBeats = TARGET_BEATS_PER_CLUSTER - beatsCreatedInCluster;
+      let targetOutlets = Math.ceil(remainingOutlets / remainingBeats);
       
-      if (remainingOutlets <= MAX_OUTLETS_PER_BEAT) {
-        targetOutlets = remainingOutlets;
-      } else if (remainingOutlets < (MAX_OUTLETS_PER_BEAT * 2)) {
-        // If remaining outlets can't form two full beats, split them more evenly
-        targetOutlets = Math.ceil(remainingOutlets / 2);
-      }
+      // Ensure we don't exceed max outlets per beat
+      targetOutlets = Math.min(targetOutlets, MAX_OUTLETS_PER_BEAT);
+      
+      console.log(`Beat ${currentRoute.salesmanId}: targeting ${targetOutlets} outlets (${remainingOutlets} remaining, ${remainingBeats} beats left)`);
       
       while (clusterCustomers.length > 0 && 
              remainingTime > 0 && 
@@ -115,9 +128,43 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       
       if (currentRoute.stops.length > 0) {
         routes.push(currentRoute);
-        console.log(`Created route ${currentRoute.salesmanId} with ${currentRoute.stops.length} stops`);
+        beatsCreatedInCluster++;
+        console.log(`Created beat ${currentRoute.salesmanId} in cluster ${clusterId} with ${currentRoute.stops.length} stops`);
       }
     }
+    
+    // If we have remaining customers in this cluster and haven't reached target beats
+    if (clusterCustomers.length > 0) {
+      console.log(`Cluster ${clusterId}: ${clusterCustomers.length} customers remaining, distributing to existing beats...`);
+      
+      // Distribute remaining customers to existing beats in this cluster
+      const clusterRoutes = routes.filter(route => route.clusterIds.includes(Number(clusterId)));
+      
+      clusterCustomers.forEach(customer => {
+        // Find the beat with the least customers that can accommodate one more
+        const targetRoute = clusterRoutes
+          .filter(route => route.stops.length < MAX_OUTLETS_PER_BEAT)
+          .sort((a, b) => a.stops.length - b.stops.length)[0];
+        
+        if (targetRoute) {
+          targetRoute.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: CUSTOMER_VISIT_TIME,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          
+          assignedCustomerIds.add(customer.id);
+          console.log(`Added remaining customer ${customer.id} to beat ${targetRoute.salesmanId}`);
+        }
+      });
+    }
+    
+    console.log(`Cluster ${clusterId} complete: ${beatsCreatedInCluster} beats created`);
   }
   
   // CRITICAL: Check for any unassigned customers and force them into routes
@@ -244,122 +291,13 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
     }
   }
   
-  // Balance routes within clusters
-  const routesByCluster = routes.reduce((acc, route) => {
-    const clusterId = route.clusterIds[0] || 0;
-    if (!acc[clusterId]) acc[clusterId] = [];
-    acc[clusterId].push(route);
-    return acc;
-  }, {} as Record<number, SalesmanRoute[]>);
-  
-  const balancedRoutes: SalesmanRoute[] = [];
-  
-  for (const clusterId in routesByCluster) {
-    const clusterRoutes = routesByCluster[clusterId];
-    let iterations = 0;
-    const MAX_BALANCE_ITERATIONS = 100;
-    
-    while (iterations < MAX_BALANCE_ITERATIONS) {
-      const avgDistance = clusterRoutes.reduce((sum, r) => sum + r.totalDistance, 0) / clusterRoutes.length;
-      const maxVariance = Math.max(...clusterRoutes.map(r => Math.abs(r.totalDistance - avgDistance)));
-      
-      if (maxVariance <= MAX_DISTANCE_VARIANCE) break;
-      
-      // Find the most unbalanced pair of routes
-      let maxRoute = clusterRoutes[0];
-      let minRoute = clusterRoutes[0];
-      
-      for (const route of clusterRoutes) {
-        if (route.totalDistance > maxRoute.totalDistance) maxRoute = route;
-        if (route.totalDistance < minRoute.totalDistance) minRoute = route;
-      }
-      
-      // Try to move a stop from the longer route to the shorter one
-      if (maxRoute.stops.length > MIN_OUTLETS_PER_BEAT && 
-          minRoute.stops.length < MAX_OUTLETS_PER_BEAT) {
-        // Find the stop that would best balance the routes
-        let bestStop = null;
-        let bestImprovement = 0;
-        
-        for (let i = 0; i < maxRoute.stops.length; i++) {
-          const stop = maxRoute.stops[i];
-          const distanceContribution = calculateHaversineDistance(
-            maxRoute.stops[i-1]?.latitude || maxRoute.distributorLat,
-            maxRoute.stops[i-1]?.longitude || maxRoute.distributorLng,
-            stop.latitude,
-            stop.longitude
-          );
-          
-          if (Math.abs(maxRoute.totalDistance - minRoute.totalDistance - 2 * distanceContribution) < bestImprovement) {
-            bestStop = i;
-            bestImprovement = Math.abs(maxRoute.totalDistance - minRoute.totalDistance - 2 * distanceContribution);
-          }
-        }
-        
-        if (bestStop !== null) {
-          const [stop] = maxRoute.stops.splice(bestStop, 1);
-          minRoute.stops.push(stop);
-          updateRouteMetrics(maxRoute, distributor);
-          updateRouteMetrics(minRoute, distributor);
-        }
-      }
-      
-      iterations++;
-    }
-    
-    balancedRoutes.push(...clusterRoutes);
-  }
-  
-  // Optimize beats to ensure they meet size requirements
-  const optimizedRoutes = balancedRoutes.reduce((acc, route) => {
-    if (route.stops.length >= MIN_OUTLETS_PER_BEAT && route.stops.length <= MAX_OUTLETS_PER_BEAT) {
-      // Route is within acceptable range
-      acc.push(route);
-    } else if (route.stops.length < MIN_OUTLETS_PER_BEAT) {
-      // Try to merge with another small route from the same cluster
-      const mergeCandidate = acc.find(r => 
-        r.clusterIds[0] === route.clusterIds[0] && 
-        r.stops.length + route.stops.length <= MAX_OUTLETS_PER_BEAT
-      );
-      
-      if (mergeCandidate) {
-        mergeCandidate.stops.push(...route.stops);
-        updateRouteMetrics(mergeCandidate, distributor);
-      } else {
-        acc.push(route);
-      }
-    } else {
-      // Split route that exceeds maximum size
-      const midPoint = Math.ceil(route.stops.length / 2);
-      
-      const route1: SalesmanRoute = {
-        ...route,
-        stops: route.stops.slice(0, midPoint),
-        totalDistance: 0,
-        totalTime: 0
-      };
-      
-      const route2: SalesmanRoute = {
-        ...route,
-        stops: route.stops.slice(midPoint),
-        totalDistance: 0,
-        totalTime: 0
-      };
-      
-      updateRouteMetrics(route1, distributor);
-      updateRouteMetrics(route2, distributor);
-      
-      acc.push(route1);
-      if (route2.stops.length > 0) {
-        acc.push(route2);
-      }
-    }
-    
-    return acc;
-  }, [] as SalesmanRoute[]);
+  // Update route metrics for all routes
+  routes.forEach(route => {
+    updateRouteMetrics(route, distributor);
+  });
   
   // Reassign beat IDs sequentially
-  const finalRoutes = optimizedRoutes.map((route, index) => ({
+  const finalRoutes = routes.map((route, index) => ({
     ...route,
     salesmanId: index + 1
   }));
@@ -367,6 +305,18 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   // Final verification of customer assignment
   const finalCustomerCount = finalRoutes.reduce((count, route) => count + route.stops.length, 0);
   console.log(`Final verification: ${finalCustomerCount}/${totalCustomers} customers in final routes`);
+  console.log(`Total beats created: ${finalRoutes.length} (target was ${EXPECTED_TOTAL_BEATS})`);
+  
+  // Report beats per cluster
+  const beatsByCluster = finalRoutes.reduce((acc, route) => {
+    route.clusterIds.forEach(clusterId => {
+      if (!acc[clusterId]) acc[clusterId] = 0;
+      acc[clusterId]++;
+    });
+    return acc;
+  }, {} as Record<number, number>);
+  
+  console.log('Beats per cluster:', beatsByCluster);
   
   if (finalCustomerCount !== totalCustomers) {
     console.error(`FINAL ERROR: Route generation lost ${totalCustomers - finalCustomerCount} customers!`);
@@ -376,7 +326,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
   
   return {
-    name: 'Nearest Neighbor (Clustered)',
+    name: 'Nearest Neighbor (6 Clusters, 36 Beats)',
     totalDistance,
     totalSalesmen: finalRoutes.length,
     processingTime: 0,
