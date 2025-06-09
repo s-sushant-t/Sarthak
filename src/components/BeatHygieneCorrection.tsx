@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
-import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2, Download, RefreshCw } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2, Download, RefreshCw, Navigation } from 'lucide-react';
 import { getBeatCount } from './BeatCount';
 
 const supabase = createClient(
@@ -438,7 +438,7 @@ const BeatHygieneCorrection: React.FC = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex items-center justify-center relative overflow-hidden">
         <div className="absolute inset-0 z-0">
-          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float\" style={{ top: '15%', left: '10%' }} />
+          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float" style={{ top: '15%', left: '10%' }} />
           <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed" style={{ top: '60%', right: '15%' }} />
           <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float" style={{ top: '30%', right: '25%' }} />
         </div>
@@ -615,6 +615,39 @@ const BeatHygieneCorrection: React.FC = () => {
                     )}
                   </div>
 
+                  {/* Always show location information for all stops */}
+                  <div className="mt-3 pt-3 border-t border-white/10">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <a
+                          href={`http://maps.google.com/maps?q=${stop.latitude},${stop.longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-300 hover:text-blue-200 flex items-center gap-2 text-sm"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <MapPin className="w-4 h-4" />
+                          <span>View Location</span>
+                        </a>
+                        
+                        <a
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${stop.latitude},${stop.longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-green-300 hover:text-green-200 flex items-center gap-2 text-sm"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Navigation className="w-4 h-4" />
+                          <span>Get Directions</span>
+                        </a>
+                      </div>
+                      
+                      <div className="text-xs text-blue-200">
+                        {stop.latitude.toFixed(6)}, {stop.longitude.toFixed(6)}
+                      </div>
+                    </div>
+                  </div>
+
                   {stop.visit_time && (
                     <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/10">
                       <div className="flex items-center gap-2">
@@ -628,42 +661,18 @@ const BeatHygieneCorrection: React.FC = () => {
                           <Edit2 className="w-4 h-4 text-blue-300" />
                         </button>
                       </div>
-                      <div className="text-right">
-                        <span className="text-green-300 text-sm font-medium">
-                          Visited
-                        </span>
-                        <p className="text-xs text-blue-200 mt-1">
-                          {new Date(stop.visit_time).toLocaleTimeString()}
-                        </p>
-                      </div>
                     </div>
                   )}
 
                   {showForm && currentStop?.id === stop.id && (
                     <div className="mt-4 pt-4 border-t border-white/10">
-                      {!editingStop && (
-                        <>
-                          <div className="mb-4">
-                            <a
-                              href={`http://maps.google.com/maps?q=${stop.latitude},${stop.longitude}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-300 hover:text-blue-200 flex items-center gap-2"
-                            >
-                              <MapPin className="w-4 h-4" />
-                              <span>Open in Google Maps</span>
-                            </a>
-                          </div>
-
-                          {distanceToOutlet !== null && !editingStop && (
-                            <div className={`mb-4 text-sm ${
-                              distanceToOutlet <= GEOFENCE_RADIUS || bypassActive ? 'text-green-300' : 'text-red-300'
-                            }`}>
-                              Distance: {Math.round(distanceToOutlet)}m 
-                              {bypassActive ? ' (Bypass active)' : distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
-                            </div>
-                          )}
-                        </>
+                      {distanceToOutlet !== null && !editingStop && (
+                        <div className={`mb-4 text-sm ${
+                          distanceToOutlet <= GEOFENCE_RADIUS || bypassActive ? 'text-green-300' : 'text-red-300'
+                        }`}>
+                          Distance: {Math.round(distanceToOutlet)}m 
+                          {bypassActive ? ' (Bypass active)' : distanceToOutlet <= GEOFENCE_RADIUS ? ' (Within range)' : ' (Out of range)'}
+                        </div>
                       )}
 
                       {stop.stop_order === 0 ? (
