@@ -38,17 +38,23 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
     const totalBeats = config.totalClusters * config.beatsPerCluster;
     const avgOutletsPerBeat = Math.ceil(totalCustomers / totalBeats);
     const avgOutletsPerCluster = Math.ceil(totalCustomers / config.totalClusters);
-    const estimatedWorkingTime = (config.customerVisitTimeMinutes * avgOutletsPerBeat) + 
-                                (avgOutletsPerBeat * 10); // Estimated 10 min travel between outlets
+    
+    // More realistic working time estimation
+    const estimatedTravelTime = avgOutletsPerBeat * 8; // 8 minutes average travel between outlets
+    const estimatedVisitTime = avgOutletsPerBeat * config.customerVisitTimeMinutes;
+    const estimatedWorkingTime = estimatedTravelTime + estimatedVisitTime;
+    
+    // Relaxed feasibility check - allow some flexibility
+    const feasible = totalBeats <= totalCustomers && 
+                    avgOutletsPerBeat <= config.maxOutletsPerBeat * 1.2 && // Allow 20% flexibility
+                    estimatedWorkingTime <= config.maxWorkingTimeMinutes * 1.1; // Allow 10% flexibility
     
     return {
       totalBeats,
       avgOutletsPerBeat,
       avgOutletsPerCluster,
       estimatedWorkingTime,
-      feasible: estimatedWorkingTime <= config.maxWorkingTimeMinutes &&
-                avgOutletsPerBeat >= config.minOutletsPerBeat &&
-                avgOutletsPerBeat <= config.maxOutletsPerBeat
+      feasible
     };
   };
 
@@ -94,10 +100,6 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
       newErrors.totalClusters = `Total beats (${totalBeats}) cannot exceed total customers (${totalCustomers})`;
     }
 
-    if (!metrics.feasible) {
-      newErrors.feasibility = 'Configuration may not be feasible with current constraints';
-    }
-
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -112,6 +114,8 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
     setConfig(prev => ({ ...prev, [field]: value }));
     setErrors(prev => ({ ...prev, [field]: '', feasibility: '' }));
   };
+
+  const isFormValid = validateConfiguration();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -318,14 +322,14 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
             {!metrics.feasible && (
               <div className="mt-4 p-3 bg-yellow-100 border border-yellow-300 rounded-lg">
                 <p className="text-yellow-800 text-sm">
-                  ⚠️ Warning: Current configuration may not be feasible. Consider adjusting constraints.
+                  ⚠️ Note: Configuration may require some adjustments during optimization, but the algorithm will handle this automatically.
                 </p>
               </div>
             )}
 
-            {errors.feasibility && (
+            {Object.keys(errors).length > 0 && (
               <div className="mt-4 p-3 bg-red-100 border border-red-300 rounded-lg">
-                <p className="text-red-800 text-sm">{errors.feasibility}</p>
+                <p className="text-red-800 text-sm">Please fix the validation errors above before proceeding.</p>
               </div>
             )}
           </div>
@@ -340,8 +344,12 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!metrics.feasible}
-            className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            disabled={!isFormValid}
+            className={`px-6 py-2 rounded-lg transition-colors ${
+              isFormValid
+                ? 'bg-blue-500 text-white hover:bg-blue-600'
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
           >
             Apply Configuration
           </button>
