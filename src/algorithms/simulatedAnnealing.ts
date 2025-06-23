@@ -7,7 +7,6 @@ const INITIAL_TEMPERATURE = 1000;
 const COOLING_RATE = 0.98;
 const MIN_TEMPERATURE = 0.01;
 const ITERATIONS_PER_TEMP = 100;
-const MAX_DISTANCE_VARIANCE = 5;
 const LINEARITY_WEIGHT = 0.3; // Weight for linearity in energy calculation
 
 // Batch processing size
@@ -22,9 +21,9 @@ export const simulatedAnnealing = async (
   console.log(`Starting proximity-optimized simulated annealing with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
   
-  // Track all customers to ensure none are lost
+  // CRITICAL: Track all customers to ensure no duplicates or missing outlets
   const allCustomers = [...customers];
-  const assignedCustomerIds = new Set<string>();
+  const globalAssignedCustomerIds = new Set<string>();
   
   // Group customers by cluster
   const customersByCluster = customers.reduce((acc, customer) => {
@@ -39,116 +38,128 @@ export const simulatedAnnealing = async (
     `Cluster ${id}: ${custs.length} customers`
   ));
   
-  // Process each cluster independently with proximity optimization
+  // Process each cluster independently with strict assignment tracking
   const clusterResults: SalesmanRoute[][] = await Promise.all(
     Object.entries(customersByCluster).map(async ([clusterId, clusterCustomers]) => {
-      const routes = await processClusterWithProximity(
+      const clusterAssignedIds = new Set<string>();
+      const routes = await processClusterWithStrictProximity(
         Number(clusterId),
         clusterCustomers,
         distributor,
-        config
+        config,
+        clusterAssignedIds
       );
       
-      // Track assigned customers
-      routes.forEach(route => {
-        route.stops.forEach(stop => {
-          assignedCustomerIds.add(stop.customerId);
+      // Verify all cluster customers are assigned exactly once
+      const assignedInCluster = routes.reduce((count, route) => count + route.stops.length, 0);
+      console.log(`Cluster ${clusterId}: ${assignedInCluster}/${clusterCustomers.length} customers assigned`);
+      
+      if (assignedInCluster !== clusterCustomers.length) {
+        console.error(`CLUSTER ${clusterId} ERROR: Expected ${clusterCustomers.length} customers, got ${assignedInCluster}`);
+        
+        // Find and assign missing customers
+        const missingCustomers = clusterCustomers.filter(c => !clusterAssignedIds.has(c.id));
+        console.log(`Missing customers in cluster ${clusterId}:`, missingCustomers.map(c => c.id));
+        
+        // Force assign missing customers
+        missingCustomers.forEach(customer => {
+          const targetRoute = routes.find(r => r.stops.length < config.maxOutletsPerBeat) || routes[0];
+          if (targetRoute) {
+            targetRoute.stops.push({
+              customerId: customer.id,
+              latitude: customer.latitude,
+              longitude: customer.longitude,
+              distanceToNext: 0,
+              timeToNext: 0,
+              visitTime: config.customerVisitTimeMinutes,
+              clusterId: customer.clusterId,
+              outletName: customer.outletName
+            });
+            clusterAssignedIds.add(customer.id);
+            console.log(`Force-assigned missing customer ${customer.id} to route ${targetRoute.salesmanId}`);
+          }
         });
-      });
+      }
+      
+      // Add cluster customers to global tracking
+      clusterAssignedIds.forEach(id => globalAssignedCustomerIds.add(id));
       
       return routes;
     })
   );
   
-  // Combine and optimize routes across clusters
+  // Combine routes from all clusters
   let routes = clusterResults.flat();
   
-  // CRITICAL: Check for any unassigned customers
-  const unassignedCustomers = allCustomers.filter(customer => !assignedCustomerIds.has(customer.id));
+  // CRITICAL: Final verification - ensure ALL customers are assigned exactly once
+  const finalAssignedCount = globalAssignedCustomerIds.size;
+  const totalCustomers = allCustomers.length;
   
-  if (unassignedCustomers.length > 0) {
-    console.warn(`Found ${unassignedCustomers.length} unassigned customers in simulated annealing! Force-assigning them...`);
+  console.log(`GLOBAL VERIFICATION: ${finalAssignedCount}/${totalCustomers} customers assigned`);
+  
+  if (finalAssignedCount !== totalCustomers) {
+    console.error(`CRITICAL ERROR: ${totalCustomers - finalAssignedCount} customers missing from routes!`);
     
-    // Force assign unassigned customers
+    // Emergency assignment of missing customers
+    const missingCustomers = allCustomers.filter(customer => !globalAssignedCustomerIds.has(customer.id));
+    console.error('Missing customers:', missingCustomers.map(c => c.id));
+    
     let currentSalesmanId = routes.length > 0 ? Math.max(...routes.map(r => r.salesmanId)) + 1 : 1;
     
-    while (unassignedCustomers.length > 0) {
-      // Try to add to existing routes first
-      let assigned = false;
+    missingCustomers.forEach(customer => {
+      // Find a route in the same cluster with space
+      const sameClusterRoutes = routes.filter(route => 
+        route.clusterIds.includes(customer.clusterId) && 
+        route.stops.length < config.maxOutletsPerBeat
+      );
       
-      for (const route of routes) {
-        if (route.stops.length < config.maxOutletsPerBeat && unassignedCustomers.length > 0) {
-          const customer = unassignedCustomers.shift()!;
-          
-          // Find best insertion point to maintain linearity
-          const bestInsertionPoint = findBestLinearInsertionPoint(route, customer, distributor);
-          
-          route.stops.splice(bestInsertionPoint, 0, {
-            customerId: customer.id,
-            latitude: customer.latitude,
-            longitude: customer.longitude,
-            distanceToNext: 0,
-            timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
-            clusterId: customer.clusterId,
-            outletName: customer.outletName
-          });
-          
-          assignedCustomerIds.add(customer.id);
-          assigned = true;
-          console.log(`Force-assigned customer ${customer.id} to route ${route.salesmanId}`);
-        }
-      }
+      let targetRoute = sameClusterRoutes[0];
       
-      // If no existing route can accommodate, create a new route
-      if (!assigned && unassignedCustomers.length > 0) {
-        const newRoute: SalesmanRoute = {
+      if (!targetRoute) {
+        // Create emergency route if no space in existing routes
+        targetRoute = {
           salesmanId: currentSalesmanId++,
           stops: [],
           totalDistance: 0,
           totalTime: 0,
-          clusterIds: [],
+          clusterIds: [customer.clusterId],
           distributorLat: distributor.latitude,
           distributorLng: distributor.longitude
         };
-        
-        // Add up to maxOutletsPerBeat customers to this new route
-        const customersToAdd = Math.min(config.maxOutletsPerBeat, unassignedCustomers.length);
-        const clusterIds = new Set<number>();
-        
-        for (let i = 0; i < customersToAdd; i++) {
-          const customer = unassignedCustomers.shift()!;
-          clusterIds.add(customer.clusterId);
-          
-          newRoute.stops.push({
-            customerId: customer.id,
-            latitude: customer.latitude,
-            longitude: customer.longitude,
-            distanceToNext: 0,
-            timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
-            clusterId: customer.clusterId,
-            outletName: customer.outletName
-          });
-          
-          assignedCustomerIds.add(customer.id);
-        }
-        
-        newRoute.clusterIds = Array.from(clusterIds);
-        routes.push(newRoute);
-        console.log(`Created new route ${newRoute.salesmanId} for ${customersToAdd} unassigned customers`);
+        routes.push(targetRoute);
       }
-    }
+      
+      targetRoute.stops.push({
+        customerId: customer.id,
+        latitude: customer.latitude,
+        longitude: customer.longitude,
+        distanceToNext: 0,
+        timeToNext: 0,
+        visitTime: config.customerVisitTimeMinutes,
+        clusterId: customer.clusterId,
+        outletName: customer.outletName
+      });
+      
+      globalAssignedCustomerIds.add(customer.id);
+      console.log(`Emergency assigned customer ${customer.id} to route ${targetRoute.salesmanId}`);
+    });
   }
   
-  routes = await optimizeAcrossClustersWithProximity(routes, distributor, config);
+  // Apply cross-cluster optimization while maintaining strict assignment
+  routes = await optimizeAcrossClustersWithStrictTracking(routes, distributor, config);
   
-  // Final verification
+  // FINAL verification
   const finalCustomerCount = routes.reduce((count, route) => count + route.stops.length, 0);
-  console.log(`Simulated annealing verification: ${finalCustomerCount}/${allCustomers.length} customers in final routes`);
+  const uniqueCustomerIds = new Set(routes.flatMap(route => route.stops.map(stop => stop.customerId)));
   
-  if (finalCustomerCount !== allCustomers.length) {
-    console.error(`SIMULATED ANNEALING ERROR: Lost ${allCustomers.length - finalCustomerCount} customers!`);
+  console.log(`SIMULATED ANNEALING VERIFICATION:`);
+  console.log(`- Total customers in routes: ${finalCustomerCount}`);
+  console.log(`- Unique customers: ${uniqueCustomerIds.size}`);
+  console.log(`- Expected customers: ${totalCustomers}`);
+  
+  if (finalCustomerCount !== totalCustomers || uniqueCustomerIds.size !== totalCustomers) {
+    console.error(`SIMULATED ANNEALING ERROR: Customer count mismatch!`);
+    console.error(`Expected: ${totalCustomers}, Got: ${finalCustomerCount}, Unique: ${uniqueCustomerIds.size}`);
   }
   
   // Calculate total distance
@@ -163,13 +174,14 @@ export const simulatedAnnealing = async (
   };
 };
 
-async function processClusterWithProximity(
+async function processClusterWithStrictProximity(
   clusterId: number,
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
-  config: ClusteringConfig
+  config: ClusteringConfig,
+  assignedIds: Set<string>
 ): Promise<SalesmanRoute[]> {
-  console.log(`Processing cluster ${clusterId} with proximity optimization for ${customers.length} customers`);
+  console.log(`Processing cluster ${clusterId} with strict proximity optimization for ${customers.length} customers`);
   
   // Create multiple initial solutions with different approaches and select the best
   const numInitialSolutions = 5;
@@ -177,7 +189,7 @@ async function processClusterWithProximity(
   let bestEnergy = Infinity;
   
   for (let i = 0; i < numInitialSolutions; i++) {
-    const solution = createLinearInitialSolution(clusterId, customers, distributor, config);
+    const solution = createStrictLinearInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds));
     const energy = calculateProximityEnergy(solution, config);
     if (energy < bestEnergy) {
       bestSolution = solution;
@@ -200,7 +212,7 @@ async function processClusterWithProximity(
       const batchSize = Math.min(BATCH_SIZE, ITERATIONS_PER_TEMP - batch);
       
       for (let i = 0; i < batchSize; i++) {
-        const neighborSolution = createProximityNeighborSolution(currentSolution, config);
+        const neighborSolution = createStrictProximityNeighborSolution(currentSolution, config);
         const neighborEnergy = calculateProximityEnergy(neighborSolution, config);
         
         const acceptanceProbability = Math.exp(-(neighborEnergy - currentEnergy) / temperature);
@@ -225,66 +237,31 @@ async function processClusterWithProximity(
     temperature *= COOLING_RATE;
   }
   
-  // Ensure all customers are assigned in the final solution
-  const assignedCustomerIds = new Set<string>();
+  // Update assigned IDs tracking
   bestSolution!.forEach((route: SalesmanRoute) => {
     route.stops.forEach(stop => {
-      assignedCustomerIds.add(stop.customerId);
+      assignedIds.add(stop.customerId);
     });
   });
-  
-  const unassignedInCluster = customers.filter(customer => !assignedCustomerIds.has(customer.id));
-  
-  if (unassignedInCluster.length > 0) {
-    console.warn(`Cluster ${clusterId}: ${unassignedInCluster.length} customers not assigned, force-assigning...`);
-    
-    // Add unassigned customers to routes
-    unassignedInCluster.forEach(customer => {
-      // Find route with space or create new one
-      let targetRoute = bestSolution!.find((route: SalesmanRoute) => route.stops.length < config.maxOutletsPerBeat);
-      
-      if (!targetRoute) {
-        targetRoute = {
-          salesmanId: bestSolution!.length + 1,
-          stops: [],
-          totalDistance: 0,
-          totalTime: 0,
-          clusterIds: [clusterId],
-          distributorLat: distributor.latitude,
-          distributorLng: distributor.longitude
-        };
-        bestSolution!.push(targetRoute);
-      }
-      
-      targetRoute.stops.push({
-        customerId: customer.id,
-        latitude: customer.latitude,
-        longitude: customer.longitude,
-        distanceToNext: 0,
-        timeToNext: 0,
-        visitTime: config.customerVisitTimeMinutes,
-        clusterId: customer.clusterId,
-        outletName: customer.outletName
-      });
-      
-      updateRouteMetrics(targetRoute, config);
-    });
-  }
   
   return bestSolution!;
 }
 
-function createLinearInitialSolution(
+function createStrictLinearInitialSolution(
   clusterId: number, 
   customers: ClusteredCustomer[], 
   distributor: { latitude: number; longitude: number },
-  config: ClusteringConfig
+  config: ClusteringConfig,
+  assignedIds: Set<string>
 ): SalesmanRoute[] {
   const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
   
+  // Create a working copy to avoid modifying the original
+  const remainingCustomers = customers.filter(c => !assignedIds.has(c.id));
+  
   // Sort customers by angle from distributor to create directional sweeps
-  const customersWithAngles = customers.map(customer => ({
+  const customersWithAngles = remainingCustomers.map(customer => ({
     ...customer,
     angle: calculateAngle(distributor.latitude, distributor.longitude, customer.latitude, customer.longitude)
   }));
@@ -292,7 +269,6 @@ function createLinearInitialSolution(
   customersWithAngles.sort((a, b) => a.angle - b.angle);
   
   const targetBeats = config.beatsPerCluster;
-  const customersPerBeat = Math.ceil(customers.length / targetBeats);
   
   for (let beatIndex = 0; beatIndex < targetBeats && customersWithAngles.length > 0; beatIndex++) {
     const route: SalesmanRoute = {
@@ -305,18 +281,19 @@ function createLinearInitialSolution(
       distributorLng: distributor.longitude
     };
     
-    // Take customers in angular order for this beat
-    const remainingCustomers = customersWithAngles.length;
+    // Calculate customers for this beat
+    const remainingCustomersCount = customersWithAngles.length;
     const remainingBeats = targetBeats - beatIndex;
     const customersForThisBeat = Math.min(
-      Math.ceil(remainingCustomers / remainingBeats),
+      Math.ceil(remainingCustomersCount / remainingBeats),
       config.maxOutletsPerBeat
     );
     
+    // Take customers in angular order for this beat
     const beatCustomers = customersWithAngles.splice(0, customersForThisBeat);
     
-    // Optimize order within this directional sweep
-    const optimizedOrder = optimizeLinearOrder(beatCustomers, distributor);
+    // Optimize order within this directional sweep using nearest neighbor
+    const optimizedOrder = optimizeLinearOrderStrict(beatCustomers, distributor);
     
     optimizedOrder.forEach(customer => {
       route.stops.push({
@@ -329,6 +306,7 @@ function createLinearInitialSolution(
         clusterId: customer.clusterId,
         outletName: customer.outletName
       });
+      assignedIds.add(customer.id);
     });
     
     if (route.stops.length > 0) {
@@ -354,7 +332,7 @@ function calculateAngle(centerLat: number, centerLng: number, pointLat: number, 
   return angle;
 }
 
-function optimizeLinearOrder(
+function optimizeLinearOrderStrict(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number }
 ): ClusteredCustomer[] {
@@ -451,14 +429,14 @@ function calculateLinearityPenalty(route: SalesmanRoute): number {
   return penalty;
 }
 
-function createProximityNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig): SalesmanRoute[] {
+function createStrictProximityNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig): SalesmanRoute[] {
   const newSolution = JSON.parse(JSON.stringify(solution));
   
+  // Only allow operations that maintain strict assignment (no cross-route moves)
   const operations = [
-    () => swapAdjacentStops(newSolution, config),
-    () => relocateToNearestPosition(newSolution, config),
-    () => reverseSegmentForLinearity(newSolution, config),
-    () => optimizeRouteOrder(newSolution, config)
+    () => swapAdjacentStopsStrict(newSolution, config),
+    () => reverseSegmentForLinearityStrict(newSolution, config),
+    () => optimizeRouteOrderStrict(newSolution, config)
   ];
   
   const numOperations = 1 + Math.floor(Math.random() * 2);
@@ -470,7 +448,7 @@ function createProximityNeighborSolution(solution: SalesmanRoute[], config: Clus
   return newSolution;
 }
 
-function swapAdjacentStops(solution: SalesmanRoute[], config: ClusteringConfig): void {
+function swapAdjacentStopsStrict(solution: SalesmanRoute[], config: ClusteringConfig): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -478,108 +456,14 @@ function swapAdjacentStops(solution: SalesmanRoute[], config: ClusteringConfig):
   
   if (route.stops.length < 2) return;
   
-  // Only swap adjacent stops to maintain some linearity
+  // Only swap adjacent stops to maintain linearity
   const i = Math.floor(Math.random() * (route.stops.length - 1));
   [route.stops[i], route.stops[i + 1]] = [route.stops[i + 1], route.stops[i]];
   
   updateRouteMetrics(route, config);
 }
 
-function relocateToNearestPosition(solution: SalesmanRoute[], config: ClusteringConfig): void {
-  if (solution.length < 2) return;
-  
-  const fromRouteIndex = Math.floor(Math.random() * solution.length);
-  const fromRoute = solution[fromRouteIndex];
-  
-  if (fromRoute.stops.length <= config.minOutletsPerBeat) return;
-  
-  const sameClusterRoutes = solution.filter((r, i) => 
-    i !== fromRouteIndex && r.clusterIds[0] === fromRoute.clusterIds[0]
-  );
-  
-  if (sameClusterRoutes.length === 0) return;
-  
-  const toRoute = sameClusterRoutes[Math.floor(Math.random() * sameClusterRoutes.length)];
-  
-  if (toRoute.stops.length >= config.maxOutletsPerBeat) return;
-  
-  const customerIndex = Math.floor(Math.random() * fromRoute.stops.length);
-  const [customer] = fromRoute.stops.splice(customerIndex, 1);
-  
-  // Find the best position to maintain linearity
-  const bestPos = findBestLinearInsertionPoint(toRoute, customer, { latitude: toRoute.distributorLat, longitude: toRoute.distributorLng });
-  
-  toRoute.stops.splice(bestPos, 0, customer);
-  updateRouteMetrics(fromRoute, config);
-  updateRouteMetrics(toRoute, config);
-}
-
-function findBestLinearInsertionPoint(
-  route: SalesmanRoute,
-  customer: { latitude: number; longitude: number },
-  distributor: { latitude: number; longitude: number }
-): number {
-  if (route.stops.length === 0) return 0;
-  
-  let bestPosition = route.stops.length;
-  let minIncrease = Infinity;
-  
-  for (let i = 0; i <= route.stops.length; i++) {
-    let increase = 0;
-    
-    if (i === 0) {
-      const distToCustomer = calculateHaversineDistance(
-        distributor.latitude, distributor.longitude,
-        customer.latitude, customer.longitude
-      );
-      const distFromCustomer = route.stops.length > 0 ? 
-        calculateHaversineDistance(
-          customer.latitude, customer.longitude,
-          route.stops[0].latitude, route.stops[0].longitude
-        ) : 0;
-      const originalDist = route.stops.length > 0 ?
-        calculateHaversineDistance(
-          distributor.latitude, distributor.longitude,
-          route.stops[0].latitude, route.stops[0].longitude
-        ) : 0;
-      
-      increase = distToCustomer + distFromCustomer - originalDist;
-    } else if (i === route.stops.length) {
-      const lastStop = route.stops[route.stops.length - 1];
-      increase = calculateHaversineDistance(
-        lastStop.latitude, lastStop.longitude,
-        customer.latitude, customer.longitude
-      );
-    } else {
-      const prevStop = route.stops[i - 1];
-      const nextStop = route.stops[i];
-      
-      const distToPrev = calculateHaversineDistance(
-        prevStop.latitude, prevStop.longitude,
-        customer.latitude, customer.longitude
-      );
-      const distToNext = calculateHaversineDistance(
-        customer.latitude, customer.longitude,
-        nextStop.latitude, nextStop.longitude
-      );
-      const originalDist = calculateHaversineDistance(
-        prevStop.latitude, prevStop.longitude,
-        nextStop.latitude, nextStop.longitude
-      );
-      
-      increase = distToPrev + distToNext - originalDist;
-    }
-    
-    if (increase < minIncrease) {
-      minIncrease = increase;
-      bestPosition = i;
-    }
-  }
-  
-  return bestPosition;
-}
-
-function reverseSegmentForLinearity(solution: SalesmanRoute[], config: ClusteringConfig): void {
+function reverseSegmentForLinearityStrict(solution: SalesmanRoute[], config: ClusteringConfig): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -597,7 +481,7 @@ function reverseSegmentForLinearity(solution: SalesmanRoute[], config: Clusterin
   updateRouteMetrics(route, config);
 }
 
-function optimizeRouteOrder(solution: SalesmanRoute[], config: ClusteringConfig): void {
+function optimizeRouteOrderStrict(solution: SalesmanRoute[], config: ClusteringConfig): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -645,47 +529,25 @@ function optimizeRouteOrder(solution: SalesmanRoute[], config: ClusteringConfig)
   }
 }
 
-async function optimizeAcrossClustersWithProximity(
+async function optimizeAcrossClustersWithStrictTracking(
   routes: SalesmanRoute[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig
 ): Promise<SalesmanRoute[]> {
-  let currentSolution = [...routes];
-  let bestSolution = [...routes];
-  let currentEnergy = calculateProximityEnergy(currentSolution, config);
-  let bestEnergy = currentEnergy;
+  // For strict tracking, we only optimize within routes, not across routes
+  // This prevents any customer reassignment that could cause duplicates
   
-  let temperature = INITIAL_TEMPERATURE * 0.5;
-  
-  while (temperature > MIN_TEMPERATURE) {
-    for (let i = 0; i < ITERATIONS_PER_TEMP / 2; i++) {
-      const neighborSolution = createProximityNeighborSolution(currentSolution, config);
-      const neighborEnergy = calculateProximityEnergy(neighborSolution, config);
-      
-      const acceptanceProbability = Math.exp(-(neighborEnergy - currentEnergy) / temperature);
-      
-      if (neighborEnergy < currentEnergy || Math.random() < acceptanceProbability) {
-        currentSolution = neighborSolution;
-        currentEnergy = neighborEnergy;
-        
-        if (neighborEnergy < bestEnergy) {
-          bestSolution = JSON.parse(JSON.stringify(neighborSolution));
-          bestEnergy = neighborEnergy;
-        }
-      }
-      
-      if (i % BATCH_SIZE === 0) {
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
+  routes.forEach(route => {
+    if (route.stops.length >= 4) {
+      optimizeRouteOrderStrict([route], config);
     }
-    
-    temperature *= COOLING_RATE;
-  }
+  });
   
-  return optimizeBeats(bestSolution, distributor, config);
+  return optimizeBeatsStrict(routes, distributor, config);
 }
 
-function optimizeBeats(routes: SalesmanRoute[], distributor: { latitude: number; longitude: number }, config: ClusteringConfig): SalesmanRoute[] {
+function optimizeBeatsStrict(routes: SalesmanRoute[], distributor: { latitude: number; longitude: number }, config: ClusteringConfig): SalesmanRoute[] {
+  // Only merge routes if they're in the same cluster and won't violate size constraints
   const optimizedRoutes = routes.reduce((acc, route) => {
     if (route.stops.length >= config.minOutletsPerBeat && route.stops.length <= config.maxOutletsPerBeat) {
       acc.push(route);
@@ -702,6 +564,7 @@ function optimizeBeats(routes: SalesmanRoute[], distributor: { latitude: number;
         acc.push(route);
       }
     } else {
+      // Split oversized routes
       const midPoint = Math.ceil(route.stops.length / 2);
       
       const route1: SalesmanRoute = {
