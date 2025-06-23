@@ -115,12 +115,7 @@ function App() {
     setClusteringConfig(config);
     
     try {
-      // Process the data with the configuration
-      const data = await processExcelFile(new File([], 'temp'), config);
-      // Use the raw data but apply clustering with config
-      const clusteredData = await processExcelFile(new File([], 'temp'), config);
-      
-      // Manually apply clustering to raw data
+      // Apply clustering to the raw data
       const { clusterCustomers } = await import('./utils/clustering');
       const clusteredCustomers = await clusterCustomers(rawLocationData.customers.map(c => ({
         id: c.id,
