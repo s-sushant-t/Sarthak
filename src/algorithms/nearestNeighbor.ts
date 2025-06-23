@@ -1,22 +1,15 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
+import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
-const MIN_OUTLETS_PER_BEAT = 30; // Updated minimum outlets per beat
-const MAX_OUTLETS_PER_BEAT = 45; // Updated maximum outlets per beat
-const CUSTOMER_VISIT_TIME = 6; // 6 minutes per customer
-const MAX_WORKING_TIME = 360; // 6 hours in minutes
-const TRAVEL_SPEED = 30; // km/h
-const MAX_DISTANCE_VARIANCE = 5; // Maximum allowed distance variance between beats (in km)
-
-// Target configuration: 6 clusters, 6 beats per cluster = 36 total beats
-const TARGET_BEATS_PER_CLUSTER = 6;
-const EXPECTED_TOTAL_BEATS = 36;
-
-export const nearestNeighbor = async (locationData: LocationData): Promise<AlgorithmResult> => {
+export const nearestNeighbor = async (
+  locationData: LocationData, 
+  config: ClusteringConfig
+): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
   console.log(`Starting nearest neighbor algorithm with ${customers.length} total customers`);
-  console.log(`Target: ${EXPECTED_TOTAL_BEATS} total beats (${TARGET_BEATS_PER_CLUSTER} per cluster)`);
+  console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
   
   // Create a copy of all customers to track which ones have been assigned
   const allCustomers = [...customers];
@@ -38,21 +31,21 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   const routes: SalesmanRoute[] = [];
   let currentSalesmanId = 1;
   
-  // Process each cluster to create exactly 6 beats per cluster
+  // Process each cluster to create the specified number of beats per cluster
   for (const clusterId of Object.keys(customersByCluster)) {
     const clusterCustomers = [...customersByCluster[Number(clusterId)]];
     const clusterSize = clusterCustomers.length;
     
     console.log(`Processing cluster ${clusterId} with ${clusterCustomers.length} customers`);
-    console.log(`Target: ${TARGET_BEATS_PER_CLUSTER} beats for this cluster`);
+    console.log(`Target: ${config.beatsPerCluster} beats for this cluster`);
     
     // Calculate optimal outlets per beat for this cluster
-    const outletsPerBeat = Math.ceil(clusterSize / TARGET_BEATS_PER_CLUSTER);
+    const outletsPerBeat = Math.ceil(clusterSize / config.beatsPerCluster);
     console.log(`Target outlets per beat in cluster ${clusterId}: ${outletsPerBeat}`);
     
     let beatsCreatedInCluster = 0;
     
-    while (clusterCustomers.length > 0 && beatsCreatedInCluster < TARGET_BEATS_PER_CLUSTER) {
+    while (clusterCustomers.length > 0 && beatsCreatedInCluster < config.beatsPerCluster) {
       const currentRoute: SalesmanRoute = {
         salesmanId: currentSalesmanId++,
         stops: [],
@@ -65,15 +58,15 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       
       let currentLat = distributor.latitude;
       let currentLng = distributor.longitude;
-      let remainingTime = MAX_WORKING_TIME;
+      let remainingTime = config.maxWorkingTimeMinutes;
       
       // Calculate target outlets for this specific beat
       const remainingOutlets = clusterCustomers.length;
-      const remainingBeats = TARGET_BEATS_PER_CLUSTER - beatsCreatedInCluster;
+      const remainingBeats = config.beatsPerCluster - beatsCreatedInCluster;
       let targetOutlets = Math.ceil(remainingOutlets / remainingBeats);
       
       // Ensure we don't exceed max outlets per beat
-      targetOutlets = Math.min(targetOutlets, MAX_OUTLETS_PER_BEAT);
+      targetOutlets = Math.min(targetOutlets, config.maxOutletsPerBeat);
       
       console.log(`Beat ${currentRoute.salesmanId}: targeting ${targetOutlets} outlets (${remainingOutlets} remaining, ${remainingBeats} beats left)`);
       
@@ -90,8 +83,8 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
             customer.latitude, customer.longitude
           );
           
-          const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
-          if (travelTime + CUSTOMER_VISIT_TIME > remainingTime) continue;
+          const travelTime = calculateTravelTime(distance, config.travelSpeedKmh);
+          if (travelTime + config.customerVisitTimeMinutes > remainingTime) continue;
           
           if (distance < shortestDistance) {
             shortestDistance = distance;
@@ -102,7 +95,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
         if (nearestIndex === -1) break;
         
         const nearestCustomer = clusterCustomers.splice(nearestIndex, 1)[0];
-        const travelTime = calculateTravelTime(shortestDistance, TRAVEL_SPEED);
+        const travelTime = calculateTravelTime(shortestDistance, config.travelSpeedKmh);
         
         // Track that this customer has been assigned
         assignedCustomerIds.add(nearestCustomer.id);
@@ -113,14 +106,14 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
           longitude: nearestCustomer.longitude,
           distanceToNext: 0,
           timeToNext: 0,
-          visitTime: CUSTOMER_VISIT_TIME,
+          visitTime: config.customerVisitTimeMinutes,
           clusterId: nearestCustomer.clusterId,
           outletName: nearestCustomer.outletName
         });
         
         currentRoute.totalDistance += shortestDistance;
-        currentRoute.totalTime += travelTime + CUSTOMER_VISIT_TIME;
-        remainingTime -= (travelTime + CUSTOMER_VISIT_TIME);
+        currentRoute.totalTime += travelTime + config.customerVisitTimeMinutes;
+        remainingTime -= (travelTime + config.customerVisitTimeMinutes);
         
         currentLat = nearestCustomer.latitude;
         currentLng = nearestCustomer.longitude;
@@ -143,7 +136,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       clusterCustomers.forEach(customer => {
         // Find the beat with the least customers that can accommodate one more
         const targetRoute = clusterRoutes
-          .filter(route => route.stops.length < MAX_OUTLETS_PER_BEAT)
+          .filter(route => route.stops.length < config.maxOutletsPerBeat)
           .sort((a, b) => a.stops.length - b.stops.length)[0];
         
         if (targetRoute) {
@@ -153,7 +146,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
             longitude: customer.longitude,
             distanceToNext: 0,
             timeToNext: 0,
-            visitTime: CUSTOMER_VISIT_TIME,
+            visitTime: config.customerVisitTimeMinutes,
             clusterId: customer.clusterId,
             outletName: customer.outletName
           });
@@ -179,7 +172,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
       let assigned = false;
       
       for (const route of routes) {
-        if (route.stops.length < MAX_OUTLETS_PER_BEAT && unassignedCustomers.length > 0) {
+        if (route.stops.length < config.maxOutletsPerBeat && unassignedCustomers.length > 0) {
           const customer = unassignedCustomers.shift()!;
           
           route.stops.push({
@@ -188,7 +181,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
             longitude: customer.longitude,
             distanceToNext: 0,
             timeToNext: 0,
-            visitTime: CUSTOMER_VISIT_TIME,
+            visitTime: config.customerVisitTimeMinutes,
             clusterId: customer.clusterId,
             outletName: customer.outletName
           });
@@ -211,8 +204,8 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
           distributorLng: distributor.longitude
         };
         
-        // Add up to MAX_OUTLETS_PER_BEAT customers to this new route
-        const customersToAdd = Math.min(MAX_OUTLETS_PER_BEAT, unassignedCustomers.length);
+        // Add up to maxOutletsPerBeat customers to this new route
+        const customersToAdd = Math.min(config.maxOutletsPerBeat, unassignedCustomers.length);
         const clusterIds = new Set<number>();
         
         for (let i = 0; i < customersToAdd; i++) {
@@ -225,7 +218,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
             longitude: customer.longitude,
             distanceToNext: 0,
             timeToNext: 0,
-            visitTime: CUSTOMER_VISIT_TIME,
+            visitTime: config.customerVisitTimeMinutes,
             clusterId: customer.clusterId,
             outletName: customer.outletName
           });
@@ -257,7 +250,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
     if (missingCustomers.length > 0) {
       let targetRoute = routes[routes.length - 1];
       
-      if (!targetRoute || targetRoute.stops.length >= MAX_OUTLETS_PER_BEAT) {
+      if (!targetRoute || targetRoute.stops.length >= config.maxOutletsPerBeat) {
         targetRoute = {
           salesmanId: currentSalesmanId++,
           stops: [],
@@ -277,7 +270,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
           longitude: customer.longitude,
           distanceToNext: 0,
           timeToNext: 0,
-          visitTime: CUSTOMER_VISIT_TIME,
+          visitTime: config.customerVisitTimeMinutes,
           clusterId: customer.clusterId,
           outletName: customer.outletName
         });
@@ -293,7 +286,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   
   // Update route metrics for all routes
   routes.forEach(route => {
-    updateRouteMetrics(route, distributor);
+    updateRouteMetrics(route, distributor, config);
   });
   
   // Reassign beat IDs sequentially
@@ -305,7 +298,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   // Final verification of customer assignment
   const finalCustomerCount = finalRoutes.reduce((count, route) => count + route.stops.length, 0);
   console.log(`Final verification: ${finalCustomerCount}/${totalCustomers} customers in final routes`);
-  console.log(`Total beats created: ${finalRoutes.length} (target was ${EXPECTED_TOTAL_BEATS})`);
+  console.log(`Total beats created: ${finalRoutes.length} (target was ${config.totalClusters * config.beatsPerCluster})`);
   
   // Report beats per cluster
   const beatsByCluster = finalRoutes.reduce((acc, route) => {
@@ -326,7 +319,7 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
   
   return {
-    name: 'Nearest Neighbor (6 Clusters, 36 Beats)',
+    name: `Nearest Neighbor (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
     totalDistance,
     totalSalesmen: finalRoutes.length,
     processingTime: 0,
@@ -334,7 +327,11 @@ export const nearestNeighbor = async (locationData: LocationData): Promise<Algor
   };
 };
 
-function updateRouteMetrics(route: SalesmanRoute, distributor: { latitude: number; longitude: number }): void {
+function updateRouteMetrics(
+  route: SalesmanRoute, 
+  distributor: { latitude: number; longitude: number },
+  config: ClusteringConfig
+): void {
   route.totalDistance = 0;
   route.totalTime = 0;
   
@@ -350,10 +347,10 @@ function updateRouteMetrics(route: SalesmanRoute, distributor: { latitude: numbe
       stop.latitude, stop.longitude
     );
     
-    const travelTime = calculateTravelTime(distance, TRAVEL_SPEED);
+    const travelTime = calculateTravelTime(distance, config.travelSpeedKmh);
     
     route.totalDistance += distance;
-    route.totalTime += travelTime + CUSTOMER_VISIT_TIME;
+    route.totalTime += travelTime + config.customerVisitTimeMinutes;
     
     if (i < route.stops.length - 1) {
       const nextStop = route.stops[i + 1];
@@ -362,7 +359,7 @@ function updateRouteMetrics(route: SalesmanRoute, distributor: { latitude: numbe
         nextStop.latitude, nextStop.longitude
       );
       
-      const nextTime = calculateTravelTime(nextDistance, TRAVEL_SPEED);
+      const nextTime = calculateTravelTime(nextDistance, config.travelSpeedKmh);
       
       stop.distanceToNext = nextDistance;
       stop.timeToNext = nextTime;

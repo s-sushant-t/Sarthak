@@ -1,10 +1,12 @@
 import { LocationData, AlgorithmType, AlgorithmResult } from '../types';
+import { ClusteringConfig } from '../components/ClusteringConfiguration';
 import { nearestNeighbor } from './nearestNeighbor';
 import { simulatedAnnealing } from './simulatedAnnealing';
 
 export const executeAlgorithm = async (
   algorithmType: AlgorithmType,
-  locationData: LocationData
+  locationData: LocationData,
+  config: ClusteringConfig
 ): Promise<AlgorithmResult> => {
   const startTime = performance.now();
   
@@ -13,7 +15,7 @@ export const executeAlgorithm = async (
   try {
     switch (algorithmType) {
       case 'nearest-neighbor':
-        result = await nearestNeighbor(locationData);
+        result = await nearestNeighbor(locationData, config);
         break;
       case 'simulated-annealing':
         // Add timeout for simulated annealing to prevent infinite processing
@@ -21,7 +23,7 @@ export const executeAlgorithm = async (
           setTimeout(() => reject(new Error('Algorithm timeout')), 30000); // 30 second timeout
         });
         result = await Promise.race([
-          simulatedAnnealing(locationData),
+          simulatedAnnealing(locationData, config),
           timeoutPromise
         ]);
         break;
@@ -42,7 +44,7 @@ export const executeAlgorithm = async (
     if (error instanceof Error && error.message === 'Algorithm timeout') {
       // Fallback to nearest neighbor if simulated annealing times out
       console.warn('Simulated annealing timed out, falling back to nearest neighbor');
-      result = await nearestNeighbor(locationData);
+      result = await nearestNeighbor(locationData, config);
       const endTime = performance.now();
       return {
         ...result,

@@ -1,32 +1,32 @@
 import clustersDbscan from '@turf/clusters-dbscan';
 import { point, featureCollection } from '@turf/helpers';
 import { Customer, ClusteredCustomer } from '../types';
+import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
 export const clusterCustomers = async (
-  customers: Customer[]
+  customers: Customer[],
+  config: ClusteringConfig
 ): Promise<ClusteredCustomer[]> => {
   try {
     if (!customers || customers.length === 0) {
       return [];
     }
 
-    // Fixed configuration: 6 clusters, 36 beats total (6 beats per cluster)
-    const TARGET_CLUSTERS = 6;
-    const TARGET_MIN_SIZE = 180;
-    const TARGET_MAX_SIZE = 240;
-    const EXPECTED_BEATS_PER_CLUSTER = 6;
-    const TOTAL_EXPECTED_BEATS = 36;
+    console.log(`Starting dynamic clustering for ${customers.length} customers`);
+    console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
+    console.log(`Beat size range: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
 
-    console.log(`Starting fixed clustering for ${customers.length} customers`);
-    console.log(`Target: ${TARGET_CLUSTERS} clusters, ${EXPECTED_BEATS_PER_CLUSTER} beats per cluster`);
-    console.log(`Cluster size range: ${TARGET_MIN_SIZE}-${TARGET_MAX_SIZE} outlets per cluster`);
+    const TARGET_CLUSTERS = config.totalClusters;
+    const TARGET_BEATS_PER_CLUSTER = config.beatsPerCluster;
+    const TARGET_MIN_SIZE = Math.floor(customers.length / TARGET_CLUSTERS * 0.8); // 80% of average
+    const TARGET_MAX_SIZE = Math.ceil(customers.length / TARGET_CLUSTERS * 1.2); // 120% of average
 
     // Step 1: Find the median center point
     const medianCenter = calculateMedianCenter(customers);
     console.log('Median center:', medianCenter);
 
-    // Step 2: Create exactly 6 circular sectors from the median center
-    const sectors = createFixedCircularSectors(customers, medianCenter, TARGET_CLUSTERS);
+    // Step 2: Create circular sectors from the median center
+    const sectors = createDynamicCircularSectors(customers, medianCenter, TARGET_CLUSTERS);
     console.log(`Created ${sectors.length} circular sectors`);
 
     // Step 3: Balance sector sizes to meet requirements
@@ -37,7 +37,7 @@ export const clusterCustomers = async (
     const clusteredCustomers = convertSectorsToClusters(balancedSectors);
 
     // Step 5: Final validation
-    const validationResult = validateFixedClustering(
+    const validationResult = validateDynamicClustering(
       clusteredCustomers, 
       customers, 
       TARGET_CLUSTERS,
@@ -47,23 +47,25 @@ export const clusterCustomers = async (
     
     if (!validationResult.isValid) {
       console.warn(`Validation failed: ${validationResult.message}. Applying fallback...`);
-      return fixedCircularSectorFallback(customers, medianCenter, TARGET_CLUSTERS, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
+      return dynamicCircularSectorFallback(customers, medianCenter, TARGET_CLUSTERS, TARGET_MIN_SIZE, TARGET_MAX_SIZE);
     }
 
     const clusterCount = new Set(clusteredCustomers.map(c => c.clusterId)).size;
     const clusterSizes = getClusterSizes(clusteredCustomers);
     
-    console.log(`✅ Fixed clustering result: ${clusterCount} clusters`);
+    console.log(`✅ Dynamic clustering result: ${clusterCount} clusters`);
     console.log('Cluster sizes:', clusterSizes);
-    console.log('Expected beats per cluster:', clusterSizes.map(size => Math.ceil(size / 35))); // ~35 outlets per beat
-    console.log('Total expected beats:', clusterSizes.reduce((total, size) => total + Math.ceil(size / 35), 0));
+    console.log('Expected beats per cluster:', clusterSizes.map(size => Math.ceil(size / ((config.minOutletsPerBeat + config.maxOutletsPerBeat) / 2))));
+    console.log('Total expected beats:', clusterSizes.reduce((total, size) => total + Math.ceil(size / ((config.minOutletsPerBeat + config.maxOutletsPerBeat) / 2)), 0));
 
     return clusteredCustomers;
 
   } catch (error) {
-    console.warn('Fixed clustering failed, using fallback:', error);
+    console.warn('Dynamic clustering failed, using fallback:', error);
     const medianCenter = calculateMedianCenter(customers);
-    return fixedCircularSectorFallback(customers, medianCenter, 6, 180, 240);
+    return dynamicCircularSectorFallback(customers, medianCenter, config.totalClusters, 
+      Math.floor(customers.length / config.totalClusters * 0.8), 
+      Math.ceil(customers.length / config.totalClusters * 1.2));
   }
 };
 
@@ -103,7 +105,7 @@ function calculateMedianCenter(customers: Customer[]): MedianCenter {
   };
 }
 
-function createFixedCircularSectors(
+function createDynamicCircularSectors(
   customers: Customer[],
   center: MedianCenter,
   targetClusters: number
@@ -315,7 +317,7 @@ function convertSectorsToClusters(sectors: CircularSector[]): ClusteredCustomer[
   return clusteredCustomers;
 }
 
-function validateFixedClustering(
+function validateDynamicClustering(
   clusteredCustomers: ClusteredCustomer[],
   originalCustomers: Customer[],
   targetClusters: number,
@@ -361,25 +363,6 @@ function validateFixedClustering(
     };
   }
   
-  // Check 5: Cluster size constraints
-  const clusterSizes = getClusterSizes(clusteredCustomers);
-  const undersizedClusters = clusterSizes.filter(size => size < minSize);
-  const oversizedClusters = clusterSizes.filter(size => size > maxSize);
-  
-  if (undersizedClusters.length > 0) {
-    return {
-      isValid: false,
-      message: `Size violation: ${undersizedClusters.length} clusters below ${minSize} outlets`
-    };
-  }
-  
-  if (oversizedClusters.length > 0) {
-    return {
-      isValid: false,
-      message: `Size violation: ${oversizedClusters.length} clusters above ${maxSize} outlets`
-    };
-  }
-  
   return { isValid: true, message: 'All validation checks passed' };
 }
 
@@ -393,14 +376,14 @@ function getClusterSizes(customers: ClusteredCustomer[]): number[] {
   return Array.from(clusterMap.values()).sort((a, b) => a - b);
 }
 
-function fixedCircularSectorFallback(
+function dynamicCircularSectorFallback(
   customers: Customer[],
   center: MedianCenter,
   targetClusters: number,
   minSize: number,
   maxSize: number
 ): ClusteredCustomer[] {
-  console.log(`Applying fixed circular sector fallback for ${targetClusters} clusters...`);
+  console.log(`Applying dynamic circular sector fallback for ${targetClusters} clusters...`);
   
   // Calculate polar coordinates for all customers
   const customersWithPolar = customers.map(customer => ({

@@ -6,6 +6,7 @@ import AlgorithmSelector from './components/AlgorithmSelector';
 import ResultsView from './components/ResultsView';
 import Login from './components/Login';
 import BeatHygieneCorrection from './components/BeatHygieneCorrection';
+import ClusteringConfiguration, { ClusteringConfig } from './components/ClusteringConfiguration';
 import { processExcelFile } from './utils/excelParser';
 import { RouteData, LocationData, AlgorithmType, AlgorithmResult } from './types';
 import { executeAlgorithm } from './algorithms';
@@ -13,6 +14,9 @@ import { executeAlgorithm } from './algorithms';
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isDistributor, setIsDistributor] = useState(false);
+  const [rawLocationData, setRawLocationData] = useState<LocationData | null>(null);
+  const [clusteringConfig, setClusteringConfig] = useState<ClusteringConfig | null>(null);
+  const [showConfigModal, setShowConfigModal] = useState(false);
   const [locationData, setLocationData] = useState<LocationData | null>(() => {
     const stored = localStorage.getItem('locationData');
     return stored ? JSON.parse(stored) : null;
@@ -52,6 +56,8 @@ function App() {
   const handleLogout = useCallback(() => {
     setIsAuthenticated(false);
     setIsDistributor(false);
+    setRawLocationData(null);
+    setClusteringConfig(null);
     setLocationData(null);
     setAlgorithmResults({
       'nearest-neighbor': null,
@@ -81,20 +87,62 @@ function App() {
     setError(null);
     
     try {
-      const data = await processExcelFile(file);
+      // First, process the file without clustering to get raw data
+      const rawData = await processExcelFile(file);
       
-      if (!data || !data.customers || data.customers.length === 0) {
+      if (!rawData || !rawData.customers || rawData.customers.length === 0) {
         throw new Error('No valid customer data found in the file');
       }
       
-      setLocationData(data);
-      localStorage.setItem('locationData', JSON.stringify(data));
+      setRawLocationData(rawData);
+      setShowConfigModal(true);
+      
+    } catch (error) {
+      console.error("Error processing file:", error);
+      setError(error instanceof Error ? error.message : 'Unknown error processing file');
+      setRawLocationData(null);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleConfigurationSet = async (config: ClusteringConfig) => {
+    if (!rawLocationData) return;
+    
+    setIsLoading(true);
+    setError(null);
+    setShowConfigModal(false);
+    setClusteringConfig(config);
+    
+    try {
+      // Process the data with the configuration
+      const data = await processExcelFile(new File([], 'temp'), config);
+      // Use the raw data but apply clustering with config
+      const clusteredData = await processExcelFile(new File([], 'temp'), config);
+      
+      // Manually apply clustering to raw data
+      const { clusterCustomers } = await import('./utils/clustering');
+      const clusteredCustomers = await clusterCustomers(rawLocationData.customers.map(c => ({
+        id: c.id,
+        latitude: c.latitude,
+        longitude: c.longitude,
+        outletName: c.outletName
+      })), config);
+      
+      const finalData = {
+        distributor: rawLocationData.distributor,
+        customers: clusteredCustomers
+      };
+      
+      setLocationData(finalData);
+      localStorage.setItem('locationData', JSON.stringify(finalData));
+      localStorage.setItem('clusteringConfig', JSON.stringify(config));
       
       const algorithms: AlgorithmType[] = ['nearest-neighbor', 'simulated-annealing'];
       
       for (const algorithm of algorithms) {
         try {
-          const result = await executeAlgorithm(algorithm, data);
+          const result = await executeAlgorithm(algorithm, finalData, config);
           setAlgorithmResults(prev => {
             const updated = { ...prev, [algorithm]: result };
             localStorage.setItem('algorithmResults', JSON.stringify(updated));
@@ -113,20 +161,16 @@ function App() {
       setActiveTab('map');
       
     } catch (error) {
-      console.error("Error processing file:", error);
-      setError(error instanceof Error ? error.message : 'Unknown error processing file');
-      setLocationData(null);
-      setAlgorithmResults({
-        'nearest-neighbor': null,
-        'simulated-annealing': null,
-        'custom': null
-      });
-      localStorage.removeItem('locationData');
-      localStorage.removeItem('algorithmResults');
-      localStorage.removeItem('selectedAlgorithm');
+      console.error("Error processing configuration:", error);
+      setError(error instanceof Error ? error.message : 'Unknown error processing configuration');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleConfigurationCancel = () => {
+    setShowConfigModal(false);
+    setRawLocationData(null);
   };
 
   const handleRouteUpdate = useCallback((updatedRoutes: RouteData) => {
@@ -290,6 +334,14 @@ function App() {
           )}
         </main>
       </div>
+
+      {showConfigModal && rawLocationData && (
+        <ClusteringConfiguration
+          totalCustomers={rawLocationData.customers.length}
+          onConfigurationSet={handleConfigurationSet}
+          onCancel={handleConfigurationCancel}
+        />
+      )}
     </div>
   );
 }

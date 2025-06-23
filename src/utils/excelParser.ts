@@ -1,8 +1,9 @@
 import { read, utils } from 'xlsx';
 import { LocationData, Customer } from '../types';
 import { clusterCustomers } from './clustering';
+import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
-export const processExcelFile = async (file: File): Promise<LocationData> => {
+export const processExcelFile = async (file: File, config?: ClusteringConfig): Promise<LocationData> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     
@@ -117,9 +118,18 @@ export const processExcelFile = async (file: File): Promise<LocationData> => {
             '- No duplicate customer IDs exist'
           );
         }
+
+        // If no config provided, return raw data for configuration
+        if (!config) {
+          resolve({ 
+            distributor, 
+            customers: customers.map(customer => ({ ...customer, clusterId: 0 }))
+          });
+          return;
+        }
         
-        console.log('Starting clustering process...');
-        const clusteredCustomers = await clusterCustomers(customers);
+        console.log('Starting clustering process with configuration:', config);
+        const clusteredCustomers = await clusterCustomers(customers, config);
         
         console.log(`Clustering complete: ${clusteredCustomers.length} customers clustered`);
         
