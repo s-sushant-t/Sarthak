@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Settings, Target, Users, MapPin, Clock, Calculator } from 'lucide-react';
 
 interface ClusteringConfigurationProps {
@@ -58,64 +58,67 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
     };
   };
 
-  const metrics = calculateMetrics();
-
-  const validateConfiguration = (): boolean => {
+  const validateConfiguration = (currentConfig: ClusteringConfig): Record<string, string> => {
     const newErrors: Record<string, string> = {};
 
-    if (config.totalClusters < 1 || config.totalClusters > 20) {
+    if (currentConfig.totalClusters < 1 || currentConfig.totalClusters > 20) {
       newErrors.totalClusters = 'Number of clusters must be between 1 and 20';
     }
 
-    if (config.beatsPerCluster < 1 || config.beatsPerCluster > 20) {
+    if (currentConfig.beatsPerCluster < 1 || currentConfig.beatsPerCluster > 20) {
       newErrors.beatsPerCluster = 'Beats per cluster must be between 1 and 20';
     }
 
-    if (config.minOutletsPerBeat >= config.maxOutletsPerBeat) {
+    if (currentConfig.minOutletsPerBeat >= currentConfig.maxOutletsPerBeat) {
       newErrors.minOutletsPerBeat = 'Minimum outlets must be less than maximum outlets';
     }
 
-    if (config.minOutletsPerBeat < 1) {
+    if (currentConfig.minOutletsPerBeat < 1) {
       newErrors.minOutletsPerBeat = 'Minimum outlets per beat must be at least 1';
     }
 
-    if (config.maxOutletsPerBeat > 100) {
+    if (currentConfig.maxOutletsPerBeat > 100) {
       newErrors.maxOutletsPerBeat = 'Maximum outlets per beat cannot exceed 100';
     }
 
-    if (config.maxWorkingTimeMinutes < 60 || config.maxWorkingTimeMinutes > 720) {
+    if (currentConfig.maxWorkingTimeMinutes < 60 || currentConfig.maxWorkingTimeMinutes > 720) {
       newErrors.maxWorkingTimeMinutes = 'Working time must be between 1 and 12 hours';
     }
 
-    if (config.customerVisitTimeMinutes < 1 || config.customerVisitTimeMinutes > 60) {
+    if (currentConfig.customerVisitTimeMinutes < 1 || currentConfig.customerVisitTimeMinutes > 60) {
       newErrors.customerVisitTimeMinutes = 'Visit time must be between 1 and 60 minutes';
     }
 
-    if (config.travelSpeedKmh < 5 || config.travelSpeedKmh > 100) {
+    if (currentConfig.travelSpeedKmh < 5 || currentConfig.travelSpeedKmh > 100) {
       newErrors.travelSpeedKmh = 'Travel speed must be between 5 and 100 km/h';
     }
 
-    const totalBeats = config.totalClusters * config.beatsPerCluster;
+    const totalBeats = currentConfig.totalClusters * currentConfig.beatsPerCluster;
     if (totalBeats > totalCustomers) {
       newErrors.totalClusters = `Total beats (${totalBeats}) cannot exceed total customers (${totalCustomers})`;
     }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    return newErrors;
   };
 
+  // Use useEffect to validate configuration when config changes
+  useEffect(() => {
+    const newErrors = validateConfiguration(config);
+    setErrors(newErrors);
+  }, [config, totalCustomers]);
+
   const handleSubmit = () => {
-    if (validateConfiguration()) {
+    if (Object.keys(errors).length === 0) {
       onConfigurationSet(config);
     }
   };
 
   const updateConfig = (field: keyof ClusteringConfig, value: number) => {
     setConfig(prev => ({ ...prev, [field]: value }));
-    setErrors(prev => ({ ...prev, [field]: '', feasibility: '' }));
   };
 
-  const isFormValid = validateConfiguration();
+  const isFormValid = Object.keys(errors).length === 0;
+  const metrics = calculateMetrics();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
