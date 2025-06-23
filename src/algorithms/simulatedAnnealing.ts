@@ -315,6 +315,48 @@ function createStrictLinearInitialSolution(
     }
   }
   
+  // CRITICAL FIX: Handle any remaining unassigned customers
+  if (customersWithAngles.length > 0) {
+    console.log(`Cluster ${clusterId}: ${customersWithAngles.length} customers remaining after initial beat creation`);
+    
+    // Assign remaining customers to existing routes or create new ones
+    customersWithAngles.forEach(customer => {
+      // Try to find an existing route with space
+      let targetRoute = routes.find(route => route.stops.length < config.maxOutletsPerBeat);
+      
+      if (!targetRoute) {
+        // Create a new route if no existing route has space
+        targetRoute = {
+          salesmanId: salesmanId++,
+          stops: [],
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [clusterId],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        routes.push(targetRoute);
+      }
+      
+      // Add customer to the target route
+      targetRoute.stops.push({
+        customerId: customer.id,
+        latitude: customer.latitude,
+        longitude: customer.longitude,
+        distanceToNext: 0,
+        timeToNext: 0,
+        visitTime: config.customerVisitTimeMinutes,
+        clusterId: customer.clusterId,
+        outletName: customer.outletName
+      });
+      
+      assignedIds.add(customer.id);
+      updateRouteMetrics(targetRoute, config);
+    });
+    
+    console.log(`Cluster ${clusterId}: All remaining customers assigned. Total routes: ${routes.length}`);
+  }
+  
   return routes;
 }
 
