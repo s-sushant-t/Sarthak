@@ -8,8 +8,9 @@ export const nearestNeighbor = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting proximity-optimized nearest neighbor algorithm with ${customers.length} total customers`);
+  console.log(`Starting constraint-enforced nearest neighbor algorithm with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
+  console.log(`Beat constraints: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
   
   // Calculate mode distance between all outlets for constraint
   const modeDistance = calculateModeDistance(customers);
@@ -35,7 +36,7 @@ export const nearestNeighbor = async (
   const routes: SalesmanRoute[] = [];
   let currentSalesmanId = 1;
   
-  // Process each cluster independently to ensure no cross-cluster contamination
+  // Process each cluster independently with STRICT constraint enforcement
   for (const clusterId of Object.keys(customersByCluster)) {
     const clusterCustomers = [...customersByCluster[Number(clusterId)]];
     const clusterSize = clusterCustomers.length;
@@ -46,8 +47,8 @@ export const nearestNeighbor = async (
     // CRITICAL: Track assigned customers within this cluster only
     const clusterAssignedIds = new Set<string>();
     
-    // Create proximity-based linear routes within the cluster with strict mode distance constraint
-    const clusterRoutes = createStrictProximityBasedRoutesInCluster(
+    // Create constraint-enforced routes within the cluster
+    const clusterRoutes = createConstraintEnforcedRoutesInCluster(
       clusterCustomers,
       distributor,
       config,
@@ -68,20 +69,21 @@ export const nearestNeighbor = async (
       const missingCustomers = clusterCustomers.filter(c => !clusterAssignedIds.has(c.id));
       console.log(`Missing customers in cluster ${clusterId}:`, missingCustomers.map(c => c.id));
       
-      // Force assign missing customers to the route with the least customers
+      // Force assign missing customers to routes that have space
       missingCustomers.forEach(customer => {
-        const targetRoute = clusterRoutes.reduce((min, route) => 
-          route.stops.length < min.stops.length ? route : min
-        );
+        const targetRoute = clusterRoutes.find(r => r.stops.length < config.maxOutletsPerBeat) || 
+                           clusterRoutes.reduce((min, route) => 
+                             route.stops.length < min.stops.length ? route : min
+                           );
         
-        if (targetRoute && targetRoute.stops.length < config.maxOutletsPerBeat) {
+        if (targetRoute) {
           targetRoute.stops.push({
             customerId: customer.id,
             latitude: customer.latitude,
             longitude: customer.longitude,
             distanceToNext: 0,
             timeToNext: 0,
-            visitTime: 0, // No visit time constraint
+            visitTime: 0,
             clusterId: customer.clusterId,
             outletName: customer.outletName
           });
@@ -97,7 +99,7 @@ export const nearestNeighbor = async (
     routes.push(...clusterRoutes);
     currentSalesmanId += clusterRoutes.length;
     
-    console.log(`Cluster ${clusterId} complete: ${clusterRoutes.length} proximity-based beats created`);
+    console.log(`Cluster ${clusterId} complete: ${clusterRoutes.length} constraint-enforced beats created`);
   }
   
   // CRITICAL: Final verification - ensure ALL customers are assigned exactly once
@@ -142,7 +144,7 @@ export const nearestNeighbor = async (
         longitude: customer.longitude,
         distanceToNext: 0,
         timeToNext: 0,
-        visitTime: 0, // No visit time constraint
+        visitTime: 0,
         clusterId: customer.clusterId,
         outletName: customer.outletName
       });
@@ -152,9 +154,9 @@ export const nearestNeighbor = async (
     });
   }
   
-  // Update route metrics for all routes
+  // Update route metrics for all routes (focus on per-beat distance only)
   routes.forEach(route => {
-    updateRouteMetrics(route, distributor);
+    updateRouteMetricsForProximity(route, distributor);
   });
   
   // Reassign beat IDs sequentially
@@ -173,7 +175,7 @@ export const nearestNeighbor = async (
   console.log(`- Expected customers: ${totalCustomers}`);
   console.log(`- Total beats created: ${finalRoutes.length}`);
   
-  // Report beats per cluster
+  // Report beats per cluster and constraint compliance
   const beatsByCluster = finalRoutes.reduce((acc, route) => {
     route.clusterIds.forEach(clusterId => {
       if (!acc[clusterId]) acc[clusterId] = 0;
@@ -184,16 +186,28 @@ export const nearestNeighbor = async (
   
   console.log('Beats per cluster:', beatsByCluster);
   
+  // Check constraint compliance
+  const constraintViolations = finalRoutes.filter(route => 
+    route.stops.length < config.minOutletsPerBeat || route.stops.length > config.maxOutletsPerBeat
+  );
+  
+  if (constraintViolations.length > 0) {
+    console.warn(`Constraint violations: ${constraintViolations.length} beats outside size constraints`);
+    constraintViolations.forEach(route => {
+      console.warn(`Beat ${route.salesmanId}: ${route.stops.length} outlets (should be ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat})`);
+    });
+  }
+  
   if (finalCustomerCount !== totalCustomers || uniqueCustomerIds.size !== totalCustomers) {
     console.error(`FINAL ERROR: Customer count mismatch!`);
     console.error(`Expected: ${totalCustomers}, Got: ${finalCustomerCount}, Unique: ${uniqueCustomerIds.size}`);
   }
   
-  // Calculate total distance
+  // Calculate total distance (sum of per-beat distances, not overall optimization)
   const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
   
   return {
-    name: `Proximity-Optimized Nearest Neighbor (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
+    name: `Constraint-Enforced Nearest Neighbor (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
     totalDistance,
     totalSalesmen: finalRoutes.length,
     processingTime: 0,
@@ -241,7 +255,7 @@ function calculateModeDistance(customers: ClusteredCustomer[]): number {
   return Math.max(modeDistance, 1.5);
 }
 
-function createStrictProximityBasedRoutesInCluster(
+function createConstraintEnforcedRoutesInCluster(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
@@ -252,8 +266,9 @@ function createStrictProximityBasedRoutesInCluster(
 ): SalesmanRoute[] {
   if (customers.length === 0) return [];
   
-  console.log(`Creating STRICT proximity-based routes for cluster ${clusterId} with ${customers.length} customers`);
-  console.log(`STRICT mode distance constraint: ${modeDistance.toFixed(2)} km`);
+  console.log(`Creating CONSTRAINT-ENFORCED routes for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`STRICT constraints: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
+  console.log(`Mode distance constraint: ${modeDistance.toFixed(2)} km`);
   
   const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
@@ -261,8 +276,14 @@ function createStrictProximityBasedRoutesInCluster(
   // Create a working copy of customers for this cluster
   const remainingCustomers = [...customers];
   
-  // Create beats using strict proximity clustering
-  while (remainingCustomers.length > 0) {
+  // Calculate target number of beats for this cluster
+  const targetBeats = config.beatsPerCluster;
+  const customersPerBeat = Math.ceil(customers.length / targetBeats);
+  
+  console.log(`Target: ${targetBeats} beats, ~${customersPerBeat} customers per beat`);
+  
+  // Create beats with STRICT size constraints
+  for (let beatIndex = 0; beatIndex < targetBeats && remainingCustomers.length > 0; beatIndex++) {
     const route: SalesmanRoute = {
       salesmanId: salesmanId++,
       stops: [],
@@ -273,19 +294,33 @@ function createStrictProximityBasedRoutesInCluster(
       distributorLng: distributor.longitude
     };
     
-    console.log(`Creating STRICT beat ${route.salesmanId} from ${remainingCustomers.length} remaining customers`);
+    console.log(`Creating beat ${route.salesmanId} (${beatIndex + 1}/${targetBeats})`);
     
-    // Start with the customer closest to distributor
+    // Calculate target size for this beat
+    const remainingBeats = targetBeats - beatIndex;
+    const remainingCustomersCount = remainingCustomers.length;
+    let targetSize = Math.ceil(remainingCustomersCount / remainingBeats);
+    
+    // Enforce constraints
+    targetSize = Math.max(config.minOutletsPerBeat, Math.min(config.maxOutletsPerBeat, targetSize));
+    
+    console.log(`Target size for beat ${route.salesmanId}: ${targetSize} customers`);
+    
+    // Start with the customer closest to distributor (or previous beat center)
     let seedIndex = 0;
-    let minDistanceToDistributor = Infinity;
+    let minDistanceToReference = Infinity;
+    
+    const referencePoint = routes.length > 0 ? 
+      calculateBeatCenter(routes[routes.length - 1].stops) : 
+      { latitude: distributor.latitude, longitude: distributor.longitude };
     
     for (let i = 0; i < remainingCustomers.length; i++) {
       const distance = calculateHaversineDistance(
-        distributor.latitude, distributor.longitude,
+        referencePoint.latitude, referencePoint.longitude,
         remainingCustomers[i].latitude, remainingCustomers[i].longitude
       );
-      if (distance < minDistanceToDistributor) {
-        minDistanceToDistributor = distance;
+      if (distance < minDistanceToReference) {
+        minDistanceToReference = distance;
         seedIndex = i;
       }
     }
@@ -300,25 +335,23 @@ function createStrictProximityBasedRoutesInCluster(
       longitude: seedCustomer.longitude,
       distanceToNext: 0,
       timeToNext: 0,
-      visitTime: 0, // No visit time constraint
+      visitTime: 0,
       clusterId: seedCustomer.clusterId,
       outletName: seedCustomer.outletName
     });
     
     console.log(`Seed customer for beat ${route.salesmanId}: ${seedCustomer.id}`);
     
-    // Build tight cluster around seed customer using STRICT mode distance constraint
-    let addedInThisIteration = true;
-    while (addedInThisIteration && 
+    // Build tight cluster around seed customer with STRICT constraints
+    while (route.stops.length < targetSize && 
            route.stops.length < config.maxOutletsPerBeat && 
            remainingCustomers.length > 0) {
       
-      addedInThisIteration = false;
       let bestCandidate = null;
       let bestCandidateIndex = -1;
       let minMaxDistance = Infinity;
       
-      // Find customer that minimizes the maximum distance to any customer in the current beat
+      // Find customer that minimizes the maximum distance within the beat
       for (let i = 0; i < remainingCustomers.length; i++) {
         const candidate = remainingCustomers[i];
         
@@ -359,22 +392,25 @@ function createStrictProximityBasedRoutesInCluster(
           longitude: customer.longitude,
           distanceToNext: 0,
           timeToNext: 0,
-          visitTime: 0, // No visit time constraint
+          visitTime: 0,
           clusterId: customer.clusterId,
           outletName: customer.outletName
         });
         
-        addedInThisIteration = true;
         console.log(`Added customer ${customer.id} to beat ${route.salesmanId} (max distance in beat: ${minMaxDistance.toFixed(2)} km)`);
+      } else {
+        // No suitable candidate found, break to avoid infinite loop
+        console.log(`No suitable candidate found for beat ${route.salesmanId}, stopping at ${route.stops.length} customers`);
+        break;
       }
     }
     
     // Ensure minimum beat size if possible
     if (route.stops.length < config.minOutletsPerBeat && remainingCustomers.length > 0) {
-      console.log(`Beat ${route.salesmanId} has only ${route.stops.length} customers, trying to add more...`);
+      console.log(`Beat ${route.salesmanId} has only ${route.stops.length} customers, trying to reach minimum ${config.minOutletsPerBeat}...`);
       
       // Relax constraint slightly to meet minimum beat size
-      const relaxedModeDistance = modeDistance * 1.2; // 20% relaxation
+      const relaxedModeDistance = modeDistance * 1.3; // 30% relaxation
       
       while (route.stops.length < config.minOutletsPerBeat && 
              route.stops.length < config.maxOutletsPerBeat && 
@@ -421,7 +457,7 @@ function createStrictProximityBasedRoutesInCluster(
             longitude: customer.longitude,
             distanceToNext: 0,
             timeToNext: 0,
-            visitTime: 0, // No visit time constraint
+            visitTime: 0,
             clusterId: customer.clusterId,
             outletName: customer.outletName
           });
@@ -434,25 +470,19 @@ function createStrictProximityBasedRoutesInCluster(
     }
     
     if (route.stops.length > 0) {
-      // Optimize the order within the beat to minimize total distance while maintaining proximity
-      optimizeRouteOrderForProximity(route, distributor, modeDistance);
+      // Optimize the order within the beat to minimize per-beat distance
+      optimizeRouteOrderForMinimumDistance(route, distributor);
       routes.push(route);
       
       // Calculate actual maximum distance within this beat for verification
       const maxDistanceInBeat = calculateMaxDistanceInBeat(route.stops);
-      console.log(`Created STRICT beat ${route.salesmanId} with ${route.stops.length} stops, max internal distance: ${maxDistanceInBeat.toFixed(2)} km`);
-    }
-    
-    // Safety check to prevent infinite loops
-    if (routes.length >= config.beatsPerCluster * 2) {
-      console.warn(`Safety break: Created ${routes.length} routes for cluster ${clusterId}`);
-      break;
+      console.log(`Created beat ${route.salesmanId} with ${route.stops.length} stops, max internal distance: ${maxDistanceInBeat.toFixed(2)} km, total distance: ${route.totalDistance.toFixed(2)} km`);
     }
   }
   
-  // Handle any remaining customers by creating additional beats or distributing to existing ones
+  // Handle any remaining customers by distributing to existing beats or creating new ones
   if (remainingCustomers.length > 0) {
-    console.log(`Distributing ${remainingCustomers.length} remaining customers to existing routes or creating new beats...`);
+    console.log(`Distributing ${remainingCustomers.length} remaining customers...`);
     
     remainingCustomers.forEach(customer => {
       if (assignedIds.has(customer.id)) {
@@ -460,7 +490,7 @@ function createStrictProximityBasedRoutesInCluster(
         return;
       }
       
-      // Try to find an existing route that can accommodate this customer without violating constraint
+      // Try to find an existing route that can accommodate this customer
       let bestRoute = null;
       let minViolation = Infinity;
       
@@ -506,7 +536,7 @@ function createStrictProximityBasedRoutesInCluster(
         longitude: customer.longitude,
         distanceToNext: 0,
         timeToNext: 0,
-        visitTime: 0, // No visit time constraint
+        visitTime: 0,
         clusterId: customer.clusterId,
         outletName: customer.outletName
       });
@@ -517,6 +547,15 @@ function createStrictProximityBasedRoutesInCluster(
   }
   
   return routes;
+}
+
+function calculateBeatCenter(stops: RouteStop[]): { latitude: number; longitude: number } {
+  if (stops.length === 0) return { latitude: 0, longitude: 0 };
+  
+  const avgLat = stops.reduce((sum, stop) => sum + stop.latitude, 0) / stops.length;
+  const avgLng = stops.reduce((sum, stop) => sum + stop.longitude, 0) / stops.length;
+  
+  return { latitude: avgLat, longitude: avgLng };
 }
 
 function calculateMaxDistanceInBeat(stops: RouteStop[]): number {
@@ -535,14 +574,13 @@ function calculateMaxDistanceInBeat(stops: RouteStop[]): number {
   return maxDistance;
 }
 
-function optimizeRouteOrderForProximity(
+function optimizeRouteOrderForMinimumDistance(
   route: SalesmanRoute,
-  distributor: { latitude: number; longitude: number },
-  modeDistance: number
+  distributor: { latitude: number; longitude: number }
 ): void {
   if (route.stops.length < 3) return;
   
-  // Use nearest neighbor ordering starting from distributor
+  // Use nearest neighbor ordering starting from distributor to minimize per-beat distance
   const optimizedStops: RouteStop[] = [];
   const remainingStops = [...route.stops];
   
@@ -575,7 +613,7 @@ function optimizeRouteOrderForProximity(
   route.stops = optimizedStops;
 }
 
-function updateRouteMetrics(
+function updateRouteMetricsForProximity(
   route: SalesmanRoute, 
   distributor: { latitude: number; longitude: number }
 ): void {
@@ -587,6 +625,7 @@ function updateRouteMetrics(
   let prevLat = distributor.latitude;
   let prevLng = distributor.longitude;
   
+  // Calculate per-beat distance (focus on proximity within beat, not overall optimization)
   for (let i = 0; i < route.stops.length; i++) {
     const stop = route.stops[i];
     const distance = calculateHaversineDistance(
