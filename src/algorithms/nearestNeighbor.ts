@@ -306,6 +306,31 @@ function createConstraintEnforcedRoutesInCluster(
         assignedIds.add(customer.id);
         updateRouteMetrics(bestRoute, distributor, config);
         console.log(`Distributed customer ${customer.id} to route ${bestRoute.salesmanId}`);
+      } else {
+        // Create emergency route if all routes are at max capacity
+        const emergencyRoute: SalesmanRoute = {
+          salesmanId: salesmanId++,
+          stops: [{
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: config.customerVisitTimeMinutes,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          }],
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [clusterId],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        
+        updateRouteMetrics(emergencyRoute, distributor, config);
+        routes.push(emergencyRoute);
+        assignedIds.add(customer.id);
+        console.log(`Created emergency route ${emergencyRoute.salesmanId} for unassigned customer ${customer.id}`);
       }
     });
   }
