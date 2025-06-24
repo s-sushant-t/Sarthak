@@ -11,9 +11,9 @@ export const nearestNeighbor = async (
   console.log(`Starting proximity-optimized nearest neighbor algorithm with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
   
-  // Calculate median distance between all outlets for constraint
-  const medianDistance = calculateMedianDistance(customers);
-  console.log(`Median distance between outlets: ${medianDistance.toFixed(2)} km`);
+  // Calculate mode distance between all outlets for constraint
+  const modeDistance = calculateModeDistance(customers);
+  console.log(`Mode distance between outlets: ${modeDistance.toFixed(2)} km`);
   
   // CRITICAL: Track all customers to ensure no duplicates or missing outlets
   const allCustomers = [...customers];
@@ -46,7 +46,7 @@ export const nearestNeighbor = async (
     // CRITICAL: Track assigned customers within this cluster only
     const clusterAssignedIds = new Set<string>();
     
-    // Create proximity-based linear routes within the cluster with median distance constraint
+    // Create proximity-based linear routes within the cluster with mode distance constraint
     const clusterRoutes = createProximityBasedRoutesInCluster(
       clusterCustomers,
       distributor,
@@ -54,7 +54,7 @@ export const nearestNeighbor = async (
       currentSalesmanId,
       Number(clusterId),
       clusterAssignedIds,
-      medianDistance
+      modeDistance
     );
     
     // Verify all cluster customers are assigned exactly once
@@ -125,10 +125,10 @@ export const nearestNeighbor = async (
       if (!targetRoute) {
         // Create emergency route if no space in existing routes
         targetRoute = {
-          Salesmanname: currentSalesmanId++,
+          salesmanId: currentSalesmanId++,
           stops: [],
           totalDistance: 0,
-          totalPoint: 0,
+          totalTime: 0,
           clusterIds: [customer.clusterId],
           distributorLat: distributor.latitude,
           distributorLng: distributor.longitude
@@ -201,7 +201,7 @@ export const nearestNeighbor = async (
   };
 };
 
-function calculateMedianDistance(customers: ClusteredCustomer[]): number {
+function calculateModeDistance(customers: ClusteredCustomer[]): number {
   const distances: number[] = [];
   
   // Calculate distances between all pairs of customers
@@ -215,15 +215,30 @@ function calculateMedianDistance(customers: ClusteredCustomer[]): number {
     }
   }
   
-  // Sort distances and find median
-  distances.sort((a, b) => a - b);
-  const midIndex = Math.floor(distances.length / 2);
+  if (distances.length === 0) return 5; // Default fallback
   
-  if (distances.length % 2 === 0) {
-    return (distances[midIndex - 1] + distances[midIndex]) / 2;
-  } else {
-    return distances[midIndex];
-  }
+  // Create frequency map with binning for continuous data
+  const binSize = 0.5; // 0.5 km bins
+  const frequencyMap = new Map<number, number>();
+  
+  distances.forEach(distance => {
+    const bin = Math.round(distance / binSize) * binSize;
+    frequencyMap.set(bin, (frequencyMap.get(bin) || 0) + 1);
+  });
+  
+  // Find the bin with highest frequency (mode)
+  let maxFrequency = 0;
+  let modeDistance = 0;
+  
+  frequencyMap.forEach((frequency, bin) => {
+    if (frequency > maxFrequency) {
+      maxFrequency = frequency;
+      modeDistance = bin;
+    }
+  });
+  
+  // If mode is too small, use a reasonable minimum
+  return Math.max(modeDistance, 1.0);
 }
 
 function createProximityBasedRoutesInCluster(
@@ -233,12 +248,12 @@ function createProximityBasedRoutesInCluster(
   startingSalesmanId: number,
   clusterId: number,
   assignedIds: Set<string>,
-  medianDistance: number
+  modeDistance: number
 ): SalesmanRoute[] {
   if (customers.length === 0) return [];
   
   console.log(`Creating proximity-based routes for cluster ${clusterId} with ${customers.length} customers`);
-  console.log(`Median distance constraint: ${medianDistance.toFixed(2)} km`);
+  console.log(`Mode distance constraint: ${modeDistance.toFixed(2)} km`);
   
   const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
@@ -246,7 +261,7 @@ function createProximityBasedRoutesInCluster(
   // Create a working copy of customers for this cluster
   const remainingCustomers = [...customers];
   
-  // Create beats one by one using proximity-based selection with median distance constraint
+  // Create beats one by one using proximity-based selection with mode distance constraint
   while (remainingCustomers.length > 0) {
     const route: SalesmanRoute = {
       salesmanId: salesmanId++,
@@ -267,7 +282,7 @@ function createProximityBasedRoutesInCluster(
     
     console.log(`Creating beat ${route.salesmanId}: targeting ${targetSize} outlets from ${remainingCustomers.length} remaining`);
     
-    // Build route using proximity-based nearest neighbor with median distance constraint
+    // Build route using proximity-based nearest neighbor with mode distance constraint
     let currentLat = distributor.latitude;
     let currentLng = distributor.longitude;
     
@@ -275,7 +290,7 @@ function createProximityBasedRoutesInCluster(
       let nearestIndex = -1;
       let shortestDistance = Infinity;
       
-      // Find the nearest unvisited customer that satisfies the median distance constraint
+      // Find the nearest unvisited customer that satisfies the mode distance constraint
       for (let j = 0; j < remainingCustomers.length; j++) {
         const customer = remainingCustomers[j];
         const distance = calculateHaversineDistance(
@@ -283,18 +298,18 @@ function createProximityBasedRoutesInCluster(
           customer.latitude, customer.longitude
         );
         
-        // Check if adding this customer would violate the median distance constraint
+        // Check if adding this customer would violate the mode distance constraint
         if (route.stops.length > 0) {
           const violatesConstraint = route.stops.some(stop => {
             const distanceToStop = calculateHaversineDistance(
               customer.latitude, customer.longitude,
               stop.latitude, stop.longitude
             );
-            return distanceToStop > medianDistance;
+            return distanceToStop > modeDistance;
           });
           
           if (violatesConstraint) {
-            continue; // Skip this customer as it violates the median distance constraint
+            continue; // Skip this customer as it violates the mode distance constraint
           }
         }
         
@@ -306,7 +321,7 @@ function createProximityBasedRoutesInCluster(
       
       // If no customer satisfies the constraint, try to find the best available option
       if (nearestIndex === -1 && remainingCustomers.length > 0) {
-        console.log(`No customer satisfies median distance constraint for beat ${route.salesmanId}, finding best compromise...`);
+        console.log(`No customer satisfies mode distance constraint for beat ${route.salesmanId}, finding best compromise...`);
         
         // Find customer with minimum constraint violations
         let bestCustomerIndex = -1;
@@ -322,8 +337,8 @@ function createProximityBasedRoutesInCluster(
                 customer.latitude, customer.longitude,
                 stop.latitude, stop.longitude
               );
-              if (distanceToStop > medianDistance) {
-                violations += distanceToStop - medianDistance; // Count excess distance as violation
+              if (distanceToStop > modeDistance) {
+                violations += distanceToStop - modeDistance; // Count excess distance as violation
               }
             });
           }
@@ -370,10 +385,10 @@ function createProximityBasedRoutesInCluster(
     }
     
     if (route.stops.length > 0) {
-      // Apply 2-opt optimization to improve route linearity while maintaining median distance constraint
-      optimizeRouteFor2OptWithConstraint(route, distributor, medianDistance);
+      // Apply 2-opt optimization to improve route linearity while maintaining mode distance constraint
+      optimizeRouteFor2OptWithConstraint(route, distributor, modeDistance);
       routes.push(route);
-      console.log(`Created proximity beat ${route.salesmanId} with ${route.stops.length} stops (median distance constraint applied)`);
+      console.log(`Created proximity beat ${route.salesmanId} with ${route.stops.length} stops (mode distance constraint applied)`);
     }
     
     // Safety check to prevent infinite loops
@@ -393,19 +408,19 @@ function createProximityBasedRoutesInCluster(
         return;
       }
       
-      // Find the route with space that would have minimum distance increase and satisfies median constraint
+      // Find the route with space that would have minimum distance increase and satisfies mode constraint
       let bestRoute = null;
       let minDistanceIncrease = Infinity;
       
       for (const route of routes) {
         if (route.stops.length < config.maxOutletsPerBeat) {
-          // Check if adding this customer would violate median distance constraint
+          // Check if adding this customer would violate mode distance constraint
           const violatesConstraint = route.stops.some(stop => {
             const distanceToStop = calculateHaversineDistance(
               customer.latitude, customer.longitude,
               stop.latitude, stop.longitude
             );
-            return distanceToStop > medianDistance;
+            return distanceToStop > modeDistance;
           });
           
           if (!violatesConstraint) {
@@ -420,7 +435,7 @@ function createProximityBasedRoutesInCluster(
       
       // If no route satisfies the constraint, find the route with minimal violation
       if (!bestRoute) {
-        console.log(`No route satisfies median distance constraint for customer ${customer.id}, finding best compromise...`);
+        console.log(`No route satisfies mode distance constraint for customer ${customer.id}, finding best compromise...`);
         
         let minViolation = Infinity;
         for (const route of routes) {
@@ -431,8 +446,8 @@ function createProximityBasedRoutesInCluster(
                 customer.latitude, customer.longitude,
                 stop.latitude, stop.longitude
               );
-              if (distanceToStop > medianDistance) {
-                maxViolation = Math.max(maxViolation, distanceToStop - medianDistance);
+              if (distanceToStop > modeDistance) {
+                maxViolation = Math.max(maxViolation, distanceToStop - modeDistance);
               }
             });
             
@@ -469,7 +484,7 @@ function createProximityBasedRoutesInCluster(
 function optimizeRouteFor2OptWithConstraint(
   route: SalesmanRoute,
   distributor: { latitude: number; longitude: number },
-  medianDistance: number
+  modeDistance: number
 ): void {
   if (route.stops.length < 4) return;
   
@@ -509,14 +524,14 @@ function optimizeRouteFor2OptWithConstraint(
             route.stops[j].latitude, route.stops[j].longitude
           );
         
-        // Check if the swap would violate median distance constraint
+        // Check if the swap would violate mode distance constraint
         const newStops = [
           ...route.stops.slice(0, i),
           ...route.stops.slice(i, j).reverse(),
           ...route.stops.slice(j)
         ];
         
-        const violatesConstraint = checkMedianDistanceConstraint(newStops, medianDistance);
+        const violatesConstraint = checkModeDistanceConstraint(newStops, modeDistance);
         
         // If improvement found and doesn't violate constraint, apply 2-opt swap
         if (newDistance < currentDistance && !violatesConstraint) {
@@ -528,14 +543,14 @@ function optimizeRouteFor2OptWithConstraint(
   }
 }
 
-function checkMedianDistanceConstraint(stops: RouteStop[], medianDistance: number): boolean {
+function checkModeDistanceConstraint(stops: RouteStop[], modeDistance: number): boolean {
   for (let i = 0; i < stops.length; i++) {
     for (let j = i + 1; j < stops.length; j++) {
       const distance = calculateHaversineDistance(
         stops[i].latitude, stops[i].longitude,
         stops[j].latitude, stops[j].longitude
       );
-      if (distance > medianDistance) {
+      if (distance > modeDistance) {
         return true; // Constraint violated
       }
     }
