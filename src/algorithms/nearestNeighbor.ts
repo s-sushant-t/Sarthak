@@ -125,10 +125,10 @@ export const nearestNeighbor = async (
       if (!targetRoute) {
         // Create emergency route if no space in existing routes
         targetRoute = {
-          salesmanId: currentSalesmanId++,
+          Salesmanname: currentSalesmanId++,
           stops: [],
           totalDistance: 0,
-          totalTime: 0,
+          totalPoint: 0,
           clusterIds: [customer.clusterId],
           distributorLat: distributor.latitude,
           distributorLng: distributor.longitude
