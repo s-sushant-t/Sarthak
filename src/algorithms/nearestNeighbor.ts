@@ -8,9 +8,12 @@ export const nearestNeighbor = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting constraint-enforced nearest neighbor algorithm with ${customers.length} total customers`);
+  console.log(`Starting proximity-optimized nearest neighbor algorithm with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
-  console.log(`Beat constraints: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
+  
+  // Calculate median distance between all outlets for constraint
+  const medianDistance = calculateMedianDistance(customers);
+  console.log(`Median distance between outlets: ${medianDistance.toFixed(2)} km`);
   
   // CRITICAL: Track all customers to ensure no duplicates or missing outlets
   const allCustomers = [...customers];
@@ -32,31 +35,32 @@ export const nearestNeighbor = async (
   const routes: SalesmanRoute[] = [];
   let currentSalesmanId = 1;
   
-  // Process each cluster independently with strict constraint enforcement
+  // Process each cluster independently to ensure no cross-cluster contamination
   for (const clusterId of Object.keys(customersByCluster)) {
     const clusterCustomers = [...customersByCluster[Number(clusterId)]];
     const clusterSize = clusterCustomers.length;
     
     console.log(`Processing cluster ${clusterId} with ${clusterCustomers.length} customers`);
+    console.log(`Target: ${config.beatsPerCluster} beats for this cluster`);
     
     // CRITICAL: Track assigned customers within this cluster only
     const clusterAssignedIds = new Set<string>();
     
-    // Create constraint-enforced routes within the cluster
-    const clusterRoutes = createConstraintEnforcedRoutesInCluster(
+    // Create proximity-based linear routes within the cluster with median distance constraint
+    const clusterRoutes = createProximityBasedRoutesInCluster(
       clusterCustomers,
       distributor,
       config,
       currentSalesmanId,
       Number(clusterId),
-      clusterAssignedIds
+      clusterAssignedIds,
+      medianDistance
     );
     
     // Verify all cluster customers are assigned exactly once
     const assignedInCluster = clusterRoutes.reduce((count, route) => count + route.stops.length, 0);
-    console.log(`Cluster ${clusterId}: ${assignedInCluster}/${clusterSize} customers assigned in ${clusterRoutes.length} beats`);
+    console.log(`Cluster ${clusterId}: ${assignedInCluster}/${clusterSize} customers assigned`);
     
-    // CRITICAL: Ensure no customers are lost
     if (assignedInCluster !== clusterSize) {
       console.error(`CLUSTER ${clusterId} ERROR: Expected ${clusterSize} customers, got ${assignedInCluster}`);
       
@@ -64,11 +68,13 @@ export const nearestNeighbor = async (
       const missingCustomers = clusterCustomers.filter(c => !clusterAssignedIds.has(c.id));
       console.log(`Missing customers in cluster ${clusterId}:`, missingCustomers.map(c => c.id));
       
-      // Force assign missing customers while respecting constraints
+      // Force assign missing customers to the route with the least customers
       missingCustomers.forEach(customer => {
-        const targetRoute = clusterRoutes.find(r => r.stops.length < config.maxOutletsPerBeat);
+        const targetRoute = clusterRoutes.reduce((min, route) => 
+          route.stops.length < min.stops.length ? route : min
+        );
         
-        if (targetRoute) {
+        if (targetRoute && targetRoute.stops.length < config.maxOutletsPerBeat) {
           targetRoute.stops.push({
             customerId: customer.id,
             latitude: customer.latitude,
@@ -81,29 +87,6 @@ export const nearestNeighbor = async (
           });
           clusterAssignedIds.add(customer.id);
           console.log(`Force-assigned missing customer ${customer.id} to route ${targetRoute.salesmanId}`);
-        } else {
-          // Create emergency route if all routes are at max capacity
-          const emergencyRoute: SalesmanRoute = {
-            salesmanId: currentSalesmanId + clusterRoutes.length,
-            stops: [{
-              customerId: customer.id,
-              latitude: customer.latitude,
-              longitude: customer.longitude,
-              distanceToNext: 0,
-              timeToNext: 0,
-              visitTime: config.customerVisitTimeMinutes,
-              clusterId: customer.clusterId,
-              outletName: customer.outletName
-            }],
-            totalDistance: 0,
-            totalTime: 0,
-            clusterIds: [Number(clusterId)],
-            distributorLat: distributor.latitude,
-            distributorLng: distributor.longitude
-          };
-          clusterRoutes.push(emergencyRoute);
-          clusterAssignedIds.add(customer.id);
-          console.log(`Created emergency route ${emergencyRoute.salesmanId} for customer ${customer.id}`);
         }
       });
     }
@@ -114,12 +97,8 @@ export const nearestNeighbor = async (
     routes.push(...clusterRoutes);
     currentSalesmanId += clusterRoutes.length;
     
-    console.log(`Cluster ${clusterId} complete: ${clusterRoutes.length} constraint-enforced beats created`);
+    console.log(`Cluster ${clusterId} complete: ${clusterRoutes.length} proximity-based beats created`);
   }
-  
-  // Apply constraint enforcement to all routes
-  console.log('Applying constraint enforcement to all routes...');
-  const constraintEnforcedRoutes = enforceAllConstraints(routes, distributor, config);
   
   // CRITICAL: Final verification - ensure ALL customers are assigned exactly once
   const finalAssignedCount = globalAssignedCustomerIds.size;
@@ -129,10 +108,57 @@ export const nearestNeighbor = async (
   
   if (finalAssignedCount !== totalCustomers) {
     console.error(`CRITICAL ERROR: ${totalCustomers - finalAssignedCount} customers missing from routes!`);
+    
+    // Emergency assignment of missing customers
+    const missingCustomers = allCustomers.filter(customer => !globalAssignedCustomerIds.has(customer.id));
+    console.error('Missing customers:', missingCustomers.map(c => c.id));
+    
+    missingCustomers.forEach(customer => {
+      // Find a route in the same cluster with space
+      const sameClusterRoutes = routes.filter(route => 
+        route.clusterIds.includes(customer.clusterId) && 
+        route.stops.length < config.maxOutletsPerBeat
+      );
+      
+      let targetRoute = sameClusterRoutes[0];
+      
+      if (!targetRoute) {
+        // Create emergency route if no space in existing routes
+        targetRoute = {
+          salesmanId: currentSalesmanId++,
+          stops: [],
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [customer.clusterId],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        routes.push(targetRoute);
+      }
+      
+      targetRoute.stops.push({
+        customerId: customer.id,
+        latitude: customer.latitude,
+        longitude: customer.longitude,
+        distanceToNext: 0,
+        timeToNext: 0,
+        visitTime: config.customerVisitTimeMinutes,
+        clusterId: customer.clusterId,
+        outletName: customer.outletName
+      });
+      
+      globalAssignedCustomerIds.add(customer.id);
+      console.log(`Emergency assigned customer ${customer.id} to route ${targetRoute.salesmanId}`);
+    });
   }
   
+  // Update route metrics for all routes
+  routes.forEach(route => {
+    updateRouteMetrics(route, distributor, config);
+  });
+  
   // Reassign beat IDs sequentially
-  const finalRoutes = constraintEnforcedRoutes.map((route, index) => ({
+  const finalRoutes = routes.map((route, index) => ({
     ...route,
     salesmanId: index + 1
   }));
@@ -147,9 +173,16 @@ export const nearestNeighbor = async (
   console.log(`- Expected customers: ${totalCustomers}`);
   console.log(`- Total beats created: ${finalRoutes.length}`);
   
-  // Report constraint adherence
-  const constraintReport = analyzeConstraintAdherence(finalRoutes, config);
-  console.log('Constraint adherence report:', constraintReport);
+  // Report beats per cluster
+  const beatsByCluster = finalRoutes.reduce((acc, route) => {
+    route.clusterIds.forEach(clusterId => {
+      if (!acc[clusterId]) acc[clusterId] = 0;
+      acc[clusterId]++;
+    });
+    return acc;
+  }, {} as Record<number, number>);
+  
+  console.log('Beats per cluster:', beatsByCluster);
   
   if (finalCustomerCount !== totalCustomers || uniqueCustomerIds.size !== totalCustomers) {
     console.error(`FINAL ERROR: Customer count mismatch!`);
@@ -160,7 +193,7 @@ export const nearestNeighbor = async (
   const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
   
   return {
-    name: `Constraint-Enforced Nearest Neighbor (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
+    name: `Proximity-Optimized Nearest Neighbor (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
     totalDistance,
     totalSalesmen: finalRoutes.length,
     processingTime: 0,
@@ -168,17 +201,44 @@ export const nearestNeighbor = async (
   };
 };
 
-function createConstraintEnforcedRoutesInCluster(
+function calculateMedianDistance(customers: ClusteredCustomer[]): number {
+  const distances: number[] = [];
+  
+  // Calculate distances between all pairs of customers
+  for (let i = 0; i < customers.length; i++) {
+    for (let j = i + 1; j < customers.length; j++) {
+      const distance = calculateHaversineDistance(
+        customers[i].latitude, customers[i].longitude,
+        customers[j].latitude, customers[j].longitude
+      );
+      distances.push(distance);
+    }
+  }
+  
+  // Sort distances and find median
+  distances.sort((a, b) => a - b);
+  const midIndex = Math.floor(distances.length / 2);
+  
+  if (distances.length % 2 === 0) {
+    return (distances[midIndex - 1] + distances[midIndex]) / 2;
+  } else {
+    return distances[midIndex];
+  }
+}
+
+function createProximityBasedRoutesInCluster(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   startingSalesmanId: number,
   clusterId: number,
-  assignedIds: Set<string>
+  assignedIds: Set<string>,
+  medianDistance: number
 ): SalesmanRoute[] {
   if (customers.length === 0) return [];
   
-  console.log(`Creating constraint-enforced routes for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`Creating proximity-based routes for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`Median distance constraint: ${medianDistance.toFixed(2)} km`);
   
   const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
@@ -186,19 +246,8 @@ function createConstraintEnforcedRoutesInCluster(
   // Create a working copy of customers for this cluster
   const remainingCustomers = [...customers];
   
-  // Calculate optimal number of beats for this cluster
-  const optimalBeats = Math.max(
-    1,
-    Math.min(
-      config.beatsPerCluster,
-      Math.ceil(customers.length / config.maxOutletsPerBeat)
-    )
-  );
-  
-  console.log(`Cluster ${clusterId}: Creating ${optimalBeats} beats for ${customers.length} customers`);
-  
-  // Create beats one by one with strict size constraints
-  for (let beatIndex = 0; beatIndex < optimalBeats && remainingCustomers.length > 0; beatIndex++) {
+  // Create beats one by one using proximity-based selection with median distance constraint
+  while (remainingCustomers.length > 0) {
     const route: SalesmanRoute = {
       salesmanId: salesmanId++,
       stops: [],
@@ -209,64 +258,132 @@ function createConstraintEnforcedRoutesInCluster(
       distributorLng: distributor.longitude
     };
     
-    // Calculate target size for this beat with strict constraints
-    const remainingBeats = optimalBeats - beatIndex;
-    const remainingCustomersCount = remainingCustomers.length;
-    
-    let targetSize = Math.ceil(remainingCustomersCount / remainingBeats);
-    
-    // Enforce minimum constraint
-    targetSize = Math.max(targetSize, config.minOutletsPerBeat);
-    
-    // Enforce maximum constraint
-    targetSize = Math.min(targetSize, config.maxOutletsPerBeat);
-    
-    // Ensure we don't exceed remaining customers
-    targetSize = Math.min(targetSize, remainingCustomersCount);
-    
-    console.log(`Beat ${route.salesmanId}: targeting ${targetSize} outlets (${remainingCustomersCount} remaining, ${remainingBeats} beats left)`);
-    
-    // Build route using proximity-based selection with median distance constraint
-    const beatCustomers = selectCustomersForBeatWithConstraints(
-      remainingCustomers,
-      distributor,
-      targetSize,
-      config
+    // Calculate target size for this beat
+    const remainingBeats = Math.max(1, config.beatsPerCluster - routes.length);
+    const targetSize = Math.min(
+      Math.ceil(remainingCustomers.length / remainingBeats),
+      config.maxOutletsPerBeat
     );
     
-    // Remove selected customers from remaining pool
-    beatCustomers.forEach(customer => {
-      const index = remainingCustomers.findIndex(c => c.id === customer.id);
-      if (index !== -1) {
-        remainingCustomers.splice(index, 1);
-        assignedIds.add(customer.id);
-      }
-    });
+    console.log(`Creating beat ${route.salesmanId}: targeting ${targetSize} outlets from ${remainingCustomers.length} remaining`);
     
-    // Add customers to route
-    beatCustomers.forEach(customer => {
+    // Build route using proximity-based nearest neighbor with median distance constraint
+    let currentLat = distributor.latitude;
+    let currentLng = distributor.longitude;
+    
+    for (let i = 0; i < targetSize && remainingCustomers.length > 0; i++) {
+      let nearestIndex = -1;
+      let shortestDistance = Infinity;
+      
+      // Find the nearest unvisited customer that satisfies the median distance constraint
+      for (let j = 0; j < remainingCustomers.length; j++) {
+        const customer = remainingCustomers[j];
+        const distance = calculateHaversineDistance(
+          currentLat, currentLng,
+          customer.latitude, customer.longitude
+        );
+        
+        // Check if adding this customer would violate the median distance constraint
+        if (route.stops.length > 0) {
+          const violatesConstraint = route.stops.some(stop => {
+            const distanceToStop = calculateHaversineDistance(
+              customer.latitude, customer.longitude,
+              stop.latitude, stop.longitude
+            );
+            return distanceToStop > medianDistance;
+          });
+          
+          if (violatesConstraint) {
+            continue; // Skip this customer as it violates the median distance constraint
+          }
+        }
+        
+        if (distance < shortestDistance) {
+          shortestDistance = distance;
+          nearestIndex = j;
+        }
+      }
+      
+      // If no customer satisfies the constraint, try to find the best available option
+      if (nearestIndex === -1 && remainingCustomers.length > 0) {
+        console.log(`No customer satisfies median distance constraint for beat ${route.salesmanId}, finding best compromise...`);
+        
+        // Find customer with minimum constraint violations
+        let bestCustomerIndex = -1;
+        let minViolations = Infinity;
+        
+        for (let j = 0; j < remainingCustomers.length; j++) {
+          const customer = remainingCustomers[j];
+          let violations = 0;
+          
+          if (route.stops.length > 0) {
+            route.stops.forEach(stop => {
+              const distanceToStop = calculateHaversineDistance(
+                customer.latitude, customer.longitude,
+                stop.latitude, stop.longitude
+              );
+              if (distanceToStop > medianDistance) {
+                violations += distanceToStop - medianDistance; // Count excess distance as violation
+              }
+            });
+          }
+          
+          if (violations < minViolations) {
+            minViolations = violations;
+            bestCustomerIndex = j;
+          }
+        }
+        
+        if (bestCustomerIndex !== -1) {
+          nearestIndex = bestCustomerIndex;
+          console.log(`Selected customer with minimal constraint violation: ${minViolations.toFixed(2)} km excess`);
+        }
+      }
+      
+      if (nearestIndex === -1) break;
+      
+      // Remove customer from remaining and add to route
+      const nearestCustomer = remainingCustomers.splice(nearestIndex, 1)[0];
+      
+      // CRITICAL: Ensure no duplicate assignment
+      if (assignedIds.has(nearestCustomer.id)) {
+        console.error(`DUPLICATE ASSIGNMENT DETECTED: Customer ${nearestCustomer.id} already assigned!`);
+        continue;
+      }
+      
+      assignedIds.add(nearestCustomer.id);
+      
       route.stops.push({
-        customerId: customer.id,
-        latitude: customer.latitude,
-        longitude: customer.longitude,
+        customerId: nearestCustomer.id,
+        latitude: nearestCustomer.latitude,
+        longitude: nearestCustomer.longitude,
         distanceToNext: 0,
         timeToNext: 0,
         visitTime: config.customerVisitTimeMinutes,
-        clusterId: customer.clusterId,
-        outletName: customer.outletName
+        clusterId: nearestCustomer.clusterId,
+        outletName: nearestCustomer.outletName
       });
-    });
+      
+      // Update current position for next nearest neighbor search
+      currentLat = nearestCustomer.latitude;
+      currentLng = nearestCustomer.longitude;
+    }
     
     if (route.stops.length > 0) {
-      // Optimize route order and apply constraints
-      optimizeRouteOrderWithConstraints(route, distributor, config);
-      updateRouteMetrics(route, distributor, config);
+      // Apply 2-opt optimization to improve route linearity while maintaining median distance constraint
+      optimizeRouteFor2OptWithConstraint(route, distributor, medianDistance);
       routes.push(route);
-      console.log(`Created constraint-enforced beat ${route.salesmanId} with ${route.stops.length} stops`);
+      console.log(`Created proximity beat ${route.salesmanId} with ${route.stops.length} stops (median distance constraint applied)`);
+    }
+    
+    // Safety check to prevent infinite loops
+    if (routes.length >= config.beatsPerCluster * 2) {
+      console.warn(`Safety break: Created ${routes.length} routes for cluster ${clusterId}`);
+      break;
     }
   }
   
-  // Handle any remaining customers by distributing them to existing routes
+  // If there are still remaining customers, distribute them to existing routes
   if (remainingCustomers.length > 0) {
     console.log(`Distributing ${remainingCustomers.length} remaining customers to existing routes...`);
     
@@ -276,22 +393,59 @@ function createConstraintEnforcedRoutesInCluster(
         return;
       }
       
-      // Find the best route that can accommodate this customer
+      // Find the route with space that would have minimum distance increase and satisfies median constraint
       let bestRoute = null;
-      let minViolation = Infinity;
+      let minDistanceIncrease = Infinity;
       
       for (const route of routes) {
         if (route.stops.length < config.maxOutletsPerBeat) {
-          const violation = calculateConstraintViolationForAddition(route, customer, config);
-          if (violation < minViolation) {
-            minViolation = violation;
-            bestRoute = route;
+          // Check if adding this customer would violate median distance constraint
+          const violatesConstraint = route.stops.some(stop => {
+            const distanceToStop = calculateHaversineDistance(
+              customer.latitude, customer.longitude,
+              stop.latitude, stop.longitude
+            );
+            return distanceToStop > medianDistance;
+          });
+          
+          if (!violatesConstraint) {
+            const distanceIncrease = calculateInsertionCost(route, customer, distributor);
+            if (distanceIncrease < minDistanceIncrease) {
+              minDistanceIncrease = distanceIncrease;
+              bestRoute = route;
+            }
+          }
+        }
+      }
+      
+      // If no route satisfies the constraint, find the route with minimal violation
+      if (!bestRoute) {
+        console.log(`No route satisfies median distance constraint for customer ${customer.id}, finding best compromise...`);
+        
+        let minViolation = Infinity;
+        for (const route of routes) {
+          if (route.stops.length < config.maxOutletsPerBeat) {
+            let maxViolation = 0;
+            route.stops.forEach(stop => {
+              const distanceToStop = calculateHaversineDistance(
+                customer.latitude, customer.longitude,
+                stop.latitude, stop.longitude
+              );
+              if (distanceToStop > medianDistance) {
+                maxViolation = Math.max(maxViolation, distanceToStop - medianDistance);
+              }
+            });
+            
+            if (maxViolation < minViolation) {
+              minViolation = maxViolation;
+              bestRoute = route;
+            }
           }
         }
       }
       
       if (bestRoute) {
-        const insertionPoint = findBestInsertionPointWithConstraints(bestRoute, customer, distributor, config);
+        const insertionPoint = findBestInsertionPoint(bestRoute, customer, distributor);
         bestRoute.stops.splice(insertionPoint, 0, {
           customerId: customer.id,
           latitude: customer.latitude,
@@ -304,33 +458,7 @@ function createConstraintEnforcedRoutesInCluster(
         });
         
         assignedIds.add(customer.id);
-        updateRouteMetrics(bestRoute, distributor, config);
         console.log(`Distributed customer ${customer.id} to route ${bestRoute.salesmanId}`);
-      } else {
-        // Create emergency route if all routes are at max capacity
-        const emergencyRoute: SalesmanRoute = {
-          salesmanId: salesmanId++,
-          stops: [{
-            customerId: customer.id,
-            latitude: customer.latitude,
-            longitude: customer.longitude,
-            distanceToNext: 0,
-            timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
-            clusterId: customer.clusterId,
-            outletName: customer.outletName
-          }],
-          totalDistance: 0,
-          totalTime: 0,
-          clusterIds: [clusterId],
-          distributorLat: distributor.latitude,
-          distributorLng: distributor.longitude
-        };
-        
-        updateRouteMetrics(emergencyRoute, distributor, config);
-        routes.push(emergencyRoute);
-        assignedIds.add(customer.id);
-        console.log(`Created emergency route ${emergencyRoute.salesmanId} for unassigned customer ${customer.id}`);
       }
     });
   }
@@ -338,194 +466,115 @@ function createConstraintEnforcedRoutesInCluster(
   return routes;
 }
 
-function selectCustomersForBeatWithConstraints(
-  customers: ClusteredCustomer[],
+function optimizeRouteFor2OptWithConstraint(
+  route: SalesmanRoute,
   distributor: { latitude: number; longitude: number },
-  targetSize: number,
-  config: ClusteringConfig
-): ClusteredCustomer[] {
-  if (customers.length === 0 || targetSize === 0) return [];
+  medianDistance: number
+): void {
+  if (route.stops.length < 4) return;
   
-  const selected: ClusteredCustomer[] = [];
-  const remaining = [...customers];
+  let improved = true;
+  let iterations = 0;
+  const maxIterations = 10; // Limit iterations to prevent excessive processing
   
-  // Start from the customer closest to distributor
-  let currentLat = distributor.latitude;
-  let currentLng = distributor.longitude;
-  
-  // Select first customer (closest to distributor)
-  let nearestIndex = 0;
-  let shortestDistance = Infinity;
-  
-  for (let i = 0; i < remaining.length; i++) {
-    const distance = calculateHaversineDistance(
-      currentLat, currentLng,
-      remaining[i].latitude, remaining[i].longitude
-    );
-    if (distance < shortestDistance) {
-      shortestDistance = distance;
-      nearestIndex = i;
-    }
-  }
-  
-  const firstCustomer = remaining.splice(nearestIndex, 1)[0];
-  selected.push(firstCustomer);
-  currentLat = firstCustomer.latitude;
-  currentLng = firstCustomer.longitude;
-  
-  // Select remaining customers with median distance constraint
-  while (selected.length < targetSize && remaining.length > 0) {
-    let bestCustomer = null;
-    let bestIndex = -1;
-    let minConstraintViolation = Infinity;
+  while (improved && iterations < maxIterations) {
+    improved = false;
+    iterations++;
     
-    for (let i = 0; i < remaining.length; i++) {
-      const candidate = remaining[i];
-      
-      // Calculate constraint violation if we add this customer
-      const tempSelected = [...selected, candidate];
-      const medianDistance = calculateMedianDistanceWithinGroup(tempSelected);
-      
-      let violation = 0;
-      
-      // Check if adding this customer would violate median distance constraint
-      for (const existingCustomer of selected) {
-        const distance = calculateHaversineDistance(
-          existingCustomer.latitude, existingCustomer.longitude,
-          candidate.latitude, candidate.longitude
-        );
+    for (let i = 1; i < route.stops.length - 2; i++) {
+      for (let j = i + 1; j < route.stops.length; j++) {
+        if (j - i === 1) continue; // Skip adjacent edges
         
-        if (distance > medianDistance) {
-          violation += (distance - medianDistance);
+        // Calculate current distance
+        const currentDistance = 
+          calculateHaversineDistance(
+            i === 1 ? distributor.latitude : route.stops[i - 1].latitude,
+            i === 1 ? distributor.longitude : route.stops[i - 1].longitude,
+            route.stops[i].latitude, route.stops[i].longitude
+          ) +
+          calculateHaversineDistance(
+            route.stops[j - 1].latitude, route.stops[j - 1].longitude,
+            route.stops[j].latitude, route.stops[j].longitude
+          );
+        
+        // Calculate distance after 2-opt swap
+        const newDistance = 
+          calculateHaversineDistance(
+            i === 1 ? distributor.latitude : route.stops[i - 1].latitude,
+            i === 1 ? distributor.longitude : route.stops[i - 1].longitude,
+            route.stops[j - 1].latitude, route.stops[j - 1].longitude
+          ) +
+          calculateHaversineDistance(
+            route.stops[i].latitude, route.stops[i].longitude,
+            route.stops[j].latitude, route.stops[j].longitude
+          );
+        
+        // Check if the swap would violate median distance constraint
+        const newStops = [
+          ...route.stops.slice(0, i),
+          ...route.stops.slice(i, j).reverse(),
+          ...route.stops.slice(j)
+        ];
+        
+        const violatesConstraint = checkMedianDistanceConstraint(newStops, medianDistance);
+        
+        // If improvement found and doesn't violate constraint, apply 2-opt swap
+        if (newDistance < currentDistance && !violatesConstraint) {
+          route.stops = newStops;
+          improved = true;
         }
       }
-      
-      // Also consider proximity to current position
-      const proximityDistance = calculateHaversineDistance(
-        currentLat, currentLng,
-        candidate.latitude, candidate.longitude
-      );
-      
-      const totalScore = violation + (proximityDistance * 0.1); // Weight proximity less than constraint violation
-      
-      if (totalScore < minConstraintViolation) {
-        minConstraintViolation = totalScore;
-        bestCustomer = candidate;
-        bestIndex = i;
-      }
-    }
-    
-    if (bestCustomer && bestIndex !== -1) {
-      remaining.splice(bestIndex, 1);
-      selected.push(bestCustomer);
-      currentLat = bestCustomer.latitude;
-      currentLng = bestCustomer.longitude;
-    } else {
-      // If no good candidate found, take the nearest one
-      nearestIndex = 0;
-      shortestDistance = Infinity;
-      
-      for (let i = 0; i < remaining.length; i++) {
-        const distance = calculateHaversineDistance(
-          currentLat, currentLng,
-          remaining[i].latitude, remaining[i].longitude
-        );
-        if (distance < shortestDistance) {
-          shortestDistance = distance;
-          nearestIndex = i;
-        }
-      }
-      
-      const nearestCustomer = remaining.splice(nearestIndex, 1)[0];
-      selected.push(nearestCustomer);
-      currentLat = nearestCustomer.latitude;
-      currentLng = nearestCustomer.longitude;
     }
   }
-  
-  return selected;
 }
 
-function calculateMedianDistanceWithinGroup(customers: ClusteredCustomer[]): number {
-  if (customers.length < 2) return Infinity;
-  
-  const distances: number[] = [];
-  
-  for (let i = 0; i < customers.length; i++) {
-    for (let j = i + 1; j < customers.length; j++) {
+function checkMedianDistanceConstraint(stops: RouteStop[], medianDistance: number): boolean {
+  for (let i = 0; i < stops.length; i++) {
+    for (let j = i + 1; j < stops.length; j++) {
       const distance = calculateHaversineDistance(
-        customers[i].latitude, customers[i].longitude,
-        customers[j].latitude, customers[j].longitude
+        stops[i].latitude, stops[i].longitude,
+        stops[j].latitude, stops[j].longitude
       );
-      distances.push(distance);
-    }
-  }
-  
-  if (distances.length === 0) return Infinity;
-  
-  distances.sort((a, b) => a - b);
-  const midIndex = Math.floor(distances.length / 2);
-  
-  if (distances.length % 2 === 0) {
-    return (distances[midIndex - 1] + distances[midIndex]) / 2;
-  } else {
-    return distances[midIndex];
-  }
-}
-
-function calculateConstraintViolationForAddition(
-  route: SalesmanRoute,
-  customer: ClusteredCustomer,
-  config: ClusteringConfig
-): number {
-  // Calculate how much adding this customer would violate constraints
-  let violation = 0;
-  
-  // Size constraint violation
-  if (route.stops.length >= config.maxOutletsPerBeat) {
-    violation += 1000; // Heavy penalty for exceeding max size
-  }
-  
-  // Median distance constraint violation
-  const allCustomers = route.stops.map(stop => ({
-    latitude: stop.latitude,
-    longitude: stop.longitude
-  })).concat([{ latitude: customer.latitude, longitude: customer.longitude }]);
-  
-  if (allCustomers.length >= 2) {
-    const medianDistance = calculateMedianDistanceWithinGroup(allCustomers as ClusteredCustomer[]);
-    
-    if (medianDistance < 50) { // Only apply if reasonable
-      for (const stop of route.stops) {
-        const distance = calculateHaversineDistance(
-          stop.latitude, stop.longitude,
-          customer.latitude, customer.longitude
-        );
-        
-        if (distance > medianDistance) {
-          violation += (distance - medianDistance) * 10;
-        }
+      if (distance > medianDistance) {
+        return true; // Constraint violated
       }
     }
   }
-  
-  return violation;
+  return false; // Constraint satisfied
 }
 
-function findBestInsertionPointWithConstraints(
+function calculateInsertionCost(
   route: SalesmanRoute,
   customer: ClusteredCustomer,
-  distributor: { latitude: number; longitude: number },
-  config: ClusteringConfig
+  distributor: { latitude: number; longitude: number }
+): number {
+  if (route.stops.length === 0) {
+    return calculateHaversineDistance(
+      distributor.latitude, distributor.longitude,
+      customer.latitude, customer.longitude
+    );
+  }
+  
+  // Calculate cost of inserting at the end
+  const lastStop = route.stops[route.stops.length - 1];
+  return calculateHaversineDistance(
+    lastStop.latitude, lastStop.longitude,
+    customer.latitude, customer.longitude
+  );
+}
+
+function findBestInsertionPoint(
+  route: SalesmanRoute,
+  customer: ClusteredCustomer,
+  distributor: { latitude: number; longitude: number }
 ): number {
   if (route.stops.length === 0) return 0;
   
   let bestPosition = route.stops.length;
-  let minCost = Infinity;
+  let minIncrease = Infinity;
   
   for (let i = 0; i <= route.stops.length; i++) {
-    // Calculate insertion cost (distance increase)
-    let cost = 0;
+    let increase = 0;
     
     if (i === 0) {
       // Inserting at the beginning
@@ -544,11 +593,11 @@ function findBestInsertionPointWithConstraints(
           route.stops[0].latitude, route.stops[0].longitude
         ) : 0;
       
-      cost = distToCustomer + distFromCustomer - originalDist;
+      increase = distToCustomer + distFromCustomer - originalDist;
     } else if (i === route.stops.length) {
       // Inserting at the end
       const lastStop = route.stops[route.stops.length - 1];
-      cost = calculateHaversineDistance(
+      increase = calculateHaversineDistance(
         lastStop.latitude, lastStop.longitude,
         customer.latitude, customer.longitude
       );
@@ -570,277 +619,16 @@ function findBestInsertionPointWithConstraints(
         nextStop.latitude, nextStop.longitude
       );
       
-      cost = distToPrev + distToNext - originalDist;
+      increase = distToPrev + distToNext - originalDist;
     }
     
-    // Add constraint violation penalty
-    const tempStops = [...route.stops];
-    tempStops.splice(i, 0, {
-      customerId: customer.id,
-      latitude: customer.latitude,
-      longitude: customer.longitude,
-      distanceToNext: 0,
-      timeToNext: 0,
-      visitTime: config.customerVisitTimeMinutes,
-      clusterId: customer.clusterId,
-      outletName: customer.outletName
-    });
-    
-    const constraintViolation = calculateMedianDistanceViolations(tempStops);
-    cost += constraintViolation * 100;
-    
-    if (cost < minCost) {
-      minCost = cost;
+    if (increase < minIncrease) {
+      minIncrease = increase;
       bestPosition = i;
     }
   }
   
   return bestPosition;
-}
-
-function optimizeRouteOrderWithConstraints(
-  route: SalesmanRoute,
-  distributor: { latitude: number; longitude: number },
-  config: ClusteringConfig
-): void {
-  if (route.stops.length < 4) return;
-  
-  let improved = true;
-  let iterations = 0;
-  const maxIterations = 20;
-  
-  while (improved && iterations < maxIterations) {
-    improved = false;
-    iterations++;
-    
-    // Try 2-opt improvements that reduce both distance and constraint violations
-    for (let i = 1; i < route.stops.length - 2; i++) {
-      for (let j = i + 2; j < route.stops.length; j++) {
-        // Create new route order with 2-opt swap
-        const newStops = [
-          ...route.stops.slice(0, i),
-          ...route.stops.slice(i, j).reverse(),
-          ...route.stops.slice(j)
-        ];
-        
-        // Calculate current cost (distance + constraint violations)
-        const currentDistance = calculateRouteDistance(route.stops, distributor);
-        const currentViolations = calculateMedianDistanceViolations(route.stops);
-        const currentCost = currentDistance + (currentViolations * 100);
-        
-        // Calculate new cost
-        const newDistance = calculateRouteDistance(newStops, distributor);
-        const newViolations = calculateMedianDistanceViolations(newStops);
-        const newCost = newDistance + (newViolations * 100);
-        
-        // If new order is better, apply the swap
-        if (newCost < currentCost) {
-          route.stops = newStops;
-          improved = true;
-          break;
-        }
-      }
-      if (improved) break;
-    }
-  }
-}
-
-function calculateRouteDistance(stops: RouteStop[], distributor: { latitude: number; longitude: number }): number {
-  if (stops.length === 0) return 0;
-  
-  let totalDistance = 0;
-  let prevLat = distributor.latitude;
-  let prevLng = distributor.longitude;
-  
-  for (const stop of stops) {
-    const distance = calculateHaversineDistance(
-      prevLat, prevLng,
-      stop.latitude, stop.longitude
-    );
-    totalDistance += distance;
-    prevLat = stop.latitude;
-    prevLng = stop.longitude;
-  }
-  
-  return totalDistance;
-}
-
-function calculateMedianDistanceViolations(stops: RouteStop[]): number {
-  if (stops.length < 3) return 0;
-  
-  const medianDistance = calculateMedianDistanceWithinBeat(stops);
-  
-  if (medianDistance === Infinity || medianDistance > 50) return 0;
-  
-  let violations = 0;
-  
-  for (let i = 0; i < stops.length; i++) {
-    for (let j = i + 1; j < stops.length; j++) {
-      const distance = calculateHaversineDistance(
-        stops[i].latitude, stops[i].longitude,
-        stops[j].latitude, stops[j].longitude
-      );
-      
-      if (distance > medianDistance) {
-        violations += (distance - medianDistance);
-      }
-    }
-  }
-  
-  return violations;
-}
-
-function calculateMedianDistanceWithinBeat(stops: RouteStop[]): number {
-  if (stops.length < 2) return Infinity;
-  
-  const distances: number[] = [];
-  
-  for (let i = 0; i < stops.length; i++) {
-    for (let j = i + 1; j < stops.length; j++) {
-      const distance = calculateHaversineDistance(
-        stops[i].latitude, stops[i].longitude,
-        stops[j].latitude, stops[j].longitude
-      );
-      distances.push(distance);
-    }
-  }
-  
-  if (distances.length === 0) return Infinity;
-  
-  distances.sort((a, b) => a - b);
-  const midIndex = Math.floor(distances.length / 2);
-  
-  if (distances.length % 2 === 0) {
-    return (distances[midIndex - 1] + distances[midIndex]) / 2;
-  } else {
-    return distances[midIndex];
-  }
-}
-
-function enforceAllConstraints(
-  routes: SalesmanRoute[],
-  distributor: { latitude: number; longitude: number },
-  config: ClusteringConfig
-): SalesmanRoute[] {
-  console.log('Enforcing all constraints on routes...');
-  
-  let constraintEnforcedRoutes = [...routes];
-  
-  // Step 1: Handle undersized routes
-  const undersizedRoutes = constraintEnforcedRoutes.filter(route => route.stops.length < config.minOutletsPerBeat);
-  const normalRoutes = constraintEnforcedRoutes.filter(route => route.stops.length >= config.minOutletsPerBeat);
-  
-  console.log(`Found ${undersizedRoutes.length} undersized routes (< ${config.minOutletsPerBeat} outlets)`);
-  
-  // Try to merge undersized routes or redistribute their customers
-  undersizedRoutes.forEach(undersizedRoute => {
-    // Find a route in the same cluster that can accommodate the merge
-    const sameClusterRoute = normalRoutes.find(route => 
-      route.clusterIds[0] === undersizedRoute.clusterIds[0] &&
-      route.stops.length + undersizedRoute.stops.length <= config.maxOutletsPerBeat
-    );
-    
-    if (sameClusterRoute) {
-      // Merge the undersized route into the same cluster route
-      sameClusterRoute.stops.push(...undersizedRoute.stops);
-      updateRouteMetrics(sameClusterRoute, distributor, config);
-      console.log(`Merged undersized route ${undersizedRoute.salesmanId} into route ${sameClusterRoute.salesmanId}`);
-    } else {
-      // If can't merge, keep the undersized route but mark it
-      normalRoutes.push(undersizedRoute);
-      console.log(`Keeping undersized route ${undersizedRoute.salesmanId} (no suitable merge target found)`);
-    }
-  });
-  
-  constraintEnforcedRoutes = normalRoutes;
-  
-  // Step 2: Handle oversized routes
-  const oversizedRoutes = constraintEnforcedRoutes.filter(route => route.stops.length > config.maxOutletsPerBeat);
-  
-  console.log(`Found ${oversizedRoutes.length} oversized routes (> ${config.maxOutletsPerBeat} outlets)`);
-  
-  oversizedRoutes.forEach(oversizedRoute => {
-    if (oversizedRoute.stops.length > config.maxOutletsPerBeat) {
-      // Split the oversized route
-      const midPoint = Math.ceil(oversizedRoute.stops.length / 2);
-      
-      const route1: SalesmanRoute = {
-        ...oversizedRoute,
-        stops: oversizedRoute.stops.slice(0, midPoint),
-        totalDistance: 0,
-        totalTime: 0
-      };
-      
-      const route2: SalesmanRoute = {
-        ...oversizedRoute,
-        salesmanId: oversizedRoute.salesmanId + 1000, // Temporary ID
-        stops: oversizedRoute.stops.slice(midPoint),
-        totalDistance: 0,
-        totalTime: 0
-      };
-      
-      updateRouteMetrics(route1, distributor, config);
-      updateRouteMetrics(route2, distributor, config);
-      
-      // Replace the oversized route with the two split routes
-      const index = constraintEnforcedRoutes.findIndex(r => r.salesmanId === oversizedRoute.salesmanId);
-      if (index !== -1) {
-        constraintEnforcedRoutes.splice(index, 1, route1, route2);
-        console.log(`Split oversized route ${oversizedRoute.salesmanId} into routes ${route1.salesmanId} and ${route2.salesmanId}`);
-      }
-    }
-  });
-  
-  // Step 3: Apply median distance constraint optimization to all routes
-  constraintEnforcedRoutes.forEach(route => {
-    if (route.stops.length > 2) {
-      optimizeRouteOrderWithConstraints(route, distributor, config);
-      updateRouteMetrics(route, distributor, config);
-    }
-  });
-  
-  return constraintEnforcedRoutes;
-}
-
-function analyzeConstraintAdherence(routes: SalesmanRoute[], config: ClusteringConfig): any {
-  const report = {
-    totalRoutes: routes.length,
-    undersizedRoutes: 0,
-    oversizedRoutes: 0,
-    properSizedRoutes: 0,
-    medianDistanceViolations: 0,
-    averageOutletsPerRoute: 0,
-    routeSizeDistribution: {} as Record<number, number>
-  };
-  
-  let totalOutlets = 0;
-  
-  routes.forEach(route => {
-    const size = route.stops.length;
-    totalOutlets += size;
-    
-    // Count size violations
-    if (size < config.minOutletsPerBeat) {
-      report.undersizedRoutes++;
-    } else if (size > config.maxOutletsPerBeat) {
-      report.oversizedRoutes++;
-    } else {
-      report.properSizedRoutes++;
-    }
-    
-    // Track size distribution
-    report.routeSizeDistribution[size] = (report.routeSizeDistribution[size] || 0) + 1;
-    
-    // Count median distance violations
-    const violations = calculateMedianDistanceViolations(route.stops);
-    if (violations > 0) {
-      report.medianDistanceViolations++;
-    }
-  });
-  
-  report.averageOutletsPerRoute = totalOutlets / routes.length;
-  
-  return report;
 }
 
 function updateRouteMetrics(
