@@ -12,9 +12,9 @@ export const nearestNeighbor = async (
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
   console.log(`Beat constraints: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
   
-  // Calculate mode distance between all outlets for constraint
-  const modeDistance = calculateModeDistance(customers);
-  console.log(`Mode distance between outlets: ${modeDistance.toFixed(2)} km`);
+  // Calculate median distance between all outlets for constraint
+  const medianDistance = calculateMedianDistance(customers);
+  console.log(`Median distance between outlets: ${medianDistance.toFixed(2)} km`);
   
   // CRITICAL: Track all customers to ensure no duplicates or missing outlets
   const allCustomers = [...customers];
@@ -55,7 +55,7 @@ export const nearestNeighbor = async (
       currentSalesmanId,
       Number(clusterId),
       clusterAssignedIds,
-      modeDistance
+      medianDistance
     );
     
     // Verify all cluster customers are assigned exactly once
@@ -215,7 +215,7 @@ export const nearestNeighbor = async (
   };
 };
 
-function calculateModeDistance(customers: ClusteredCustomer[]): number {
+function calculateMedianDistance(customers: ClusteredCustomer[]): number {
   const distances: number[] = [];
   
   // Calculate distances between all pairs of customers
@@ -231,28 +231,24 @@ function calculateModeDistance(customers: ClusteredCustomer[]): number {
   
   if (distances.length === 0) return 2; // Default fallback
   
-  // Create frequency map with smaller binning for more precise mode
-  const binSize = 0.2; // 0.2 km bins for better precision
-  const frequencyMap = new Map<number, number>();
+  // Sort distances to find median
+  distances.sort((a, b) => a - b);
   
-  distances.forEach(distance => {
-    const bin = Math.round(distance / binSize) * binSize;
-    frequencyMap.set(bin, (frequencyMap.get(bin) || 0) + 1);
-  });
+  const medianIndex = Math.floor(distances.length / 2);
+  let medianDistance: number;
   
-  // Find the bin with highest frequency (mode)
-  let maxFrequency = 0;
-  let modeDistance = 0;
+  if (distances.length % 2 === 0) {
+    // Even number of distances - average of two middle values
+    medianDistance = (distances[medianIndex - 1] + distances[medianIndex]) / 2;
+  } else {
+    // Odd number of distances - middle value
+    medianDistance = distances[medianIndex];
+  }
   
-  frequencyMap.forEach((frequency, bin) => {
-    if (frequency > maxFrequency) {
-      maxFrequency = frequency;
-      modeDistance = bin;
-    }
-  });
+  console.log(`Distance statistics: Min: ${distances[0].toFixed(2)} km, Median: ${medianDistance.toFixed(2)} km, Max: ${distances[distances.length - 1].toFixed(2)} km`);
   
   // Use a reasonable minimum that ensures tight clustering
-  return Math.max(modeDistance, 1.5);
+  return Math.max(medianDistance, 1.5);
 }
 
 function createConstraintEnforcedRoutesInCluster(
@@ -262,13 +258,13 @@ function createConstraintEnforcedRoutesInCluster(
   startingSalesmanId: number,
   clusterId: number,
   assignedIds: Set<string>,
-  modeDistance: number
+  medianDistance: number
 ): SalesmanRoute[] {
   if (customers.length === 0) return [];
   
   console.log(`Creating CONSTRAINT-ENFORCED routes for cluster ${clusterId} with ${customers.length} customers`);
   console.log(`STRICT constraints: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
-  console.log(`Mode distance constraint: ${modeDistance.toFixed(2)} km`);
+  console.log(`Median distance constraint: ${medianDistance.toFixed(2)} km`);
   
   const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
@@ -365,7 +361,7 @@ function createConstraintEnforcedRoutesInCluster(
             stop.latitude, stop.longitude
           );
           
-          if (distance > modeDistance) {
+          if (distance > medianDistance) {
             violatesConstraint = true;
             break;
           }
@@ -373,7 +369,7 @@ function createConstraintEnforcedRoutesInCluster(
           maxDistanceInBeat = Math.max(maxDistanceInBeat, distance);
         }
         
-        // Only consider candidates that don't violate the mode distance constraint
+        // Only consider candidates that don't violate the median distance constraint
         if (!violatesConstraint && maxDistanceInBeat < minMaxDistance) {
           minMaxDistance = maxDistanceInBeat;
           bestCandidate = candidate;
@@ -410,7 +406,7 @@ function createConstraintEnforcedRoutesInCluster(
       console.log(`Beat ${route.salesmanId} has only ${route.stops.length} customers, trying to reach minimum ${config.minOutletsPerBeat}...`);
       
       // Relax constraint slightly to meet minimum beat size
-      const relaxedModeDistance = modeDistance * 1.3; // 30% relaxation
+      const relaxedMedianDistance = medianDistance * 1.3; // 30% relaxation
       
       while (route.stops.length < config.minOutletsPerBeat && 
              route.stops.length < config.maxOutletsPerBeat && 
@@ -432,7 +428,7 @@ function createConstraintEnforcedRoutesInCluster(
               stop.latitude, stop.longitude
             );
             
-            if (distance > relaxedModeDistance) {
+            if (distance > relaxedMedianDistance) {
               violatesRelaxedConstraint = true;
               break;
             }
@@ -503,8 +499,8 @@ function createConstraintEnforcedRoutesInCluster(
               customer.latitude, customer.longitude,
               stop.latitude, stop.longitude
             );
-            if (distance > modeDistance) {
-              maxViolation = Math.max(maxViolation, distance - modeDistance);
+            if (distance > medianDistance) {
+              maxViolation = Math.max(maxViolation, distance - medianDistance);
             }
           }
           
@@ -516,7 +512,7 @@ function createConstraintEnforcedRoutesInCluster(
       }
       
       // If no suitable route found, create a new one
-      if (!bestRoute || minViolation > modeDistance * 0.5) {
+      if (!bestRoute || minViolation > medianDistance * 0.5) {
         bestRoute = {
           salesmanId: salesmanId++,
           stops: [],

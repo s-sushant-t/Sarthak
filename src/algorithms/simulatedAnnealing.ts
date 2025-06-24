@@ -23,9 +23,9 @@ export const simulatedAnnealing = async (
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
   console.log(`Beat constraints: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
   
-  // Calculate mode distance between all outlets for constraint
-  const modeDistance = calculateModeDistance(customers);
-  console.log(`Mode distance between outlets: ${modeDistance.toFixed(2)} km`);
+  // Calculate median distance between all outlets for constraint
+  const medianDistance = calculateMedianDistance(customers);
+  console.log(`Median distance between outlets: ${medianDistance.toFixed(2)} km`);
   
   // CRITICAL: Track all customers to ensure no duplicates or missing outlets
   const allCustomers = [...customers];
@@ -54,7 +54,7 @@ export const simulatedAnnealing = async (
         distributor,
         config,
         clusterAssignedIds,
-        modeDistance
+        medianDistance
       );
       
       // Verify all cluster customers are assigned exactly once
@@ -153,7 +153,7 @@ export const simulatedAnnealing = async (
   }
   
   // Apply constraint-enforced optimization
-  routes = await optimizeWithConstraintEnforcement(routes, distributor, config, modeDistance);
+  routes = await optimizeWithConstraintEnforcement(routes, distributor, config, medianDistance);
   
   // FINAL verification
   const finalCustomerCount = routes.reduce((count, route) => count + route.stops.length, 0);
@@ -193,7 +193,7 @@ export const simulatedAnnealing = async (
   };
 };
 
-function calculateModeDistance(customers: ClusteredCustomer[]): number {
+function calculateMedianDistance(customers: ClusteredCustomer[]): number {
   const distances: number[] = [];
   
   // Calculate distances between all pairs of customers
@@ -209,28 +209,24 @@ function calculateModeDistance(customers: ClusteredCustomer[]): number {
   
   if (distances.length === 0) return 2; // Default fallback
   
-  // Create frequency map with smaller binning for more precise mode
-  const binSize = 0.2; // 0.2 km bins for better precision
-  const frequencyMap = new Map<number, number>();
+  // Sort distances to find median
+  distances.sort((a, b) => a - b);
   
-  distances.forEach(distance => {
-    const bin = Math.round(distance / binSize) * binSize;
-    frequencyMap.set(bin, (frequencyMap.get(bin) || 0) + 1);
-  });
+  const medianIndex = Math.floor(distances.length / 2);
+  let medianDistance: number;
   
-  // Find the bin with highest frequency (mode)
-  let maxFrequency = 0;
-  let modeDistance = 0;
+  if (distances.length % 2 === 0) {
+    // Even number of distances - average of two middle values
+    medianDistance = (distances[medianIndex - 1] + distances[medianIndex]) / 2;
+  } else {
+    // Odd number of distances - middle value
+    medianDistance = distances[medianIndex];
+  }
   
-  frequencyMap.forEach((frequency, bin) => {
-    if (frequency > maxFrequency) {
-      maxFrequency = frequency;
-      modeDistance = bin;
-    }
-  });
+  console.log(`Distance statistics: Min: ${distances[0].toFixed(2)} km, Median: ${medianDistance.toFixed(2)} km, Max: ${distances[distances.length - 1].toFixed(2)} km`);
   
   // Use a reasonable minimum that ensures tight clustering
-  return Math.max(modeDistance, 1.5);
+  return Math.max(medianDistance, 1.5);
 }
 
 async function processClusterWithConstraintEnforcement(
@@ -239,11 +235,11 @@ async function processClusterWithConstraintEnforcement(
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   assignedIds: Set<string>,
-  modeDistance: number
+  medianDistance: number
 ): Promise<SalesmanRoute[]> {
   console.log(`Processing cluster ${clusterId} with CONSTRAINT ENFORCEMENT for ${customers.length} customers`);
   console.log(`Constraints: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
-  console.log(`Mode distance constraint: ${modeDistance.toFixed(2)} km`);
+  console.log(`Median distance constraint: ${medianDistance.toFixed(2)} km`);
   
   // Create multiple initial solutions with different approaches and select the best
   const numInitialSolutions = 5;
@@ -251,8 +247,8 @@ async function processClusterWithConstraintEnforcement(
   let bestEnergy = Infinity;
   
   for (let i = 0; i < numInitialSolutions; i++) {
-    const solution = createConstraintEnforcedInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds), modeDistance);
-    const energy = calculateConstraintEnforcedEnergy(solution, config, modeDistance);
+    const solution = createConstraintEnforcedInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds), medianDistance);
+    const energy = calculateConstraintEnforcedEnergy(solution, config, medianDistance);
     if (energy < bestEnergy) {
       bestSolution = solution;
       bestEnergy = energy;
@@ -274,8 +270,8 @@ async function processClusterWithConstraintEnforcement(
       const batchSize = Math.min(BATCH_SIZE, ITERATIONS_PER_TEMP - batch);
       
       for (let i = 0; i < batchSize; i++) {
-        const neighborSolution = createConstraintEnforcedNeighborSolution(currentSolution, config, modeDistance);
-        const neighborEnergy = calculateConstraintEnforcedEnergy(neighborSolution, config, modeDistance);
+        const neighborSolution = createConstraintEnforcedNeighborSolution(currentSolution, config, medianDistance);
+        const neighborEnergy = calculateConstraintEnforcedEnergy(neighborSolution, config, medianDistance);
         
         const acceptanceProbability = Math.exp(-(neighborEnergy - currentEnergy) / temperature);
         
@@ -315,7 +311,7 @@ function createConstraintEnforcedInitialSolution(
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   assignedIds: Set<string>,
-  modeDistance: number
+  medianDistance: number
 ): SalesmanRoute[] {
   const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
@@ -354,7 +350,7 @@ function createConstraintEnforcedInitialSolution(
     console.log(`Target size for beat ${route.salesmanId}: ${targetSize} customers (STRICT: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat})`);
     
     // Find the densest area to start a new beat
-    const seedCustomer = findDensestAreaSeed(remainingCustomers, modeDistance);
+    const seedCustomer = findDensestAreaSeed(remainingCustomers, medianDistance);
     const seedIndex = remainingCustomers.indexOf(seedCustomer);
     
     if (seedIndex === -1) break;
@@ -389,7 +385,7 @@ function createConstraintEnforcedInitialSolution(
       for (let i = 0; i < remainingCustomers.length; i++) {
         const candidate = remainingCustomers[i];
         
-        // Check if adding this candidate would violate the mode distance constraint
+        // Check if adding this candidate would violate the median distance constraint
         let maxDistanceInBeat = 0;
         let violatesConstraint = false;
         
@@ -399,7 +395,7 @@ function createConstraintEnforcedInitialSolution(
             stop.latitude, stop.longitude
           );
           
-          if (distance > modeDistance) {
+          if (distance > medianDistance) {
             violatesConstraint = true;
             break;
           }
@@ -443,7 +439,7 @@ function createConstraintEnforcedInitialSolution(
     if (route.stops.length < config.minOutletsPerBeat && remainingCustomers.length > 0) {
       console.log(`Beat ${route.salesmanId} has only ${route.stops.length} customers, trying to reach minimum ${config.minOutletsPerBeat}...`);
       
-      // Add customers to reach minimum size, even if it slightly violates mode distance
+      // Add customers to reach minimum size, even if it slightly violates median distance
       while (route.stops.length < config.minOutletsPerBeat && 
              route.stops.length < config.maxOutletsPerBeat && 
              remainingCustomers.length > 0) {
@@ -545,11 +541,11 @@ function createConstraintEnforcedInitialSolution(
   return routes;
 }
 
-function findDensestAreaSeed(customers: ClusteredCustomer[], modeDistance: number): ClusteredCustomer {
+function findDensestAreaSeed(customers: ClusteredCustomer[], medianDistance: number): ClusteredCustomer {
   let bestSeed = customers[0];
   let maxNeighbors = 0;
   
-  // Find customer with most neighbors within mode distance
+  // Find customer with most neighbors within median distance
   for (const candidate of customers) {
     let neighborCount = 0;
     
@@ -560,7 +556,7 @@ function findDensestAreaSeed(customers: ClusteredCustomer[], modeDistance: numbe
           other.latitude, other.longitude
         );
         
-        if (distance <= modeDistance) {
+        if (distance <= medianDistance) {
           neighborCount++;
         }
       }
@@ -572,7 +568,7 @@ function findDensestAreaSeed(customers: ClusteredCustomer[], modeDistance: numbe
     }
   }
   
-  console.log(`Selected seed customer ${bestSeed.id} with ${maxNeighbors} neighbors within ${modeDistance.toFixed(2)} km`);
+  console.log(`Selected seed customer ${bestSeed.id} with ${maxNeighbors} neighbors within ${medianDistance.toFixed(2)} km`);
   return bestSeed;
 }
 
@@ -601,7 +597,7 @@ function calculateMaxDistanceInBeat(stops: RouteStop[]): number {
   return maxDistance;
 }
 
-function calculateConstraintEnforcedEnergy(solution: SalesmanRoute[], config: ClusteringConfig, modeDistance: number): number {
+function calculateConstraintEnforcedEnergy(solution: SalesmanRoute[], config: ClusteringConfig, medianDistance: number): number {
   let totalEnergy = 0;
   
   // Per-beat distance energy (focus on proximity within beats, not overall distance)
@@ -619,16 +615,16 @@ function calculateConstraintEnforcedEnergy(solution: SalesmanRoute[], config: Cl
     }
   });
   
-  // Mode distance constraint penalty
+  // Median distance constraint penalty
   solution.forEach(route => {
-    const modeDistancePenalty = calculateModeDistancePenalty(route, modeDistance);
-    totalEnergy += modeDistancePenalty;
+    const medianDistancePenalty = calculateMedianDistancePenalty(route, medianDistance);
+    totalEnergy += medianDistancePenalty;
   });
   
   return totalEnergy;
 }
 
-function calculateModeDistancePenalty(route: SalesmanRoute, modeDistance: number): number {
+function calculateMedianDistancePenalty(route: SalesmanRoute, medianDistance: number): number {
   let penalty = 0;
   
   for (let i = 0; i < route.stops.length; i++) {
@@ -638,9 +634,9 @@ function calculateModeDistancePenalty(route: SalesmanRoute, modeDistance: number
         route.stops[j].latitude, route.stops[j].longitude
       );
       
-      if (distance > modeDistance) {
+      if (distance > medianDistance) {
         // Penalty for violations
-        penalty += Math.pow(distance - modeDistance, 2) * 1000;
+        penalty += Math.pow(distance - medianDistance, 2) * 1000;
       }
     }
   }
@@ -648,13 +644,13 @@ function calculateModeDistancePenalty(route: SalesmanRoute, modeDistance: number
   return penalty;
 }
 
-function createConstraintEnforcedNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig, modeDistance: number): SalesmanRoute[] {
+function createConstraintEnforcedNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig, medianDistance: number): SalesmanRoute[] {
   const newSolution = JSON.parse(JSON.stringify(solution));
   
   // Only allow operations that maintain constraints
   const operations = [
-    () => swapAdjacentStopsWithConstraintCheck(newSolution, config, modeDistance),
-    () => optimizeRouteOrderWithConstraintCheck(newSolution, config, modeDistance)
+    () => swapAdjacentStopsWithConstraintCheck(newSolution, config, medianDistance),
+    () => optimizeRouteOrderWithConstraintCheck(newSolution, config, medianDistance)
   ];
   
   const numOperations = 1; // Limit to one operation to maintain constraints
@@ -666,7 +662,7 @@ function createConstraintEnforcedNeighborSolution(solution: SalesmanRoute[], con
   return newSolution;
 }
 
-function swapAdjacentStopsWithConstraintCheck(solution: SalesmanRoute[], config: ClusteringConfig, modeDistance: number): void {
+function swapAdjacentStopsWithConstraintCheck(solution: SalesmanRoute[], config: ClusteringConfig, medianDistance: number): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -677,17 +673,17 @@ function swapAdjacentStopsWithConstraintCheck(solution: SalesmanRoute[], config:
   // Only swap adjacent stops to maintain linearity
   const i = Math.floor(Math.random() * (route.stops.length - 1));
   
-  // Check if swap would violate mode distance constraint
+  // Check if swap would violate median distance constraint
   const tempStops = [...route.stops];
   [tempStops[i], tempStops[i + 1]] = [tempStops[i + 1], tempStops[i]];
   
-  if (!checkModeDistanceConstraintViolation(tempStops, modeDistance)) {
+  if (!checkMedianDistanceConstraintViolation(tempStops, medianDistance)) {
     [route.stops[i], route.stops[i + 1]] = [route.stops[i + 1], route.stops[i]];
     updateRouteMetricsForProximity(route);
   }
 }
 
-function optimizeRouteOrderWithConstraintCheck(solution: SalesmanRoute[], config: ClusteringConfig, modeDistance: number): void {
+function optimizeRouteOrderWithConstraintCheck(solution: SalesmanRoute[], config: ClusteringConfig, medianDistance: number): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -721,14 +717,14 @@ function optimizeRouteOrderWithConstraintCheck(solution: SalesmanRoute[], config
         );
       
       if (newDist < currentDist) {
-        // Check if 2-opt swap would violate mode distance constraint
+        // Check if 2-opt swap would violate median distance constraint
         const newStops = [
           ...route.stops.slice(0, i),
           ...route.stops.slice(i, j).reverse(),
           ...route.stops.slice(j)
         ];
         
-        if (!checkModeDistanceConstraintViolation(newStops, modeDistance)) {
+        if (!checkMedianDistanceConstraintViolation(newStops, medianDistance)) {
           route.stops = newStops;
           updateRouteMetricsForProximity(route);
           return; // Only one improvement per call
@@ -738,14 +734,14 @@ function optimizeRouteOrderWithConstraintCheck(solution: SalesmanRoute[], config
   }
 }
 
-function checkModeDistanceConstraintViolation(stops: RouteStop[], modeDistance: number): boolean {
+function checkMedianDistanceConstraintViolation(stops: RouteStop[], medianDistance: number): boolean {
   for (let i = 0; i < stops.length; i++) {
     for (let j = i + 1; j < stops.length; j++) {
       const distance = calculateHaversineDistance(
         stops[i].latitude, stops[i].longitude,
         stops[j].latitude, stops[j].longitude
       );
-      if (distance > modeDistance) {
+      if (distance > medianDistance) {
         return true; // Constraint violated
       }
     }
@@ -757,14 +753,14 @@ async function optimizeWithConstraintEnforcement(
   routes: SalesmanRoute[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
-  modeDistance: number
+  medianDistance: number
 ): Promise<SalesmanRoute[]> {
   // For constraint enforcement, we only optimize within routes, not across routes
   // This prevents any customer reassignment that could violate constraints
   
   routes.forEach(route => {
     if (route.stops.length >= 3) {
-      optimizeRouteOrderWithConstraintCheck([route], config, modeDistance);
+      optimizeRouteOrderWithConstraintCheck([route], config, medianDistance);
     }
   });
   
