@@ -1,5 +1,5 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
-import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
+import { calculateHaversineDistance } from '../utils/distanceCalculator';
 import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
 // Enhanced annealing parameters for strict proximity optimization
@@ -7,7 +7,6 @@ const INITIAL_TEMPERATURE = 1000;
 const COOLING_RATE = 0.98;
 const MIN_TEMPERATURE = 0.01;
 const ITERATIONS_PER_TEMP = 100;
-const LINEARITY_WEIGHT = 0.3;
 const MODE_DISTANCE_WEIGHT = 2.0; // Increased weight for stricter constraint enforcement
 
 // Batch processing size
@@ -77,7 +76,7 @@ export const simulatedAnnealing = async (
               longitude: customer.longitude,
               distanceToNext: 0,
               timeToNext: 0,
-              visitTime: config.customerVisitTimeMinutes,
+              visitTime: 0, // No visit time constraint
               clusterId: customer.clusterId,
               outletName: customer.outletName
             });
@@ -141,7 +140,7 @@ export const simulatedAnnealing = async (
         longitude: customer.longitude,
         distanceToNext: 0,
         timeToNext: 0,
-        visitTime: config.customerVisitTimeMinutes,
+        visitTime: 0, // No visit time constraint
         clusterId: customer.clusterId,
         outletName: customer.outletName
       });
@@ -339,7 +338,7 @@ function createStrictestLinearInitialSolution(
       longitude: seedCustomer.longitude,
       distanceToNext: 0,
       timeToNext: 0,
-      visitTime: config.customerVisitTimeMinutes,
+      visitTime: 0, // No visit time constraint
       clusterId: seedCustomer.clusterId,
       outletName: seedCustomer.outletName
     });
@@ -398,7 +397,7 @@ function createStrictestLinearInitialSolution(
           longitude: customer.longitude,
           distanceToNext: 0,
           timeToNext: 0,
-          visitTime: config.customerVisitTimeMinutes,
+          visitTime: 0, // No visit time constraint
           clusterId: customer.clusterId,
           outletName: customer.outletName
         });
@@ -409,7 +408,7 @@ function createStrictestLinearInitialSolution(
     }
     
     if (route.stops.length > 0) {
-      updateRouteMetrics(route, config);
+      updateRouteMetrics(route);
       routes.push(route);
       
       const maxDistanceInBeat = calculateMaxDistanceInBeat(route.stops);
@@ -445,14 +444,14 @@ function createStrictestLinearInitialSolution(
           longitude: customer.longitude,
           distanceToNext: 0,
           timeToNext: 0,
-          visitTime: config.customerVisitTimeMinutes,
+          visitTime: 0, // No visit time constraint
           clusterId: customer.clusterId,
           outletName: customer.outletName
         });
       }
       
       if (route.stops.length > 0) {
-        updateRouteMetrics(route, config);
+        updateRouteMetrics(route);
         routes.push(route);
         console.log(`Created additional beat ${route.salesmanId} with ${route.stops.length} stops`);
       }
@@ -622,7 +621,7 @@ function swapAdjacentStopsStrictestWithConstraint(solution: SalesmanRoute[], con
   
   if (!checkStrictModeDistanceConstraintViolation(tempStops, modeDistance)) {
     [route.stops[i], route.stops[i + 1]] = [route.stops[i + 1], route.stops[i]];
-    updateRouteMetrics(route, config);
+    updateRouteMetrics(route);
   }
 }
 
@@ -669,7 +668,7 @@ function optimizeRouteOrderStrictestWithConstraint(solution: SalesmanRoute[], co
         
         if (!checkStrictModeDistanceConstraintViolation(newStops, modeDistance)) {
           route.stops = newStops;
-          updateRouteMetrics(route, config);
+          updateRouteMetrics(route);
           return; // Only one improvement per call
         }
       }
@@ -723,7 +722,7 @@ function optimizeBeatsStrict(routes: SalesmanRoute[], distributor: { latitude: n
       
       if (mergeCandidate) {
         mergeCandidate.stops.push(...route.stops);
-        updateRouteMetrics(mergeCandidate, config);
+        updateRouteMetrics(mergeCandidate);
       } else {
         acc.push(route);
       }
@@ -745,8 +744,8 @@ function optimizeBeatsStrict(routes: SalesmanRoute[], distributor: { latitude: n
         totalTime: 0
       };
       
-      updateRouteMetrics(route1, config);
-      updateRouteMetrics(route2, config);
+      updateRouteMetrics(route1);
+      updateRouteMetrics(route2);
       
       acc.push(route1);
       if (route2.stops.length > 0) {
@@ -765,9 +764,9 @@ function optimizeBeatsStrict(routes: SalesmanRoute[], distributor: { latitude: n
   }));
 }
 
-function updateRouteMetrics(route: SalesmanRoute, config: ClusteringConfig): void {
+function updateRouteMetrics(route: SalesmanRoute): void {
   route.totalDistance = 0;
-  route.totalTime = 0;
+  route.totalTime = 0; // No time calculation needed
   
   if (route.stops.length === 0) return;
   
@@ -781,10 +780,7 @@ function updateRouteMetrics(route: SalesmanRoute, config: ClusteringConfig): voi
       stop.latitude, stop.longitude
     );
     
-    const travelTime = calculateTravelTime(distance, config.travelSpeedKmh);
-    
     route.totalDistance += distance;
-    route.totalTime += travelTime + config.customerVisitTimeMinutes;
     
     if (i < route.stops.length - 1) {
       const nextStop = route.stops[i + 1];
@@ -793,10 +789,8 @@ function updateRouteMetrics(route: SalesmanRoute, config: ClusteringConfig): voi
         nextStop.latitude, nextStop.longitude
       );
       
-      const nextTime = calculateTravelTime(nextDistance, config.travelSpeedKmh);
-      
       stop.distanceToNext = nextDistance;
-      stop.timeToNext = nextTime;
+      stop.timeToNext = 0; // No time calculation needed
     } else {
       stop.distanceToNext = 0;
       stop.timeToNext = 0;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Target, Users, MapPin, Clock, Calculator } from 'lucide-react';
+import { Settings, Target, Users, Calculator } from 'lucide-react';
 
 interface ClusteringConfigurationProps {
   totalCustomers: number;
@@ -12,7 +12,6 @@ export interface ClusteringConfig {
   beatsPerCluster: number;
   minOutletsPerBeat: number;
   maxOutletsPerBeat: number;
-  maxWorkingTimeMinutes: number;
   customerVisitTimeMinutes: number;
   travelSpeedKmh: number;
 }
@@ -27,7 +26,6 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
     beatsPerCluster: 6,
     minOutletsPerBeat: 30,
     maxOutletsPerBeat: 45,
-    maxWorkingTimeMinutes: 360,
     customerVisitTimeMinutes: 6,
     travelSpeedKmh: 30
   });
@@ -39,21 +37,14 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
     const avgOutletsPerBeat = Math.ceil(totalCustomers / totalBeats);
     const avgOutletsPerCluster = Math.ceil(totalCustomers / config.totalClusters);
     
-    // More realistic working time estimation
-    const estimatedTravelTime = avgOutletsPerBeat * 8; // 8 minutes average travel between outlets
-    const estimatedVisitTime = avgOutletsPerBeat * config.customerVisitTimeMinutes;
-    const estimatedWorkingTime = estimatedTravelTime + estimatedVisitTime;
-    
-    // Relaxed feasibility check - allow some flexibility
+    // Simplified feasibility check - only check basic constraints
     const feasible = totalBeats <= totalCustomers && 
-                    avgOutletsPerBeat <= config.maxOutletsPerBeat * 1.2 && // Allow 20% flexibility
-                    estimatedWorkingTime <= config.maxWorkingTimeMinutes * 1.1; // Allow 10% flexibility
+                    avgOutletsPerBeat <= config.maxOutletsPerBeat * 1.2; // Allow 20% flexibility
     
     return {
       totalBeats,
       avgOutletsPerBeat,
       avgOutletsPerCluster,
-      estimatedWorkingTime,
       feasible
     };
   };
@@ -79,10 +70,6 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
 
     if (currentConfig.maxOutletsPerBeat > 100) {
       newErrors.maxOutletsPerBeat = 'Maximum outlets per beat cannot exceed 100';
-    }
-
-    if (currentConfig.maxWorkingTimeMinutes < 60 || currentConfig.maxWorkingTimeMinutes > 720) {
-      newErrors.maxWorkingTimeMinutes = 'Working time must be between 1 and 12 hours';
     }
 
     if (currentConfig.customerVisitTimeMinutes < 1 || currentConfig.customerVisitTimeMinutes > 60) {
@@ -230,33 +217,13 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
             </div>
           </div>
 
-          {/* Time & Speed Constraints */}
+          {/* Reference Parameters (for display only) */}
           <div className="bg-purple-50 rounded-lg p-6">
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-              <Clock className="w-5 h-5 text-purple-600" />
-              Time & Speed Parameters
+              <Calculator className="w-5 h-5 text-purple-600" />
+              Reference Parameters (Display Only)
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Max Working Time (minutes)
-                </label>
-                <input
-                  type="number"
-                  min="60"
-                  max="720"
-                  step="30"
-                  value={config.maxWorkingTimeMinutes}
-                  onChange={(e) => updateConfig('maxWorkingTimeMinutes', parseInt(e.target.value) || 360)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                    errors.maxWorkingTimeMinutes ? 'border-red-300' : 'border-gray-300'
-                  }`}
-                />
-                {errors.maxWorkingTimeMinutes && (
-                  <p className="text-red-500 text-sm mt-1">{errors.maxWorkingTimeMinutes}</p>
-                )}
-              </div>
-
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Visit Time per Customer (minutes)
@@ -267,10 +234,12 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                   max="60"
                   value={config.customerVisitTimeMinutes}
                   onChange={(e) => updateConfig('customerVisitTimeMinutes', parseInt(e.target.value) || 6)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 ${
                     errors.customerVisitTimeMinutes ? 'border-red-300' : 'border-gray-300'
                   }`}
+                  disabled
                 />
+                <p className="text-xs text-gray-500 mt-1">Used for display purposes only</p>
                 {errors.customerVisitTimeMinutes && (
                   <p className="text-red-500 text-sm mt-1">{errors.customerVisitTimeMinutes}</p>
                 )}
@@ -286,10 +255,12 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                   max="100"
                   value={config.travelSpeedKmh}
                   onChange={(e) => updateConfig('travelSpeedKmh', parseInt(e.target.value) || 30)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 ${
                     errors.travelSpeedKmh ? 'border-red-300' : 'border-gray-300'
                   }`}
+                  disabled
                 />
+                <p className="text-xs text-gray-500 mt-1">Used for display purposes only</p>
                 {errors.travelSpeedKmh && (
                   <p className="text-red-500 text-sm mt-1">{errors.travelSpeedKmh}</p>
                 )}
@@ -303,7 +274,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
               <Calculator className="w-5 h-5 text-gray-600" />
               Calculated Metrics
             </h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               <div className="bg-white p-4 rounded-lg border">
                 <div className="text-2xl font-bold text-blue-600">{metrics.totalBeats}</div>
                 <div className="text-sm text-gray-600">Total Beats</div>
@@ -315,10 +286,6 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
               <div className="bg-white p-4 rounded-lg border">
                 <div className="text-2xl font-bold text-purple-600">{metrics.avgOutletsPerCluster}</div>
                 <div className="text-sm text-gray-600">Avg Outlets/Cluster</div>
-              </div>
-              <div className="bg-white p-4 rounded-lg border">
-                <div className="text-2xl font-bold text-orange-600">{Math.round(metrics.estimatedWorkingTime)}</div>
-                <div className="text-sm text-gray-600">Est. Working Time (min)</div>
               </div>
             </div>
             
@@ -335,6 +302,12 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                 <p className="text-red-800 text-sm">Please fix the validation errors above before proceeding.</p>
               </div>
             )}
+
+            <div className="mt-4 p-3 bg-blue-100 border border-blue-300 rounded-lg">
+              <p className="text-blue-800 text-sm">
+                ℹ️ Time and speed constraints have been removed. Route optimization now focuses purely on proximity and distance minimization.
+              </p>
+            </div>
           </div>
         </div>
 

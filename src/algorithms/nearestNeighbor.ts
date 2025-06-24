@@ -1,5 +1,5 @@
 import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmResult } from '../types';
-import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
+import { calculateHaversineDistance } from '../utils/distanceCalculator';
 import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
 export const nearestNeighbor = async (
@@ -81,7 +81,7 @@ export const nearestNeighbor = async (
             longitude: customer.longitude,
             distanceToNext: 0,
             timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
+            visitTime: 0, // No visit time constraint
             clusterId: customer.clusterId,
             outletName: customer.outletName
           });
@@ -142,7 +142,7 @@ export const nearestNeighbor = async (
         longitude: customer.longitude,
         distanceToNext: 0,
         timeToNext: 0,
-        visitTime: config.customerVisitTimeMinutes,
+        visitTime: 0, // No visit time constraint
         clusterId: customer.clusterId,
         outletName: customer.outletName
       });
@@ -154,7 +154,7 @@ export const nearestNeighbor = async (
   
   // Update route metrics for all routes
   routes.forEach(route => {
-    updateRouteMetrics(route, distributor, config);
+    updateRouteMetrics(route, distributor);
   });
   
   // Reassign beat IDs sequentially
@@ -300,7 +300,7 @@ function createStrictProximityBasedRoutesInCluster(
       longitude: seedCustomer.longitude,
       distanceToNext: 0,
       timeToNext: 0,
-      visitTime: config.customerVisitTimeMinutes,
+      visitTime: 0, // No visit time constraint
       clusterId: seedCustomer.clusterId,
       outletName: seedCustomer.outletName
     });
@@ -359,7 +359,7 @@ function createStrictProximityBasedRoutesInCluster(
           longitude: customer.longitude,
           distanceToNext: 0,
           timeToNext: 0,
-          visitTime: config.customerVisitTimeMinutes,
+          visitTime: 0, // No visit time constraint
           clusterId: customer.clusterId,
           outletName: customer.outletName
         });
@@ -421,7 +421,7 @@ function createStrictProximityBasedRoutesInCluster(
             longitude: customer.longitude,
             distanceToNext: 0,
             timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
+            visitTime: 0, // No visit time constraint
             clusterId: customer.clusterId,
             outletName: customer.outletName
           });
@@ -506,7 +506,7 @@ function createStrictProximityBasedRoutesInCluster(
         longitude: customer.longitude,
         distanceToNext: 0,
         timeToNext: 0,
-        visitTime: config.customerVisitTimeMinutes,
+        visitTime: 0, // No visit time constraint
         clusterId: customer.clusterId,
         outletName: customer.outletName
       });
@@ -577,11 +577,10 @@ function optimizeRouteOrderForProximity(
 
 function updateRouteMetrics(
   route: SalesmanRoute, 
-  distributor: { latitude: number; longitude: number },
-  config: ClusteringConfig
+  distributor: { latitude: number; longitude: number }
 ): void {
   route.totalDistance = 0;
-  route.totalTime = 0;
+  route.totalTime = 0; // No time calculation needed
   
   if (route.stops.length === 0) return;
   
@@ -595,10 +594,7 @@ function updateRouteMetrics(
       stop.latitude, stop.longitude
     );
     
-    const travelTime = calculateTravelTime(distance, config.travelSpeedKmh);
-    
     route.totalDistance += distance;
-    route.totalTime += travelTime + config.customerVisitTimeMinutes;
     
     if (i < route.stops.length - 1) {
       const nextStop = route.stops[i + 1];
@@ -607,10 +603,8 @@ function updateRouteMetrics(
         nextStop.latitude, nextStop.longitude
       );
       
-      const nextTime = calculateTravelTime(nextDistance, config.travelSpeedKmh);
-      
       stop.distanceToNext = nextDistance;
-      stop.timeToNext = nextTime;
+      stop.timeToNext = 0; // No time calculation needed
     } else {
       stop.distanceToNext = 0;
       stop.timeToNext = 0;
