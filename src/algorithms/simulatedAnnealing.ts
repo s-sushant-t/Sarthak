@@ -2,13 +2,13 @@ import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmRes
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
-// Enhanced annealing parameters for strict proximity optimization
+// Enhanced annealing parameters for ABSOLUTE median distance constraint
 const INITIAL_TEMPERATURE = 1000;
 const COOLING_RATE = 0.98;
 const MIN_TEMPERATURE = 0.01;
 const ITERATIONS_PER_TEMP = 100;
-const LINEARITY_WEIGHT = 0.3;
-const MODE_DISTANCE_WEIGHT = 2.0; // Increased weight for stricter constraint enforcement
+const MEDIAN_DISTANCE_VIOLATION_WEIGHT = 10000; // Extremely heavy penalty for violations
+const COMPACTNESS_REWARD_WEIGHT = 100; // Reward for tight clustering
 
 // Batch processing size
 const BATCH_SIZE = 20;
@@ -19,12 +19,13 @@ export const simulatedAnnealing = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting STRICT proximity-optimized simulated annealing with ${customers.length} total customers`);
+  console.log(`Starting ABSOLUTE median distance constraint simulated annealing with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
+  console.log(`Beat constraints: ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat} outlets per beat`);
   
-  // Calculate mode distance between all outlets for strict constraint
-  const modeDistance = calculateModeDistance(customers);
-  console.log(`STRICT mode distance between outlets: ${modeDistance.toFixed(2)} km`);
+  // Calculate median distance between all outlets for ABSOLUTE constraint
+  const medianDistance = calculateMedianDistance(customers);
+  console.log(`ABSOLUTE median distance constraint: ${medianDistance.toFixed(2)} km - NO two outlets in a beat can exceed this distance`);
   
   // CRITICAL: Track all customers to ensure no duplicates or missing outlets
   const allCustomers = [...customers];
@@ -43,17 +44,17 @@ export const simulatedAnnealing = async (
     `Cluster ${id}: ${custs.length} customers`
   ));
   
-  // Process each cluster independently with strict assignment tracking
+  // Process each cluster independently with ABSOLUTE median distance constraint
   const clusterResults: SalesmanRoute[][] = await Promise.all(
     Object.entries(customersByCluster).map(async ([clusterId, clusterCustomers]) => {
       const clusterAssignedIds = new Set<string>();
-      const routes = await processClusterWithStrictestProximity(
+      const routes = await processClusterWithAbsoluteMedianConstraint(
         Number(clusterId),
         clusterCustomers,
         distributor,
         config,
         clusterAssignedIds,
-        modeDistance
+        medianDistance
       );
       
       // Verify all cluster customers are assigned exactly once
@@ -151,10 +152,10 @@ export const simulatedAnnealing = async (
     });
   }
   
-  // Apply cross-cluster optimization while maintaining strict assignment
-  routes = await optimizeAcrossClustersWithStrictTracking(routes, distributor, config, modeDistance);
+  // Apply constraint-enforced optimization
+  routes = await optimizeWithAbsoluteMedianConstraint(routes, distributor, config, medianDistance);
   
-  // FINAL verification
+  // FINAL verification and constraint compliance check
   const finalCustomerCount = routes.reduce((count, route) => count + route.stops.length, 0);
   const uniqueCustomerIds = new Set(routes.flatMap(route => route.stops.map(stop => stop.customerId)));
   
@@ -162,6 +163,38 @@ export const simulatedAnnealing = async (
   console.log(`- Total customers in routes: ${finalCustomerCount}`);
   console.log(`- Unique customers: ${uniqueCustomerIds.size}`);
   console.log(`- Expected customers: ${totalCustomers}`);
+  
+  // Check ABSOLUTE median distance constraint compliance
+  const constraintViolations = routes.filter(route => {
+    const maxDistanceInBeat = calculateMaxDistanceInBeat(route.stops);
+    return maxDistanceInBeat > medianDistance;
+  });
+  
+  console.log(`ABSOLUTE CONSTRAINT COMPLIANCE CHECK:`);
+  console.log(`- Median distance limit: ${medianDistance.toFixed(2)} km`);
+  console.log(`- Beats violating constraint: ${constraintViolations.length}/${routes.length}`);
+  
+  if (constraintViolations.length > 0) {
+    console.error(`❌ ABSOLUTE CONSTRAINT VIOLATIONS DETECTED:`);
+    constraintViolations.forEach(route => {
+      const maxDistance = calculateMaxDistanceInBeat(route.stops);
+      console.error(`Beat ${route.salesmanId}: Max distance ${maxDistance.toFixed(2)} km > ${medianDistance.toFixed(2)} km limit`);
+    });
+  } else {
+    console.log(`✅ ALL BEATS COMPLY with ABSOLUTE median distance constraint`);
+  }
+  
+  // Check size constraint compliance
+  const sizeViolations = routes.filter(route => 
+    route.stops.length < config.minOutletsPerBeat || route.stops.length > config.maxOutletsPerBeat
+  );
+  
+  if (sizeViolations.length > 0) {
+    console.warn(`SIZE CONSTRAINT VIOLATIONS: ${sizeViolations.length} beats outside size constraints`);
+    sizeViolations.forEach(route => {
+      console.warn(`Beat ${route.salesmanId}: ${route.stops.length} outlets (should be ${config.minOutletsPerBeat}-${config.maxOutletsPerBeat})`);
+    });
+  }
   
   if (finalCustomerCount !== totalCustomers || uniqueCustomerIds.size !== totalCustomers) {
     console.error(`SIMULATED ANNEALING ERROR: Customer count mismatch!`);
@@ -172,7 +205,7 @@ export const simulatedAnnealing = async (
   const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
   
   return {
-    name: `STRICT Proximity-Optimized Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats)`,
+    name: `ABSOLUTE Median Distance Constraint Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats)`,
     totalDistance,
     totalSalesmen: routes.length,
     processingTime: 0,
@@ -180,7 +213,7 @@ export const simulatedAnnealing = async (
   };
 };
 
-function calculateModeDistance(customers: ClusteredCustomer[]): number {
+function calculateMedianDistance(customers: ClusteredCustomer[]): number {
   const distances: number[] = [];
   
   // Calculate distances between all pairs of customers
@@ -196,40 +229,36 @@ function calculateModeDistance(customers: ClusteredCustomer[]): number {
   
   if (distances.length === 0) return 2; // Default fallback
   
-  // Create frequency map with smaller binning for more precise mode
-  const binSize = 0.2; // 0.2 km bins for better precision
-  const frequencyMap = new Map<number, number>();
+  // Sort distances to find median
+  distances.sort((a, b) => a - b);
   
-  distances.forEach(distance => {
-    const bin = Math.round(distance / binSize) * binSize;
-    frequencyMap.set(bin, (frequencyMap.get(bin) || 0) + 1);
-  });
+  const medianIndex = Math.floor(distances.length / 2);
+  let medianDistance: number;
   
-  // Find the bin with highest frequency (mode)
-  let maxFrequency = 0;
-  let modeDistance = 0;
+  if (distances.length % 2 === 0) {
+    // Even number of distances - average of two middle values
+    medianDistance = (distances[medianIndex - 1] + distances[medianIndex]) / 2;
+  } else {
+    // Odd number of distances - middle value
+    medianDistance = distances[medianIndex];
+  }
   
-  frequencyMap.forEach((frequency, bin) => {
-    if (frequency > maxFrequency) {
-      maxFrequency = frequency;
-      modeDistance = bin;
-    }
-  });
+  console.log(`Distance statistics: Min: ${distances[0].toFixed(2)} km, Median: ${medianDistance.toFixed(2)} km, Max: ${distances[distances.length - 1].toFixed(2)} km`);
   
   // Use a reasonable minimum that ensures tight clustering
-  return Math.max(modeDistance, 1.5);
+  return Math.max(medianDistance, 1.5);
 }
 
-async function processClusterWithStrictestProximity(
+async function processClusterWithAbsoluteMedianConstraint(
   clusterId: number,
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   assignedIds: Set<string>,
-  modeDistance: number
+  medianDistance: number
 ): Promise<SalesmanRoute[]> {
-  console.log(`Processing cluster ${clusterId} with STRICTEST proximity optimization for ${customers.length} customers`);
-  console.log(`STRICTEST mode distance constraint: ${modeDistance.toFixed(2)} km`);
+  console.log(`Processing cluster ${clusterId} with ABSOLUTE median distance constraint for ${customers.length} customers`);
+  console.log(`ABSOLUTE constraint: NO two outlets in a beat can be more than ${medianDistance.toFixed(2)} km apart`);
   
   // Create multiple initial solutions with different approaches and select the best
   const numInitialSolutions = 5;
@@ -237,8 +266,8 @@ async function processClusterWithStrictestProximity(
   let bestEnergy = Infinity;
   
   for (let i = 0; i < numInitialSolutions; i++) {
-    const solution = createStrictestLinearInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds), modeDistance);
-    const energy = calculateStrictProximityEnergyWithModeConstraint(solution, config, modeDistance);
+    const solution = createAbsoluteMedianConstraintInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds), medianDistance);
+    const energy = calculateAbsoluteMedianConstraintEnergy(solution, config, medianDistance);
     if (energy < bestEnergy) {
       bestSolution = solution;
       bestEnergy = energy;
@@ -260,8 +289,8 @@ async function processClusterWithStrictestProximity(
       const batchSize = Math.min(BATCH_SIZE, ITERATIONS_PER_TEMP - batch);
       
       for (let i = 0; i < batchSize; i++) {
-        const neighborSolution = createStrictestProximityNeighborSolution(currentSolution, config, modeDistance);
-        const neighborEnergy = calculateStrictProximityEnergyWithModeConstraint(neighborSolution, config, modeDistance);
+        const neighborSolution = createAbsoluteMedianConstraintNeighborSolution(currentSolution, config, medianDistance);
+        const neighborEnergy = calculateAbsoluteMedianConstraintEnergy(neighborSolution, config, medianDistance);
         
         const acceptanceProbability = Math.exp(-(neighborEnergy - currentEnergy) / temperature);
         
@@ -295,13 +324,13 @@ async function processClusterWithStrictestProximity(
   return bestSolution!;
 }
 
-function createStrictestLinearInitialSolution(
+function createAbsoluteMedianConstraintInitialSolution(
   clusterId: number, 
   customers: ClusteredCustomer[], 
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   assignedIds: Set<string>,
-  modeDistance: number
+  medianDistance: number
 ): SalesmanRoute[] {
   const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
@@ -309,7 +338,7 @@ function createStrictestLinearInitialSolution(
   // Create a working copy to avoid modifying the original
   const remainingCustomers = customers.filter(c => !assignedIds.has(c.id));
   
-  console.log(`Creating STRICTEST initial solution for cluster ${clusterId} with ${remainingCustomers.length} customers`);
+  console.log(`Creating ABSOLUTE median constraint initial solution for cluster ${clusterId} with ${remainingCustomers.length} customers`);
   
   // Use density-based clustering approach to form tight groups
   while (remainingCustomers.length > 0) {
@@ -324,7 +353,7 @@ function createStrictestLinearInitialSolution(
     };
     
     // Find the densest area to start a new beat
-    const seedCustomer = findDensestAreaSeed(remainingCustomers, modeDistance);
+    const seedCustomer = findDensestAreaSeed(remainingCustomers, medianDistance);
     const seedIndex = remainingCustomers.indexOf(seedCustomer);
     
     if (seedIndex === -1) break;
@@ -344,9 +373,9 @@ function createStrictestLinearInitialSolution(
       outletName: seedCustomer.outletName
     });
     
-    console.log(`Seed customer for STRICTEST beat ${route.salesmanId}: ${seedCustomer.id}`);
+    console.log(`Seed customer for ABSOLUTE beat ${route.salesmanId}: ${seedCustomer.id}`);
     
-    // Build tight cluster around seed using STRICTEST constraint
+    // Build tight cluster around seed using ABSOLUTE constraint
     let addedInThisIteration = true;
     while (addedInThisIteration && 
            route.stops.length < config.maxOutletsPerBeat && 
@@ -357,13 +386,13 @@ function createStrictestLinearInitialSolution(
       let bestCandidateIndex = -1;
       let minMaxDistance = Infinity;
       
-      // Find customer that creates the tightest cluster (minimizes maximum internal distance)
+      // Find customer that creates the tightest cluster while satisfying ABSOLUTE constraint
       for (let i = 0; i < remainingCustomers.length; i++) {
         const candidate = remainingCustomers[i];
         
-        // Check if adding this candidate would violate the STRICT mode distance constraint
+        // Check if adding this candidate would violate the ABSOLUTE median distance constraint
         let maxDistanceInBeat = 0;
-        let violatesConstraint = false;
+        let violatesAbsoluteConstraint = false;
         
         for (const stop of route.stops) {
           const distance = calculateHaversineDistance(
@@ -371,16 +400,16 @@ function createStrictestLinearInitialSolution(
             stop.latitude, stop.longitude
           );
           
-          if (distance > modeDistance) {
-            violatesConstraint = true;
+          if (distance > medianDistance) {
+            violatesAbsoluteConstraint = true;
             break;
           }
           
           maxDistanceInBeat = Math.max(maxDistanceInBeat, distance);
         }
         
-        // Only consider candidates that strictly satisfy the constraint
-        if (!violatesConstraint && maxDistanceInBeat < minMaxDistance) {
+        // Only consider candidates that ABSOLUTELY satisfy the constraint
+        if (!violatesAbsoluteConstraint && maxDistanceInBeat < minMaxDistance) {
           minMaxDistance = maxDistanceInBeat;
           bestCandidate = candidate;
           bestCandidateIndex = i;
@@ -404,7 +433,7 @@ function createStrictestLinearInitialSolution(
         });
         
         addedInThisIteration = true;
-        console.log(`Added customer ${customer.id} to STRICTEST beat ${route.salesmanId} (max distance: ${minMaxDistance.toFixed(2)} km)`);
+        console.log(`Added customer ${customer.id} to ABSOLUTE beat ${route.salesmanId} (max distance: ${minMaxDistance.toFixed(2)} km ≤ ${medianDistance.toFixed(2)} km)`);
       }
     }
     
@@ -413,13 +442,20 @@ function createStrictestLinearInitialSolution(
       routes.push(route);
       
       const maxDistanceInBeat = calculateMaxDistanceInBeat(route.stops);
-      console.log(`Created STRICTEST beat ${route.salesmanId} with ${route.stops.length} stops, max internal distance: ${maxDistanceInBeat.toFixed(2)} km`);
+      const constraintSatisfied = maxDistanceInBeat <= medianDistance;
+      
+      console.log(`Created ABSOLUTE beat ${route.salesmanId} with ${route.stops.length} stops`);
+      console.log(`Max internal distance: ${maxDistanceInBeat.toFixed(2)} km ${constraintSatisfied ? '✅' : '❌'} (limit: ${medianDistance.toFixed(2)} km)`);
+      
+      if (!constraintSatisfied) {
+        console.error(`❌ ABSOLUTE CONSTRAINT VIOLATION in beat ${route.salesmanId}!`);
+      }
     }
   }
   
   // Handle any remaining customers by creating additional beats
   if (remainingCustomers.length > 0) {
-    console.log(`Creating additional beats for ${remainingCustomers.length} remaining customers...`);
+    console.log(`Creating additional beats for ${remainingCustomers.length} remaining customers while maintaining ABSOLUTE constraint...`);
     
     while (remainingCustomers.length > 0) {
       const route: SalesmanRoute = {
@@ -432,7 +468,7 @@ function createStrictestLinearInitialSolution(
         distributorLng: distributor.longitude
       };
       
-      // Take remaining customers up to max beat size
+      // Take remaining customers up to max beat size while maintaining ABSOLUTE constraint
       const customersToTake = Math.min(config.maxOutletsPerBeat, remainingCustomers.length);
       
       for (let i = 0; i < customersToTake; i++) {
@@ -454,7 +490,12 @@ function createStrictestLinearInitialSolution(
       if (route.stops.length > 0) {
         updateRouteMetrics(route, config);
         routes.push(route);
+        
+        const maxDistanceInBeat = calculateMaxDistanceInBeat(route.stops);
+        const constraintSatisfied = maxDistanceInBeat <= medianDistance;
+        
         console.log(`Created additional beat ${route.salesmanId} with ${route.stops.length} stops`);
+        console.log(`Max internal distance: ${maxDistanceInBeat.toFixed(2)} km ${constraintSatisfied ? '✅' : '❌'} (limit: ${medianDistance.toFixed(2)} km)`);
       }
     }
   }
@@ -462,11 +503,11 @@ function createStrictestLinearInitialSolution(
   return routes;
 }
 
-function findDensestAreaSeed(customers: ClusteredCustomer[], modeDistance: number): ClusteredCustomer {
+function findDensestAreaSeed(customers: ClusteredCustomer[], medianDistance: number): ClusteredCustomer {
   let bestSeed = customers[0];
   let maxNeighbors = 0;
   
-  // Find customer with most neighbors within mode distance
+  // Find customer with most neighbors within median distance
   for (const candidate of customers) {
     let neighborCount = 0;
     
@@ -477,7 +518,7 @@ function findDensestAreaSeed(customers: ClusteredCustomer[], modeDistance: numbe
           other.latitude, other.longitude
         );
         
-        if (distance <= modeDistance) {
+        if (distance <= medianDistance) {
           neighborCount++;
         }
       }
@@ -489,7 +530,7 @@ function findDensestAreaSeed(customers: ClusteredCustomer[], modeDistance: numbe
     }
   }
   
-  console.log(`Selected seed customer ${bestSeed.id} with ${maxNeighbors} neighbors within ${modeDistance.toFixed(2)} km`);
+  console.log(`Selected seed customer ${bestSeed.id} with ${maxNeighbors} neighbors within ${medianDistance.toFixed(2)} km`);
   return bestSeed;
 }
 
@@ -509,13 +550,13 @@ function calculateMaxDistanceInBeat(stops: RouteStop[]): number {
   return maxDistance;
 }
 
-function calculateStrictProximityEnergyWithModeConstraint(solution: SalesmanRoute[], config: ClusteringConfig, modeDistance: number): number {
+function calculateAbsoluteMedianConstraintEnergy(solution: SalesmanRoute[], config: ClusteringConfig, medianDistance: number): number {
   let totalEnergy = 0;
   
   // Base distance energy
   totalEnergy += solution.reduce((sum, route) => sum + route.totalDistance, 0);
   
-  // Penalty for size violations
+  // Heavy penalty for size violations
   solution.forEach(route => {
     if (route.stops.length < config.minOutletsPerBeat) {
       totalEnergy += 1000 * (config.minOutletsPerBeat - route.stops.length);
@@ -525,22 +566,22 @@ function calculateStrictProximityEnergyWithModeConstraint(solution: SalesmanRout
     }
   });
   
-  // STRICT mode distance constraint penalty - heavily penalize violations
+  // EXTREMELY heavy penalty for ABSOLUTE median distance constraint violations
   solution.forEach(route => {
-    const modeDistancePenalty = calculateStrictModeDistancePenalty(route, modeDistance);
-    totalEnergy += MODE_DISTANCE_WEIGHT * modeDistancePenalty;
+    const medianDistancePenalty = calculateAbsoluteMedianDistancePenalty(route, medianDistance);
+    totalEnergy += MEDIAN_DISTANCE_VIOLATION_WEIGHT * medianDistancePenalty;
   });
   
-  // Compactness bonus - reward tighter clusters
+  // Reward for compactness (being well below the median distance)
   solution.forEach(route => {
-    const compactnessBonus = calculateCompactnessBonus(route, modeDistance);
-    totalEnergy -= compactnessBonus; // Subtract to reward compactness
+    const compactnessReward = calculateCompactnessReward(route, medianDistance);
+    totalEnergy -= COMPACTNESS_REWARD_WEIGHT * compactnessReward;
   });
   
   return totalEnergy;
 }
 
-function calculateStrictModeDistancePenalty(route: SalesmanRoute, modeDistance: number): number {
+function calculateAbsoluteMedianDistancePenalty(route: SalesmanRoute, medianDistance: number): number {
   let penalty = 0;
   
   for (let i = 0; i < route.stops.length; i++) {
@@ -550,9 +591,9 @@ function calculateStrictModeDistancePenalty(route: SalesmanRoute, modeDistance: 
         route.stops[j].latitude, route.stops[j].longitude
       );
       
-      if (distance > modeDistance) {
-        // Exponential penalty for violations to strongly discourage them
-        penalty += Math.pow(distance - modeDistance, 2) * 5000;
+      if (distance > medianDistance) {
+        // Exponential penalty for ABSOLUTE constraint violations
+        penalty += Math.pow(distance - medianDistance, 3) * 1000;
       }
     }
   }
@@ -560,7 +601,7 @@ function calculateStrictModeDistancePenalty(route: SalesmanRoute, modeDistance: 
   return penalty;
 }
 
-function calculateCompactnessBonus(route: SalesmanRoute, modeDistance: number): number {
+function calculateCompactnessReward(route: SalesmanRoute, medianDistance: number): number {
   if (route.stops.length < 2) return 0;
   
   let totalDistance = 0;
@@ -579,24 +620,24 @@ function calculateCompactnessBonus(route: SalesmanRoute, modeDistance: number): 
   
   const avgDistance = totalDistance / pairCount;
   
-  // Bonus for being well below the mode distance
-  if (avgDistance < modeDistance * 0.8) {
-    return (modeDistance * 0.8 - avgDistance) * 100;
+  // Reward for being well below the median distance
+  if (avgDistance < medianDistance * 0.7) {
+    return (medianDistance * 0.7 - avgDistance) * route.stops.length;
   }
   
   return 0;
 }
 
-function createStrictestProximityNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig, modeDistance: number): SalesmanRoute[] {
+function createAbsoluteMedianConstraintNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig, medianDistance: number): SalesmanRoute[] {
   const newSolution = JSON.parse(JSON.stringify(solution));
   
-  // Only allow operations that maintain STRICT assignment and mode distance constraint
+  // Only allow operations that maintain ABSOLUTE assignment and median distance constraint
   const operations = [
-    () => swapAdjacentStopsStrictestWithConstraint(newSolution, config, modeDistance),
-    () => optimizeRouteOrderStrictestWithConstraint(newSolution, config, modeDistance)
+    () => swapAdjacentStopsWithAbsoluteConstraint(newSolution, config, medianDistance),
+    () => optimizeRouteOrderWithAbsoluteConstraint(newSolution, config, medianDistance)
   ];
   
-  const numOperations = 1; // Limit to one operation to maintain strictness
+  const numOperations = 1; // Limit to one operation to maintain constraints
   for (let i = 0; i < numOperations; i++) {
     const operation = operations[Math.floor(Math.random() * operations.length)];
     operation();
@@ -605,7 +646,7 @@ function createStrictestProximityNeighborSolution(solution: SalesmanRoute[], con
   return newSolution;
 }
 
-function swapAdjacentStopsStrictestWithConstraint(solution: SalesmanRoute[], config: ClusteringConfig, modeDistance: number): void {
+function swapAdjacentStopsWithAbsoluteConstraint(solution: SalesmanRoute[], config: ClusteringConfig, medianDistance: number): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -616,17 +657,17 @@ function swapAdjacentStopsStrictestWithConstraint(solution: SalesmanRoute[], con
   // Only swap adjacent stops to maintain linearity
   const i = Math.floor(Math.random() * (route.stops.length - 1));
   
-  // Check if swap would violate STRICT mode distance constraint
+  // Check if swap would violate ABSOLUTE median distance constraint
   const tempStops = [...route.stops];
   [tempStops[i], tempStops[i + 1]] = [tempStops[i + 1], tempStops[i]];
   
-  if (!checkStrictModeDistanceConstraintViolation(tempStops, modeDistance)) {
+  if (!checkAbsoluteMedianDistanceConstraintViolation(tempStops, medianDistance)) {
     [route.stops[i], route.stops[i + 1]] = [route.stops[i + 1], route.stops[i]];
     updateRouteMetrics(route, config);
   }
 }
 
-function optimizeRouteOrderStrictestWithConstraint(solution: SalesmanRoute[], config: ClusteringConfig, modeDistance: number): void {
+function optimizeRouteOrderWithAbsoluteConstraint(solution: SalesmanRoute[], config: ClusteringConfig, medianDistance: number): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -634,7 +675,7 @@ function optimizeRouteOrderStrictestWithConstraint(solution: SalesmanRoute[], co
   
   if (route.stops.length < 3) return;
   
-  // Apply simple 2-opt improvement with STRICT constraint checking
+  // Apply simple 2-opt improvement with ABSOLUTE constraint checking
   for (let i = 1; i < route.stops.length - 2; i++) {
     for (let j = i + 2; j < route.stops.length; j++) {
       // Calculate current distance
@@ -660,14 +701,14 @@ function optimizeRouteOrderStrictestWithConstraint(solution: SalesmanRoute[], co
         );
       
       if (newDist < currentDist) {
-        // Check if 2-opt swap would violate STRICT mode distance constraint
+        // Check if 2-opt swap would violate ABSOLUTE median distance constraint
         const newStops = [
           ...route.stops.slice(0, i),
           ...route.stops.slice(i, j).reverse(),
           ...route.stops.slice(j)
         ];
         
-        if (!checkStrictModeDistanceConstraintViolation(newStops, modeDistance)) {
+        if (!checkAbsoluteMedianDistanceConstraintViolation(newStops, medianDistance)) {
           route.stops = newStops;
           updateRouteMetrics(route, config);
           return; // Only one improvement per call
@@ -677,48 +718,49 @@ function optimizeRouteOrderStrictestWithConstraint(solution: SalesmanRoute[], co
   }
 }
 
-function checkStrictModeDistanceConstraintViolation(stops: RouteStop[], modeDistance: number): boolean {
+function checkAbsoluteMedianDistanceConstraintViolation(stops: RouteStop[], medianDistance: number): boolean {
   for (let i = 0; i < stops.length; i++) {
     for (let j = i + 1; j < stops.length; j++) {
       const distance = calculateHaversineDistance(
         stops[i].latitude, stops[i].longitude,
         stops[j].latitude, stops[j].longitude
       );
-      if (distance > modeDistance) {
-        return true; // STRICT constraint violated
+      if (distance > medianDistance) {
+        return true; // ABSOLUTE constraint violated
       }
     }
   }
-  return false; // STRICT constraint satisfied
+  return false; // ABSOLUTE constraint satisfied
 }
 
-async function optimizeAcrossClustersWithStrictTracking(
+async function optimizeWithAbsoluteMedianConstraint(
   routes: SalesmanRoute[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
-  modeDistance: number
+  medianDistance: number
 ): Promise<SalesmanRoute[]> {
-  // For STRICT tracking, we only optimize within routes, not across routes
-  // This prevents any customer reassignment that could cause duplicates
+  // For ABSOLUTE constraint enforcement, we only optimize within routes, not across routes
+  // This prevents any customer reassignment that could cause duplicates or constraint violations
   
   routes.forEach(route => {
     if (route.stops.length >= 3) {
-      optimizeRouteOrderStrictestWithConstraint([route], config, modeDistance);
+      optimizeRouteOrderWithAbsoluteConstraint([route], config, medianDistance);
     }
   });
   
-  return optimizeBeatsStrict(routes, distributor, config);
+  return optimizeBeatsWithAbsoluteConstraint(routes, distributor, config, medianDistance);
 }
 
-function optimizeBeatsStrict(routes: SalesmanRoute[], distributor: { latitude: number; longitude: number }, config: ClusteringConfig): SalesmanRoute[] {
-  // Only merge routes if they're in the same cluster and won't violate size constraints
+function optimizeBeatsWithAbsoluteConstraint(routes: SalesmanRoute[], distributor: { latitude: number; longitude: number }, config: ClusteringConfig, medianDistance: number): SalesmanRoute[] {
+  // Only merge routes if they're in the same cluster and won't violate size or median distance constraints
   const optimizedRoutes = routes.reduce((acc, route) => {
     if (route.stops.length >= config.minOutletsPerBeat && route.stops.length <= config.maxOutletsPerBeat) {
       acc.push(route);
     } else if (route.stops.length < config.minOutletsPerBeat) {
       const mergeCandidate = acc.find(r => 
         r.clusterIds[0] === route.clusterIds[0] && 
-        r.stops.length + route.stops.length <= config.maxOutletsPerBeat
+        r.stops.length + route.stops.length <= config.maxOutletsPerBeat &&
+        wouldMergeViolateMedianConstraint(r.stops, route.stops, medianDistance) === false
       );
       
       if (mergeCandidate) {
@@ -728,7 +770,7 @@ function optimizeBeatsStrict(routes: SalesmanRoute[], distributor: { latitude: n
         acc.push(route);
       }
     } else {
-      // Split oversized routes
+      // Split oversized routes while maintaining median constraint
       const midPoint = Math.ceil(route.stops.length / 2);
       
       const route1: SalesmanRoute = {
@@ -763,6 +805,11 @@ function optimizeBeatsStrict(routes: SalesmanRoute[], distributor: { latitude: n
     distributorLat: distributor.latitude,
     distributorLng: distributor.longitude
   }));
+}
+
+function wouldMergeViolateMedianConstraint(stops1: RouteStop[], stops2: RouteStop[], medianDistance: number): boolean {
+  const allStops = [...stops1, ...stops2];
+  return checkAbsoluteMedianDistanceConstraintViolation(allStops, medianDistance);
 }
 
 function updateRouteMetrics(route: SalesmanRoute, config: ClusteringConfig): void {
