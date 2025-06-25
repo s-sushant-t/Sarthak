@@ -70,8 +70,31 @@ const BeatHygieneCorrection: React.FC = () => {
   });
   const [isAuditComplete, setIsAuditComplete] = useState(false);
   const [currentTable, setCurrentTable] = useState<string>('distributor_routes');
+  const [distributorCode, setDistributorCode] = useState<string | null>(null);
   const { latitude, longitude, error: locationError } = useGeolocation();
-  const distributorCode = localStorage.getItem('distributorCode');
+
+  // Get distributor code from authenticated user
+  useEffect(() => {
+    const getDistributorCode = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.email) {
+          setDistributorCode(user.email);
+          localStorage.setItem('distributorCode', user.email);
+        } else {
+          // Fallback to localStorage for backward compatibility
+          const storedCode = localStorage.getItem('distributorCode');
+          setDistributorCode(storedCode);
+        }
+      } catch (error) {
+        console.error('Error getting user:', error);
+        const storedCode = localStorage.getItem('distributorCode');
+        setDistributorCode(storedCode);
+      }
+    };
+
+    getDistributorCode();
+  }, []);
 
   // Get the appropriate table name for this distributor
   const getDistributorTable = async (distributorCode: string): Promise<string> => {
@@ -182,7 +205,9 @@ const BeatHygieneCorrection: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchBeats();
+    if (distributorCode) {
+      fetchBeats();
+    }
   }, [distributorCode]);
 
   const fetchAuditProgress = async () => {
@@ -260,7 +285,12 @@ const BeatHygieneCorrection: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
     localStorage.clear();
     window.location.href = '/';
   };
@@ -510,7 +540,7 @@ const BeatHygieneCorrection: React.FC = () => {
           <AlertCircle className="w-12 h-12 text-yellow-400 mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-white mb-2">No Routes Assigned</h2>
           <p className="text-blue-200">
-            No routes have been assigned to this distributor code yet. Please contact your administrator.
+            No routes have been assigned to this distributor yet. Please contact your administrator.
           </p>
         </div>
       </div>
@@ -552,6 +582,7 @@ const BeatHygieneCorrection: React.FC = () => {
           <div>
             <h2 className="text-2xl font-bold text-white">Beat Hygiene Correction</h2>
             <p className="text-blue-200 text-sm">Table: {currentTable}</p>
+            <p className="text-blue-200 text-sm">User: {distributorCode}</p>
           </div>
           <div className="flex gap-2">
             <button

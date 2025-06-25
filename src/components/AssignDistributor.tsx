@@ -62,15 +62,15 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         TO authenticated
         USING (
           (auth.jwt()->>'email' = 'EDIS') OR 
-          (distributor_code = auth.uid()::text)
+          (distributor_code = auth.jwt()->>'email')
         )
         WITH CHECK (
           (auth.jwt()->>'email' = 'EDIS') OR 
-          (distributor_code = auth.uid()::text)
+          (distributor_code = auth.jwt()->>'email')
         );
       `;
       
-      // Execute the SQL using a simple RPC call
+      // Execute the SQL using the RPC function
       const { error: createError } = await supabase.rpc('execute_sql', { 
         sql_query: createTableSQL 
       });
@@ -112,6 +112,12 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     setSuccess(null);
 
     try {
+      // Check if user is authenticated
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        throw new Error('You must be logged in to assign routes');
+      }
+
       // Calculate total records to process
       const totalRecords = routes.reduce((acc, route) => acc + route.stops.length + 1, 0); // +1 for distributor point
       setImportStats({ total: totalRecords, processed: 0 });
@@ -270,17 +276,20 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
       <div className="space-y-4">
         <div>
           <label htmlFor="distributorCode" className="block text-sm font-medium text-gray-700 mb-2">
-            Distributor Code
+            Distributor Email
           </label>
           <input
             id="distributorCode"
-            type="text"
+            type="email"
             value={distributorCode}
             onChange={(e) => setDistributorCode(e.target.value.trim())}
-            placeholder="Enter distributor code (e.g., DIST001)"
+            placeholder="Enter distributor email (e.g., distributor@company.com)"
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             disabled={isLoading}
           />
+          <p className="mt-1 text-xs text-gray-500">
+            This should match the email address the distributor will use to log in
+          </p>
         </div>
 
         <div className="bg-gray-50 p-4 rounded-lg">
@@ -335,7 +344,8 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
       <div className="mt-4 p-4 bg-blue-50 rounded-lg">
         <p className="text-sm text-blue-800">
           <strong>Note:</strong> The system will create a dedicated table for this distributor to ensure data isolation. 
-          The distributor will use their code to log in and access their assigned routes.
+          The distributor will use their email address to log in and access their assigned routes. Make sure the distributor 
+          is registered in the system with the email address you specify above.
         </p>
       </div>
     </div>

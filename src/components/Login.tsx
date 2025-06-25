@@ -23,35 +23,54 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setError('');
     
     try {
-      if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('userType', 'admin');
-        await onLogin(loginId, password);
-      } else {
-        // Check if this is a valid distributor code
-        const { data, error: fetchError } = await supabase
-          .from('distributor_routes')
-          .select('distributor_code')
-          .eq('distributor_code', loginId)
-          .limit(1)
-          .single();
+      // Use Supabase authentication
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email: loginId,
+        password: password
+      });
 
-        if (fetchError) {
-          throw new Error('Invalid distributor code');
-        }
+      if (authError) {
+        throw authError;
+      }
 
-        if (data && data.distributor_code === loginId && loginId === password) {
+      if (data.user) {
+        // Check if this is the admin user
+        if (loginId === 'EDIS') {
+          localStorage.setItem('isAuthenticated', 'true');
+          localStorage.setItem('userType', 'admin');
+          await onLogin(loginId, password);
+        } else {
+          // For distributor users, check if they have routes assigned
+          const { data: routeData, error: fetchError } = await supabase
+            .from('distributor_routes')
+            .select('distributor_code')
+            .eq('distributor_code', loginId)
+            .limit(1);
+
+          if (fetchError) {
+            console.error('Error checking distributor routes:', fetchError);
+            // Don't throw error here, user might be authenticated but no routes assigned yet
+          }
+
           localStorage.setItem('isAuthenticated', 'true');
           localStorage.setItem('userType', 'distributor');
           localStorage.setItem('distributorCode', loginId);
           window.location.reload(); // Trigger app re-render to pick up new auth state
-        } else {
-          throw new Error('Invalid credentials');
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login error:', error);
-      setError('Invalid credentials. Please try again.');
+      let errorMessage = 'Invalid credentials. Please try again.';
+      
+      if (error.message?.includes('Invalid login credentials')) {
+        errorMessage = 'Invalid email or password. Please check your credentials.';
+      } else if (error.message?.includes('Email not confirmed')) {
+        errorMessage = 'Please confirm your email address before logging in.';
+      } else if (error.message?.includes('Too many requests')) {
+        errorMessage = 'Too many login attempts. Please try again later.';
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -84,24 +103,24 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div>
               <label htmlFor="loginId" className="block text-sm font-medium text-blue-200">
-                Login ID
+                Email
               </label>
               <div className="mt-1">
                 <input
                   id="loginId"
                   name="loginId"
-                  type="text"
+                  type="email"
                   required
                   value={loginId}
-                  onChange={(e) => {
-                    setLoginId(e.target.value);
-                    setPassword(e.target.value); // Auto-set password for distributor login
-                  }}
+                  onChange={(e) => setLoginId(e.target.value)}
                   className="appearance-none block w-full px-3 py-2 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                  placeholder="Enter EDIS or your distributor code"
+                  placeholder="Enter your email address"
                   disabled={isLoading}
                 />
               </div>
+              <p className="mt-1 text-xs text-blue-300/70">
+                Use 'EDIS' for admin access or your distributor email
+              </p>
             </div>
 
             <div>
@@ -147,6 +166,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               )}
             </button>
           </form>
+
+          <div className="mt-6 p-4 bg-blue-900/20 rounded-lg border border-blue-500/20">
+            <h4 className="text-sm font-medium text-blue-200 mb-2">Authentication Note:</h4>
+            <p className="text-xs text-blue-300/80">
+              This system now uses secure Supabase authentication. Users must be registered in the system before they can log in.
+              Contact your administrator if you need access.
+            </p>
+          </div>
         </div>
       </div>
     </div>
