@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { Loader2, AlertCircle, ChevronRight, MapPin, Clock, User, Phone, LogOut, Binary, Network, Cpu, Edit2, Download, RefreshCw, Navigation } from 'lucide-react';
-import { getBeatCount } from './BeatCount';
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -73,6 +72,10 @@ const BeatHygieneCorrection: React.FC = () => {
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
 
+  const getDistributorTableName = (code: string) => {
+    return `distributor_routes_${code.toLowerCase()}`;
+  };
+
   const fetchBeats = async () => {
     if (!distributorCode) return;
 
@@ -81,35 +84,33 @@ const BeatHygieneCorrection: React.FC = () => {
       setError(null);
       console.log('Fetching beats for distributor:', distributorCode);
 
-      const { beats: uniqueBeats, count } = await getBeatCount(distributorCode);
-      console.log('Beat count result:', { uniqueBeats, count });
+      const tableName = getDistributorTableName(distributorCode);
+      console.log('Using table:', tableName);
 
-      if (!uniqueBeats || uniqueBeats.length === 0) {
+      // Get distinct beats from the distributor-specific table
+      const { data: beatData, error: beatError } = await supabase.rpc('execute_sql', {
+        sql_query: `SELECT DISTINCT beat, auditor_name, is_being_audited FROM ${tableName} ORDER BY beat`
+      });
+
+      if (beatError) {
+        console.error('Error fetching beats:', beatError);
+        throw new Error(`No data found for distributor ${distributorCode}. Please ensure routes have been assigned.`);
+      }
+
+      if (!beatData || beatData.length === 0) {
         throw new Error('No beats found for this distributor');
       }
 
-      // Get auditor info for each beat
-      const { data: beatData, error: beatError } = await supabase
-        .from('distributor_routes')
-        .select('beat, auditor_name, is_being_audited')
-        .eq('distributor_code', distributorCode)
-        .in('beat', uniqueBeats);
+      // Process the beat data
+      const uniqueBeats = beatData.map((row: any) => ({
+        beat: row.beat,
+        auditor_name: row.auditor_name,
+        is_being_audited: row.is_being_audited || false
+      }));
 
-      if (beatError) throw beatError;
-
-      // Create beat info objects
-      const beatInfos: BeatInfo[] = uniqueBeats.map(beat => {
-        const beatInfo = beatData?.find(d => d.beat === beat);
-        return {
-          beat,
-          auditor_name: beatInfo?.auditor_name || undefined,
-          is_being_audited: beatInfo?.is_being_audited || false
-        };
-      });
-
-      console.log('Processed beats:', beatInfos);
-      setBeats(beatInfos);
-      setHasData(beatInfos.length > 0);
+      console.log('Processed beats:', uniqueBeats);
+      setBeats(uniqueBeats);
+      setHasData(uniqueBeats.length > 0);
       await fetchAuditProgress();
 
     } catch (error) {
@@ -136,26 +137,29 @@ const BeatHygieneCorrection: React.FC = () => {
     if (!distributorCode) return;
 
     try {
-      const { count: totalStops, error: totalError } = await supabase
-        .from('distributor_routes')
-        .select('*', { count: 'exact', head: true })
-        .eq('distributor_code', distributorCode);
+      const tableName = getDistributorTableName(distributorCode);
+
+      // Get total stops count
+      const { data: totalData, error: totalError } = await supabase.rpc('execute_sql', {
+        sql_query: `SELECT COUNT(*) as count FROM ${tableName}`
+      });
 
       if (totalError) throw totalError;
 
-      const { count: visitedStops, error: visitedError } = await supabase
-        .from('distributor_routes')
-        .select('*', { count: 'exact', head: true })
-        .eq('distributor_code', distributorCode)
-        .not('visit_time', 'is', null);
+      // Get visited stops count
+      const { data: visitedData, error: visitedError } = await supabase.rpc('execute_sql', {
+        sql_query: `SELECT COUNT(*) as count FROM ${tableName} WHERE visit_time IS NOT NULL`
+      });
 
       if (visitedError) throw visitedError;
 
+      const totalStops = totalData?.[0]?.count || 0;
+      const visitedStops = visitedData?.[0]?.count || 0;
       const percentage = totalStops ? (visitedStops / totalStops) * 100 : 0;
       
       setAuditProgress({
-        totalStops: totalStops || 0,
-        visitedStops: visitedStops || 0,
+        totalStops,
+        visitedStops,
         percentage
       });
 
@@ -170,11 +174,11 @@ const BeatHygieneCorrection: React.FC = () => {
     if (!distributorCode) return;
 
     try {
-      const { data, error } = await supabase
-        .from('distributor_routes')
-        .select('*')
-        .eq('distributor_code', distributorCode)
-        .order('beat, stop_order');
+      const tableName = getDistributorTableName(distributorCode);
+      
+      const { data, error } = await supabase.rpc('execute_sql', {
+        sql_query: `SELECT * FROM ${tableName} ORDER BY beat, stop_order`
+      });
 
       if (error) throw error;
 
@@ -184,7 +188,7 @@ const BeatHygieneCorrection: React.FC = () => {
       }
 
       const headers = Object.keys(data[0]).join(',');
-      const rows = data.map(row => 
+      const rows = data.map((row: any) => 
         Object.values(row).map(value => 
           value === null ? '' : `"${value}"`
         ).join(',')
@@ -217,18 +221,17 @@ const BeatHygieneCorrection: React.FC = () => {
 
     setIsProcessing(true);
     try {
-      const { data, error } = await supabase
-        .from('distributor_routes')
-        .select('*')
-        .eq('distributor_code', distributorCode)
-        .eq('beat', beat)
-        .order('stop_order');
+      const tableName = getDistributorTableName(distributorCode);
+      
+      const { data, error } = await supabase.rpc('execute_sql', {
+        sql_query: `SELECT * FROM ${tableName} WHERE beat = ${beat} ORDER BY stop_order`
+      });
 
       if (error) throw error;
       
       setStops(data || []);
       
-      const nextUnvisitedStop = data?.find(stop => !stop.visit_time);
+      const nextUnvisitedStop = data?.find((stop: Stop) => !stop.visit_time);
       setCurrentStop(nextUnvisitedStop || null);
       setShowForm(false);
 
@@ -325,17 +328,23 @@ const BeatHygieneCorrection: React.FC = () => {
 
     setIsProcessing(true);
     try {
-      const { error } = await supabase
-        .from('distributor_routes')
-        .update({
-          visit_time: new Date().toISOString(),
-          market_work_remark: formData.marketWorkRemark,
-          updated_ol_name: formData.updatedOutletName,
-          owner_name: formData.ownerName,
-          owner_contact: formData.ownerContact,
-          ol_closure_time: formData.closureTime
-        })
-        .eq('id', currentStop.id);
+      const tableName = getDistributorTableName(distributorCode!);
+      
+      const updateSQL = `
+        UPDATE ${tableName} 
+        SET 
+          visit_time = now(),
+          market_work_remark = '${formData.marketWorkRemark || ''}',
+          updated_ol_name = '${formData.updatedOutletName || ''}',
+          owner_name = '${formData.ownerName || ''}',
+          owner_contact = '${formData.ownerContact || ''}',
+          ol_closure_time = '${formData.closureTime || ''}'
+        WHERE id = '${currentStop.id}'
+      `;
+
+      const { error } = await supabase.rpc('execute_sql', {
+        sql_query: updateSQL
+      });
 
       if (error) throw error;
       
@@ -354,12 +363,17 @@ const BeatHygieneCorrection: React.FC = () => {
   const handleEditMarketWork = async (stopId: string, newRemark: string) => {
     setIsProcessing(true);
     try {
-      const { error } = await supabase
-        .from('distributor_routes')
-        .update({
-          market_work_remark: newRemark
-        })
-        .eq('id', stopId);
+      const tableName = getDistributorTableName(distributorCode!);
+      
+      const updateSQL = `
+        UPDATE ${tableName} 
+        SET market_work_remark = '${newRemark}'
+        WHERE id = '${stopId}'
+      `;
+
+      const { error } = await supabase.rpc('execute_sql', {
+        sql_query: updateSQL
+      });
 
       if (error) throw error;
       
@@ -376,15 +390,20 @@ const BeatHygieneCorrection: React.FC = () => {
     if (!selectedBeat || !distributorCode) return;
 
     try {
-      const { error } = await supabase
-        .from('distributor_routes')
-        .update({
-          auditor_name: name,
-          auditor_designation: designation,
-          is_being_audited: true
-        })
-        .eq('distributor_code', distributorCode)
-        .eq('beat', selectedBeat);
+      const tableName = getDistributorTableName(distributorCode);
+      
+      const updateSQL = `
+        UPDATE ${tableName} 
+        SET 
+          auditor_name = '${name}',
+          auditor_designation = '${designation}',
+          is_being_audited = true
+        WHERE beat = ${selectedBeat}
+      `;
+
+      const { error } = await supabase.rpc('execute_sql', {
+        sql_query: updateSQL
+      });
 
       if (error) throw error;
 
@@ -409,16 +428,22 @@ const BeatHygieneCorrection: React.FC = () => {
 
     setIsProcessing(true);
     try {
-      const { error } = await supabase
-        .from('distributor_routes')
-        .update({
-          market_work_remark: formData.marketWorkRemark,
-          updated_ol_name: formData.updatedOutletName,
-          owner_name: formData.ownerName,
-          owner_contact: formData.ownerContact,
-          ol_closure_time: formData.closureTime
-        })
-        .eq('id', editingStop.id);
+      const tableName = getDistributorTableName(distributorCode!);
+      
+      const updateSQL = `
+        UPDATE ${tableName} 
+        SET 
+          market_work_remark = '${formData.marketWorkRemark || ''}',
+          updated_ol_name = '${formData.updatedOutletName || ''}',
+          owner_name = '${formData.ownerName || ''}',
+          owner_contact = '${formData.ownerContact || ''}',
+          ol_closure_time = '${formData.closureTime || ''}'
+        WHERE id = '${editingStop.id}'
+      `;
+
+      const { error } = await supabase.rpc('execute_sql', {
+        sql_query: updateSQL
+      });
 
       if (error) throw error;
       
@@ -438,7 +463,7 @@ const BeatHygieneCorrection: React.FC = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900 flex items-center justify-center relative overflow-hidden">
         <div className="absolute inset-0 z-0">
-          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float\" style={{ top: '15%', left: '10%' }} />
+          <Binary className="absolute text-blue-200 opacity-10 w-24 h-24 animate-float" style={{ top: '15%', left: '10%' }} />
           <Network className="absolute text-purple-200 opacity-10 w-32 h-32 animate-float-delayed" style={{ top: '60%', right: '15%' }} />
           <Cpu className="absolute text-indigo-200 opacity-10 w-28 h-28 animate-float" style={{ top: '30%', right: '25%' }} />
         </div>
