@@ -19,113 +19,86 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
   const [success, setSuccess] = useState<string | null>(null);
   const [importStats, setImportStats] = useState<{total: number, processed: number}>({ total: 0, processed: 0 });
 
-  const calculateHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371; // Earth's radius in kilometers
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-      Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  };
-
-  const calculateTravelTime = (distance: number, speedKmPerHour: number = 30): number => {
-    return (distance / speedKmPerHour) * 60; // Convert to minutes
-  };
-
-  const createDistributorTable = async (distributorCode: string): Promise<boolean> => {
-    try {
-      console.log(`Creating distributor table for: ${distributorCode}`);
-      
-      // Call the function to create the distributor-specific table
-      const { data, error } = await supabase.rpc('create_distributor_table', {
-        dist_code: distributorCode
-      });
-
-      if (error) {
-        console.error('Error creating distributor table:', error);
-        throw new Error(`Failed to create distributor table: ${error.message}`);
-      }
-
-      console.log('Distributor table creation result:', data);
-      return data === true;
-    } catch (error) {
-      console.error('Error in createDistributorTable:', error);
-      throw error;
-    }
-  };
-
-  const insertIntoDistributorTable = async (distributorCode: string, routeData: any[]): Promise<void> => {
+  const createDistributorTable = async (distributorCode: string): Promise<string> => {
     // Sanitize distributor code for table name
-    const tableName = `distributor_routes_${distributorCode.toLowerCase().replace(/[^a-z0-9_]/g, '')}`;
+    const sanitizedCode = distributorCode.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const tableName = `distributor_routes_${sanitizedCode}`;
     
-    console.log(`Inserting data into table: ${tableName}`);
-    
-    // Process in smaller batches
-    const batchSize = 50;
-    let processedCount = 0;
-    let successfulInserts = 0;
-
-    for (let i = 0; i < routeData.length; i += batchSize) {
-      const batch = routeData.slice(i, Math.min(i + batchSize, routeData.length));
-      const batchNumber = Math.floor(i/batchSize) + 1;
-      const totalBatches = Math.ceil(routeData.length/batchSize);
+    try {
+      console.log(`Creating distributor-specific table: ${tableName}`);
       
-      console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} records) for table ${tableName}`);
-      
-      try {
-        // Use direct table insert since we can't use dynamic SQL
-        const { data, error: insertError } = await supabase
-          .from(tableName)
-          .insert(batch)
-          .select('id');
-
-        if (insertError) {
-          console.error(`Batch ${batchNumber} failed for ${tableName}:`, insertError);
+      // Create the table with the same structure as distributor_routes
+      const createTableSQL = `
+        CREATE TABLE IF NOT EXISTS ${tableName} (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          distributor_code text NOT NULL,
+          beat integer NOT NULL,
+          stop_order integer NOT NULL,
+          dms_customer_id text NOT NULL,
+          outlet_name text,
+          latitude double precision NOT NULL,
+          longitude double precision NOT NULL,
+          distance_to_next double precision,
+          time_to_next integer,
+          cluster_id integer,
+          market_work_remark text,
+          updated_ol_name text,
+          owner_name text,
+          owner_contact text,
+          ol_closure_time text,
+          visit_time timestamptz,
+          created_at timestamptz DEFAULT now(),
+          auditor_name text,
+          auditor_designation text,
+          is_being_audited boolean DEFAULT false,
           
-          // If table doesn't exist, try to insert into main table as fallback
-          if (insertError.code === '42P01') { // Table doesn't exist
-            console.log('Table does not exist, falling back to main distributor_routes table');
-            const { data: fallbackData, error: fallbackError } = await supabase
-              .from('distributor_routes')
-              .insert(batch)
-              .select('id');
-              
-            if (fallbackError) {
-              throw new Error(`Fallback insert failed: ${fallbackError.message}`);
-            }
-            
-            successfulInserts += fallbackData?.length || batch.length;
-          } else {
-            throw new Error(`Batch ${batchNumber} failed: ${insertError.message}`);
-          }
-        } else {
-          successfulInserts += data?.length || batch.length;
-        }
-
-        processedCount += batch.length;
+          CONSTRAINT ${tableName}_unique_constraint UNIQUE (distributor_code, beat, stop_order)
+        );
         
-        setImportStats(prev => ({
-          ...prev,
-          processed: processedCount
-        }));
-
-        console.log(`Batch ${batchNumber} completed successfully: ${data?.length || batch.length} records inserted into ${tableName}`);
-
-      } catch (batchError) {
-        console.error(`Error processing batch ${batchNumber} for ${tableName}:`, batchError);
-        throw new Error(`Failed to insert batch ${batchNumber}: ${batchError instanceof Error ? batchError.message : 'Unknown error'}`);
+        ALTER TABLE ${tableName} ENABLE ROW LEVEL SECURITY;
+        
+        CREATE POLICY "Users can access their routes" ON ${tableName}
+        FOR ALL
+        TO authenticated
+        USING (
+          (auth.jwt()->>'email' = 'EDIS') OR 
+          (distributor_code = auth.uid()::text)
+        )
+        WITH CHECK (
+          (auth.jwt()->>'email' = 'EDIS') OR 
+          (distributor_code = auth.uid()::text)
+        );
+      `;
+      
+      // Execute the SQL using a simple RPC call
+      const { error: createError } = await supabase.rpc('execute_sql', { 
+        sql_query: createTableSQL 
+      });
+      
+      if (createError) {
+        console.warn('Failed to create distributor-specific table:', createError);
+        // Fall back to main table
+        return 'distributor_routes';
       }
-
-      // Add small delay between batches to prevent rate limiting
-      if (i + batchSize < routeData.length) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Register the table mapping
+      const { error: registerError } = await supabase.rpc('register_distributor_table', {
+        dist_code: distributorCode,
+        tbl_name: tableName
+      });
+      
+      if (registerError) {
+        console.warn('Failed to register table mapping:', registerError);
       }
+      
+      console.log(`Successfully created distributor table: ${tableName}`);
+      return tableName;
+      
+    } catch (error) {
+      console.warn('Error creating distributor table:', error);
+      // Fall back to main table
+      return 'distributor_routes';
     }
-
-    console.log(`Successfully inserted ${successfulInserts} records into ${tableName}`);
   };
 
   const handleAssign = async () => {
@@ -144,18 +117,14 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
       setImportStats({ total: totalRecords, processed: 0 });
       console.log(`Starting import of ${totalRecords} records for distributor: ${distributorCode}`);
 
-      // Step 1: Create distributor-specific table
-      console.log('Creating distributor-specific table...');
-      const tableCreated = await createDistributorTable(distributorCode);
-      
-      if (!tableCreated) {
-        console.warn('Failed to create distributor table, will use main table as fallback');
-      }
+      // Create or get the distributor-specific table
+      const targetTable = await createDistributorTable(distributorCode);
+      console.log(`Using table: ${targetTable}`);
 
-      // Step 2: Delete existing routes for this distributor from main table
-      console.log('Deleting existing routes from main table...');
+      // First, delete existing routes for this distributor from the target table
+      console.log('Deleting existing routes...');
       const { error: deleteError } = await supabase
-        .from('distributor_routes')
+        .from(targetTable)
         .delete()
         .eq('distributor_code', distributorCode);
 
@@ -164,76 +133,93 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         throw new Error(`Failed to delete existing routes: ${deleteError.message}`);
       }
 
-      // Step 3: Prepare all route data with proper structure and data types
+      // Prepare all route data with proper structure and data types
       const routeData = [];
       
       for (const route of routes) {
         // Add distributor point as stop 0
-        const firstStopDistance = route.stops.length > 0 ? 
-          calculateHaversineDistance(
-            route.distributorLat || 0,
-            route.distributorLng || 0,
-            route.stops[0].latitude,
-            route.stops[0].longitude
-          ) : 0;
-        
-        const firstStopTime = calculateTravelTime(firstStopDistance);
-
         routeData.push({
           distributor_code: distributorCode,
-          beat: Math.round(Number(route.salesmanId) || 1),
+          beat: parseInt(route.salesmanId.toString()),
           stop_order: 0,
           dms_customer_id: 'DISTRIBUTOR',
           outlet_name: 'DISTRIBUTOR',
-          latitude: Number(route.distributorLat) || 0,
-          longitude: Number(route.distributorLng) || 0,
-          distance_to_next: Number(firstStopDistance.toFixed(2)) || 0,
-          time_to_next: Math.round(Number(firstStopTime) || 0),
-          cluster_id: route.stops.length > 0 ? Math.round(Number(route.stops[0]?.clusterId) || 0) : 0,
+          latitude: parseFloat(route.distributorLat?.toString() || '0'),
+          longitude: parseFloat(route.distributorLng?.toString() || '0'),
+          distance_to_next: route.stops.length > 0 ? parseFloat((route.stops[0]?.distanceToNext || 0).toString()) : 0,
+          time_to_next: route.stops.length > 0 ? parseInt((route.stops[0]?.timeToNext || 0).toString()) : 0,
+          cluster_id: route.stops.length > 0 ? parseInt((route.stops[0]?.clusterId || 0).toString()) : 0,
           is_being_audited: false
         });
 
         // Add all customer stops
         route.stops.forEach((stop, index) => {
-          let distanceToNext = 0;
-          let timeToNext = 0;
-          
-          if (index < route.stops.length - 1) {
-            const nextStop = route.stops[index + 1];
-            distanceToNext = calculateHaversineDistance(
-              stop.latitude,
-              stop.longitude,
-              nextStop.latitude,
-              nextStop.longitude
-            );
-            timeToNext = calculateTravelTime(distanceToNext);
-          }
-
           routeData.push({
             distributor_code: distributorCode,
-            beat: Math.round(Number(route.salesmanId) || 1),
+            beat: parseInt(route.salesmanId.toString()),
             stop_order: index + 1,
-            dms_customer_id: String(stop.customerId || ''),
-            outlet_name: String(stop.outletName || ''),
-            latitude: Number(stop.latitude) || 0,
-            longitude: Number(stop.longitude) || 0,
-            distance_to_next: Number(distanceToNext.toFixed(2)) || 0,
-            time_to_next: Math.round(Number(timeToNext) || 0),
-            cluster_id: Math.round(Number(stop.clusterId) || 0),
+            dms_customer_id: stop.customerId || '',
+            outlet_name: stop.outletName || '',
+            latitude: parseFloat(stop.latitude?.toString() || '0'),
+            longitude: parseFloat(stop.longitude?.toString() || '0'),
+            distance_to_next: parseFloat((stop.distanceToNext || 0).toString()),
+            time_to_next: parseInt((stop.timeToNext || 0).toString()),
+            cluster_id: parseInt((stop.clusterId || 0).toString()),
             is_being_audited: false
           });
         });
       }
 
-      console.log(`Prepared ${routeData.length} records for import`);
+      console.log(`Prepared ${routeData.length} records for import to table: ${targetTable}`);
 
-      // Step 4: Insert into distributor-specific table (or fallback to main table)
-      await insertIntoDistributorTable(distributorCode, routeData);
+      // Process in smaller batches with better error handling
+      const batchSize = 50;
+      let processedCount = 0;
+      let successfulInserts = 0;
 
-      // Step 5: Verify final import count
+      for (let i = 0; i < routeData.length; i += batchSize) {
+        const batch = routeData.slice(i, Math.min(i + batchSize, routeData.length));
+        const batchNumber = Math.floor(i/batchSize) + 1;
+        const totalBatches = Math.ceil(routeData.length/batchSize);
+        
+        console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} records) to table: ${targetTable}`);
+        
+        try {
+          const { data, error: insertError } = await supabase
+            .from(targetTable)
+            .insert(batch)
+            .select('id');
+
+          if (insertError) {
+            console.error(`Batch ${batchNumber} failed:`, insertError);
+            throw new Error(`Batch ${batchNumber} failed: ${insertError.message}`);
+          }
+
+          successfulInserts += data?.length || batch.length;
+          processedCount += batch.length;
+          
+          setImportStats(prev => ({
+            ...prev,
+            processed: processedCount
+          }));
+
+          console.log(`Batch ${batchNumber} completed successfully: ${data?.length || batch.length} records inserted`);
+
+        } catch (batchError) {
+          console.error(`Error processing batch ${batchNumber}:`, batchError);
+          throw new Error(`Failed to insert batch ${batchNumber}: ${batchError instanceof Error ? batchError.message : 'Unknown error'}`);
+        }
+
+        // Add small delay between batches to prevent rate limiting
+        if (i + batchSize < routeData.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+
+      // Verify final import count
       console.log('Verifying import...');
       const { count: actualImported, error: countError } = await supabase
-        .from('distributor_routes')
+        .from(targetTable)
         .select('*', { count: 'exact', head: true })
         .eq('distributor_code', distributorCode);
 
@@ -242,12 +228,18 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         throw new Error(`Failed to verify import: ${countError.message}`);
       }
 
-      console.log(`Import verification:
+      console.log(`Import verification for table ${targetTable}:
         - Expected records: ${routeData.length}
+        - Successfully processed: ${successfulInserts}
         - Actually imported: ${actualImported}
-        - Final processed count: ${importStats.processed}`);
+        - Final processed count: ${processedCount}`);
 
-      setSuccess(`Successfully assigned ${actualImported || routeData.length} route records to distributor ${distributorCode}`);
+      if (actualImported !== routeData.length) {
+        console.warn(`Import count mismatch: Expected ${routeData.length} records but found ${actualImported} in database`);
+        // Don't throw error for minor discrepancies, just warn
+      }
+
+      setSuccess(`Successfully assigned ${actualImported} route records to distributor ${distributorCode} in table ${targetTable}`);
       onAssign(distributorCode);
 
     } catch (err) {
@@ -342,8 +334,8 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
       
       <div className="mt-4 p-4 bg-blue-50 rounded-lg">
         <p className="text-sm text-blue-800">
-          <strong>Note:</strong> The distributor will use this code to log in and access their assigned routes. 
-          A dedicated table will be created for this distributor to ensure data isolation.
+          <strong>Note:</strong> The system will create a dedicated table for this distributor to ensure data isolation. 
+          The distributor will use their code to log in and access their assigned routes.
         </p>
       </div>
     </div>

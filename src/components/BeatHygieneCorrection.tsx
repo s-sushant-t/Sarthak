@@ -69,63 +69,44 @@ const BeatHygieneCorrection: React.FC = () => {
     percentage: 0
   });
   const [isAuditComplete, setIsAuditComplete] = useState(false);
+  const [currentTable, setCurrentTable] = useState<string>('distributor_routes');
   const { latitude, longitude, error: locationError } = useGeolocation();
   const distributorCode = localStorage.getItem('distributorCode');
 
-  const getDistributorTableName = (code: string): string => {
-    return `distributor_routes_${code.toLowerCase().replace(/[^a-z0-9_]/g, '')}`;
-  };
-
-  const checkTableExists = async (tableName: string): Promise<boolean> => {
+  // Get the appropriate table name for this distributor
+  const getDistributorTable = async (distributorCode: string): Promise<string> => {
     try {
-      const { data, error } = await supabase.rpc('table_exists', {
-        table_name: tableName
+      const { data, error } = await supabase.rpc('get_distributor_table_name', {
+        dist_code: distributorCode
       });
       
       if (error) {
-        console.error('Error checking table existence:', error);
-        return false;
+        console.warn('Failed to get distributor table name:', error);
+        return 'distributor_routes';
       }
       
-      return data === true;
+      return data || 'distributor_routes';
     } catch (error) {
-      console.error('Error in checkTableExists:', error);
-      return false;
+      console.warn('Error getting distributor table name:', error);
+      return 'distributor_routes';
     }
   };
 
-  const getBeatCount = async (distributorCode: string) => {
+  const getBeatCount = async (distributorCode: string, tableName: string) => {
     try {
-      const tableName = getDistributorTableName(distributorCode);
-      const tableExists = await checkTableExists(tableName);
-      
-      let query;
-      if (tableExists) {
-        // Query the distributor-specific table
-        query = supabase
-          .from(tableName)
-          .select('beat')
-          .eq('distributor_code', distributorCode);
-      } else {
-        // Fallback to main table
-        query = supabase
-          .from('distributor_routes')
-          .select('beat')
-          .eq('distributor_code', distributorCode);
-      }
-
-      const { data, error } = await query;
+      const { data, error } = await supabase
+        .from(tableName)
+        .select('beat')
+        .eq('distributor_code', distributorCode);
 
       if (error) throw error;
 
-      const uniqueBeats = [...new Set((data || [])
-        .map(row => Number(row.beat))
-        .filter(b => !isNaN(b)))]
+      const uniqueBeats = [...new Set(data.map(row => Number(row.beat)))]
+        .filter(b => !isNaN(b))
         .sort((a, b) => a - b);
 
       console.log('✅ Beat count verification:', {
-        tableName,
-        tableExists,
+        table: tableName,
         distinctBeats: uniqueBeats.length,
         beatNumbers: uniqueBeats
       });
@@ -148,32 +129,24 @@ const BeatHygieneCorrection: React.FC = () => {
       setError(null);
       console.log('Fetching beats for distributor:', distributorCode);
 
-      const { beats: uniqueBeats, count } = await getBeatCount(distributorCode);
+      // Get the appropriate table for this distributor
+      const tableName = await getDistributorTable(distributorCode);
+      setCurrentTable(tableName);
+      console.log('Using table:', tableName);
+
+      const { beats: uniqueBeats, count } = await getBeatCount(distributorCode, tableName);
       console.log('Beat count result:', { uniqueBeats, count });
 
       if (!uniqueBeats || uniqueBeats.length === 0) {
         throw new Error('No beats found for this distributor');
       }
 
-      const tableName = getDistributorTableName(distributorCode);
-      const tableExists = await checkTableExists(tableName);
-      
-      let beatQuery;
-      if (tableExists) {
-        beatQuery = supabase
-          .from(tableName)
-          .select('beat, auditor_name, is_being_audited')
-          .eq('distributor_code', distributorCode)
-          .in('beat', uniqueBeats);
-      } else {
-        beatQuery = supabase
-          .from('distributor_routes')
-          .select('beat, auditor_name, is_being_audited')
-          .eq('distributor_code', distributorCode)
-          .in('beat', uniqueBeats);
-      }
-
-      const { data: beatData, error: beatError } = await beatQuery;
+      // Get auditor info for each beat
+      const { data: beatData, error: beatError } = await supabase
+        .from(tableName)
+        .select('beat, auditor_name, is_being_audited')
+        .eq('distributor_code', distributorCode)
+        .in('beat', uniqueBeats);
 
       if (beatError) throw beatError;
 
@@ -216,39 +189,19 @@ const BeatHygieneCorrection: React.FC = () => {
     if (!distributorCode) return;
 
     try {
-      const tableName = getDistributorTableName(distributorCode);
-      const tableExists = await checkTableExists(tableName);
-      
-      let totalQuery, visitedQuery;
-      
-      if (tableExists) {
-        totalQuery = supabase
-          .from(tableName)
-          .select('*', { count: 'exact', head: true })
-          .eq('distributor_code', distributorCode);
-          
-        visitedQuery = supabase
-          .from(tableName)
-          .select('*', { count: 'exact', head: true })
-          .eq('distributor_code', distributorCode)
-          .not('visit_time', 'is', null);
-      } else {
-        totalQuery = supabase
-          .from('distributor_routes')
-          .select('*', { count: 'exact', head: true })
-          .eq('distributor_code', distributorCode);
-          
-        visitedQuery = supabase
-          .from('distributor_routes')
-          .select('*', { count: 'exact', head: true })
-          .eq('distributor_code', distributorCode)
-          .not('visit_time', 'is', null);
-      }
+      const { count: totalStops, error: totalError } = await supabase
+        .from(currentTable)
+        .select('*', { count: 'exact', head: true })
+        .eq('distributor_code', distributorCode);
 
-      const { count: totalStops, error: totalError } = await totalQuery;
       if (totalError) throw totalError;
 
-      const { count: visitedStops, error: visitedError } = await visitedQuery;
+      const { count: visitedStops, error: visitedError } = await supabase
+        .from(currentTable)
+        .select('*', { count: 'exact', head: true })
+        .eq('distributor_code', distributorCode)
+        .not('visit_time', 'is', null);
+
       if (visitedError) throw visitedError;
 
       const percentage = totalStops ? (visitedStops / totalStops) * 100 : 0;
@@ -270,25 +223,11 @@ const BeatHygieneCorrection: React.FC = () => {
     if (!distributorCode) return;
 
     try {
-      const tableName = getDistributorTableName(distributorCode);
-      const tableExists = await checkTableExists(tableName);
-      
-      let query;
-      if (tableExists) {
-        query = supabase
-          .from(tableName)
-          .select('*')
-          .eq('distributor_code', distributorCode)
-          .order('beat, stop_order');
-      } else {
-        query = supabase
-          .from('distributor_routes')
-          .select('*')
-          .eq('distributor_code', distributorCode)
-          .order('beat, stop_order');
-      }
-
-      const { data, error } = await query;
+      const { data, error } = await supabase
+        .from(currentTable)
+        .select('*')
+        .eq('distributor_code', distributorCode)
+        .order('beat, stop_order');
 
       if (error) throw error;
 
@@ -331,27 +270,12 @@ const BeatHygieneCorrection: React.FC = () => {
 
     setIsProcessing(true);
     try {
-      const tableName = getDistributorTableName(distributorCode);
-      const tableExists = await checkTableExists(tableName);
-      
-      let query;
-      if (tableExists) {
-        query = supabase
-          .from(tableName)
-          .select('*')
-          .eq('distributor_code', distributorCode)
-          .eq('beat', beat)
-          .order('stop_order');
-      } else {
-        query = supabase
-          .from('distributor_routes')
-          .select('*')
-          .eq('distributor_code', distributorCode)
-          .eq('beat', beat)
-          .order('stop_order');
-      }
-
-      const { data, error } = await query;
+      const { data, error } = await supabase
+        .from(currentTable)
+        .select('*')
+        .eq('distributor_code', distributorCode)
+        .eq('beat', beat)
+        .order('stop_order');
 
       if (error) throw error;
       
@@ -454,37 +378,17 @@ const BeatHygieneCorrection: React.FC = () => {
 
     setIsProcessing(true);
     try {
-      const tableName = getDistributorTableName(distributorCode!);
-      const tableExists = await checkTableExists(tableName);
-      
-      let updateQuery;
-      if (tableExists) {
-        updateQuery = supabase
-          .from(tableName)
-          .update({
-            visit_time: new Date().toISOString(),
-            market_work_remark: formData.marketWorkRemark,
-            updated_ol_name: formData.updatedOutletName,
-            owner_name: formData.ownerName,
-            owner_contact: formData.ownerContact,
-            ol_closure_time: formData.closureTime
-          })
-          .eq('id', currentStop.id);
-      } else {
-        updateQuery = supabase
-          .from('distributor_routes')
-          .update({
-            visit_time: new Date().toISOString(),
-            market_work_remark: formData.marketWorkRemark,
-            updated_ol_name: formData.updatedOutletName,
-            owner_name: formData.ownerName,
-            owner_contact: formData.ownerContact,
-            ol_closure_time: formData.closureTime
-          })
-          .eq('id', currentStop.id);
-      }
-
-      const { error } = await updateQuery;
+      const { error } = await supabase
+        .from(currentTable)
+        .update({
+          visit_time: new Date().toISOString(),
+          market_work_remark: formData.marketWorkRemark,
+          updated_ol_name: formData.updatedOutletName,
+          owner_name: formData.ownerName,
+          owner_contact: formData.ownerContact,
+          ol_closure_time: formData.closureTime
+        })
+        .eq('id', currentStop.id);
 
       if (error) throw error;
       
@@ -503,27 +407,12 @@ const BeatHygieneCorrection: React.FC = () => {
   const handleEditMarketWork = async (stopId: string, newRemark: string) => {
     setIsProcessing(true);
     try {
-      const tableName = getDistributorTableName(distributorCode!);
-      const tableExists = await checkTableExists(tableName);
-      
-      let updateQuery;
-      if (tableExists) {
-        updateQuery = supabase
-          .from(tableName)
-          .update({
-            market_work_remark: newRemark
-          })
-          .eq('id', stopId);
-      } else {
-        updateQuery = supabase
-          .from('distributor_routes')
-          .update({
-            market_work_remark: newRemark
-          })
-          .eq('id', stopId);
-      }
-
-      const { error } = await updateQuery;
+      const { error } = await supabase
+        .from(currentTable)
+        .update({
+          market_work_remark: newRemark
+        })
+        .eq('id', stopId);
 
       if (error) throw error;
       
@@ -540,33 +429,15 @@ const BeatHygieneCorrection: React.FC = () => {
     if (!selectedBeat || !distributorCode) return;
 
     try {
-      const tableName = getDistributorTableName(distributorCode);
-      const tableExists = await checkTableExists(tableName);
-      
-      let updateQuery;
-      if (tableExists) {
-        updateQuery = supabase
-          .from(tableName)
-          .update({
-            auditor_name: name,
-            auditor_designation: designation,
-            is_being_audited: true
-          })
-          .eq('distributor_code', distributorCode)
-          .eq('beat', selectedBeat);
-      } else {
-        updateQuery = supabase
-          .from('distributor_routes')
-          .update({
-            auditor_name: name,
-            auditor_designation: designation,
-            is_being_audited: true
-          })
-          .eq('distributor_code', distributorCode)
-          .eq('beat', selectedBeat);
-      }
-
-      const { error } = await updateQuery;
+      const { error } = await supabase
+        .from(currentTable)
+        .update({
+          auditor_name: name,
+          auditor_designation: designation,
+          is_being_audited: true
+        })
+        .eq('distributor_code', distributorCode)
+        .eq('beat', selectedBeat);
 
       if (error) throw error;
 
@@ -591,35 +462,16 @@ const BeatHygieneCorrection: React.FC = () => {
 
     setIsProcessing(true);
     try {
-      const tableName = getDistributorTableName(distributorCode!);
-      const tableExists = await checkTableExists(tableName);
-      
-      let updateQuery;
-      if (tableExists) {
-        updateQuery = supabase
-          .from(tableName)
-          .update({
-            market_work_remark: formData.marketWorkRemark,
-            updated_ol_name: formData.updatedOutletName,
-            owner_name: formData.ownerName,
-            owner_contact: formData.ownerContact,
-            ol_closure_time: formData.closureTime
-          })
-          .eq('id', editingStop.id);
-      } else {
-        updateQuery = supabase
-          .from('distributor_routes')
-          .update({
-            market_work_remark: formData.marketWorkRemark,
-            updated_ol_name: formData.updatedOutletName,
-            owner_name: formData.ownerName,
-            owner_contact: formData.ownerContact,
-            ol_closure_time: formData.closureTime
-          })
-          .eq('id', editingStop.id);
-      }
-
-      const { error } = await updateQuery;
+      const { error } = await supabase
+        .from(currentTable)
+        .update({
+          market_work_remark: formData.marketWorkRemark,
+          updated_ol_name: formData.updatedOutletName,
+          owner_name: formData.ownerName,
+          owner_contact: formData.ownerContact,
+          ol_closure_time: formData.closureTime
+        })
+        .eq('id', editingStop.id);
 
       if (error) throw error;
       
@@ -697,7 +549,10 @@ const BeatHygieneCorrection: React.FC = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-indigo-900 to-purple-900">
       <div className="max-w-4xl mx-auto p-4">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-white">Beat Hygiene Correction</h2>
+          <div>
+            <h2 className="text-2xl font-bold text-white">Beat Hygiene Correction</h2>
+            <p className="text-blue-200 text-sm">Table: {currentTable}</p>
+          </div>
           <div className="flex gap-2">
             <button
               onClick={handleRefresh}
