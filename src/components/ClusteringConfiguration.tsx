@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Target, Users, MapPin, Clock, Calculator, Shield } from 'lucide-react';
+import { Settings, Target, Users, MapPin, Clock, Calculator } from 'lucide-react';
 
 interface ClusteringConfigurationProps {
   totalCustomers: number;
@@ -15,13 +15,6 @@ export interface ClusteringConfig {
   maxWorkingTimeMinutes: number;
   customerVisitTimeMinutes: number;
   travelSpeedKmh: number;
-  // New enhanced constraints
-  dbscanEps: number;
-  dbscanMinSamples: number;
-  maxConvexHullArea: number;
-  maxConvexHullAreaSmall: number;
-  enablePercentileMode: boolean;
-  percentileModeThreshold: number;
 }
 
 const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
@@ -36,14 +29,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
     maxOutletsPerBeat: 45,
     maxWorkingTimeMinutes: 360,
     customerVisitTimeMinutes: 6,
-    travelSpeedKmh: 30,
-    // Enhanced constraints with defaults
-    dbscanEps: 0.3,
-    dbscanMinSamples: 4,
-    maxConvexHullArea: 3.0,
-    maxConvexHullAreaSmall: 2.5,
-    enablePercentileMode: true,
-    percentileModeThreshold: 90
+    travelSpeedKmh: 30
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -58,7 +44,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
     const estimatedVisitTime = avgOutletsPerBeat * config.customerVisitTimeMinutes;
     const estimatedWorkingTime = estimatedTravelTime + estimatedVisitTime;
     
-    // Enhanced feasibility check
+    // Relaxed feasibility check - allow some flexibility
     const feasible = totalBeats <= totalCustomers && 
                     avgOutletsPerBeat <= config.maxOutletsPerBeat * 1.2 && // Allow 20% flexibility
                     estimatedWorkingTime <= config.maxWorkingTimeMinutes * 1.1; // Allow 10% flexibility
@@ -107,27 +93,6 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
       newErrors.travelSpeedKmh = 'Travel speed must be between 5 and 100 km/h';
     }
 
-    // Enhanced constraint validations
-    if (currentConfig.dbscanEps < 0.1 || currentConfig.dbscanEps > 2.0) {
-      newErrors.dbscanEps = 'DBSCAN eps must be between 0.1 and 2.0 km';
-    }
-
-    if (currentConfig.dbscanMinSamples < 2 || currentConfig.dbscanMinSamples > 10) {
-      newErrors.dbscanMinSamples = 'DBSCAN min samples must be between 2 and 10';
-    }
-
-    if (currentConfig.maxConvexHullArea < 1 || currentConfig.maxConvexHullArea > 10) {
-      newErrors.maxConvexHullArea = 'Max convex hull area must be between 1 and 10 km²';
-    }
-
-    if (currentConfig.maxConvexHullAreaSmall < 0.5 || currentConfig.maxConvexHullAreaSmall > 5) {
-      newErrors.maxConvexHullAreaSmall = 'Max small beat area must be between 0.5 and 5 km²';
-    }
-
-    if (currentConfig.percentileModeThreshold < 50 || currentConfig.percentileModeThreshold > 100) {
-      newErrors.percentileModeThreshold = 'Percentile threshold must be between 50 and 100%';
-    }
-
     const totalBeats = currentConfig.totalClusters * currentConfig.beatsPerCluster;
     if (totalBeats > totalCustomers) {
       newErrors.totalClusters = `Total beats (${totalBeats}) cannot exceed total customers (${totalCustomers})`;
@@ -148,7 +113,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
     }
   };
 
-  const updateConfig = (field: keyof ClusteringConfig, value: number | boolean) => {
+  const updateConfig = (field: keyof ClusteringConfig, value: number) => {
     setConfig(prev => ({ ...prev, [field]: value }));
   };
 
@@ -157,15 +122,15 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         <div className="p-6 border-b border-gray-200">
           <div className="flex items-center gap-3">
             <div className="bg-blue-100 p-2 rounded-lg">
               <Settings className="w-6 h-6 text-blue-600" />
             </div>
             <div>
-              <h2 className="text-2xl font-semibold text-gray-800">🚀 Enhanced Route Configuration</h2>
-              <p className="text-gray-600">Configure advanced constraints for {totalCustomers.toLocaleString()} customers</p>
+              <h2 className="text-2xl font-semibold text-gray-800">Configure Route Parameters</h2>
+              <p className="text-gray-600">Set up clustering and routing constraints for {totalCustomers.toLocaleString()} customers</p>
             </div>
           </div>
         </div>
@@ -265,124 +230,10 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
             </div>
           </div>
 
-          {/* Enhanced Constraints */}
+          {/* Time & Speed Constraints */}
           <div className="bg-purple-50 rounded-lg p-6">
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-              <Shield className="w-5 h-5 text-purple-600" />
-              🚀 Enhanced Proximity Constraints
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  📦 DBSCAN Eps (km)
-                </label>
-                <input
-                  type="number"
-                  min="0.1"
-                  max="2.0"
-                  step="0.1"
-                  value={config.dbscanEps}
-                  onChange={(e) => updateConfig('dbscanEps', parseFloat(e.target.value) || 0.3)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                    errors.dbscanEps ? 'border-red-300' : 'border-gray-300'
-                  }`}
-                />
-                <p className="text-xs text-gray-500 mt-1">Max distance for natural clustering</p>
-                {errors.dbscanEps && (
-                  <p className="text-red-500 text-sm mt-1">{errors.dbscanEps}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  📦 DBSCAN Min Samples
-                </label>
-                <input
-                  type="number"
-                  min="2"
-                  max="10"
-                  value={config.dbscanMinSamples}
-                  onChange={(e) => updateConfig('dbscanMinSamples', parseInt(e.target.value) || 4)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                    errors.dbscanMinSamples ? 'border-red-300' : 'border-gray-300'
-                  }`}
-                />
-                <p className="text-xs text-gray-500 mt-1">Min points to form cluster</p>
-                {errors.dbscanMinSamples && (
-                  <p className="text-red-500 text-sm mt-1">{errors.dbscanMinSamples}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  📉 Percentile Mode (%)
-                </label>
-                <input
-                  type="number"
-                  min="50"
-                  max="100"
-                  value={config.percentileModeThreshold}
-                  onChange={(e) => updateConfig('percentileModeThreshold', parseInt(e.target.value) || 90)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                    errors.percentileModeThreshold ? 'border-red-300' : 'border-gray-300'
-                  }`}
-                />
-                <p className="text-xs text-gray-500 mt-1">% of pairs within mode distance</p>
-                {errors.percentileModeThreshold && (
-                  <p className="text-red-500 text-sm mt-1">{errors.percentileModeThreshold}</p>
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  🧮 Max Convex Hull Area (km²)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  step="0.5"
-                  value={config.maxConvexHullArea}
-                  onChange={(e) => updateConfig('maxConvexHullArea', parseFloat(e.target.value) || 3.0)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                    errors.maxConvexHullArea ? 'border-red-300' : 'border-gray-300'
-                  }`}
-                />
-                <p className="text-xs text-gray-500 mt-1">For beats ≥35 outlets</p>
-                {errors.maxConvexHullArea && (
-                  <p className="text-red-500 text-sm mt-1">{errors.maxConvexHullArea}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  🧮 Max Small Beat Area (km²)
-                </label>
-                <input
-                  type="number"
-                  min="0.5"
-                  max="5"
-                  step="0.5"
-                  value={config.maxConvexHullAreaSmall}
-                  onChange={(e) => updateConfig('maxConvexHullAreaSmall', parseFloat(e.target.value) || 2.5)}
-                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                    errors.maxConvexHullAreaSmall ? 'border-red-300' : 'border-gray-300'
-                  }`}
-                />
-                <p className="text-xs text-gray-500 mt-1">For beats &lt;35 outlets</p>
-                {errors.maxConvexHullAreaSmall && (
-                  <p className="text-red-500 text-sm mt-1">{errors.maxConvexHullAreaSmall}</p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Time & Speed Constraints */}
-          <div className="bg-orange-50 rounded-lg p-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-              <Clock className="w-5 h-5 text-orange-600" />
+              <Clock className="w-5 h-5 text-purple-600" />
               Time & Speed Parameters
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -474,7 +325,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
             {!metrics.feasible && (
               <div className="mt-4 p-3 bg-yellow-100 border border-yellow-300 rounded-lg">
                 <p className="text-yellow-800 text-sm">
-                  ⚠️ Configuration may require adjustments during optimization, but the enhanced algorithm will handle this automatically.
+                  ⚠️ Note: Configuration may require some adjustments during optimization, but the algorithm will handle this automatically.
                 </p>
               </div>
             )}
@@ -484,12 +335,6 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                 <p className="text-red-800 text-sm">Please fix the validation errors above before proceeding.</p>
               </div>
             )}
-
-            <div className="mt-4 p-3 bg-blue-100 border border-blue-300 rounded-lg">
-              <p className="text-blue-800 text-sm">
-                🚀 <strong>Enhanced Features:</strong> DBSCAN pre-clustering, convex hull area limits, percentile-based mode constraints, and inter-cluster transition penalties for optimal beat formation.
-              </p>
-            </div>
           </div>
         </div>
 
@@ -509,7 +354,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
             }`}
           >
-            🚀 Apply Enhanced Configuration
+            Apply Configuration
           </button>
         </div>
       </div>

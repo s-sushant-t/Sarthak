@@ -2,7 +2,6 @@ import { LocationData, AlgorithmType, AlgorithmResult } from '../types';
 import { ClusteringConfig } from '../components/ClusteringConfiguration';
 import { nearestNeighbor } from './nearestNeighbor';
 import { simulatedAnnealing } from './simulatedAnnealing';
-import { enhancedNearestNeighbor } from './enhancedNearestNeighbor';
 
 export const executeAlgorithm = async (
   algorithmType: AlgorithmType,
@@ -16,7 +15,7 @@ export const executeAlgorithm = async (
   try {
     switch (algorithmType) {
       case 'nearest-neighbor':
-        result = await enhancedNearestNeighbor(locationData, config);
+        result = await nearestNeighbor(locationData, config);
         break;
       case 'simulated-annealing':
         // Add timeout for simulated annealing to prevent infinite processing
@@ -43,13 +42,13 @@ export const executeAlgorithm = async (
     };
   } catch (error) {
     if (error instanceof Error && error.message === 'Algorithm timeout') {
-      // Fallback to enhanced nearest neighbor if simulated annealing times out
-      console.warn('Simulated annealing timed out, falling back to enhanced nearest neighbor');
-      result = await enhancedNearestNeighbor(locationData, config);
+      // Fallback to nearest neighbor if simulated annealing times out
+      console.warn('Simulated annealing timed out, falling back to nearest neighbor');
+      result = await nearestNeighbor(locationData, config);
       const endTime = performance.now();
       return {
         ...result,
-        name: 'Simulated Annealing (Enhanced Fallback)',
+        name: 'Simulated Annealing (Fallback)',
         processingTime: endTime - startTime
       };
     }
