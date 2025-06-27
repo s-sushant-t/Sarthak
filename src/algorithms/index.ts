@@ -29,7 +29,14 @@ export const executeAlgorithm = async (
         ]);
         break;
       case 'dbscan':
-        result = await dbscan(locationData, config);
+        // Add timeout for DBSCAN to prevent infinite processing
+        const dbscanTimeoutPromise = new Promise<AlgorithmResult>((_, reject) => {
+          setTimeout(() => reject(new Error('Algorithm timeout')), 35000); // 35 second timeout
+        });
+        result = await Promise.race([
+          dbscan(locationData, config),
+          dbscanTimeoutPromise
+        ]);
         break;
       case 'custom':
         throw new Error('Custom algorithm cannot be executed directly');
@@ -46,13 +53,13 @@ export const executeAlgorithm = async (
     };
   } catch (error) {
     if (error instanceof Error && error.message === 'Algorithm timeout') {
-      // Fallback to nearest neighbor if simulated annealing times out
-      console.warn('Simulated annealing timed out, falling back to nearest neighbor');
+      // Fallback to nearest neighbor if algorithm times out
+      console.warn(`${algorithmType} timed out, falling back to nearest neighbor`);
       result = await nearestNeighbor(locationData, config);
       const endTime = performance.now();
       return {
         ...result,
-        name: 'Simulated Annealing (Fallback)',
+        name: `${algorithmType} (Fallback to Nearest Neighbor)`,
         processingTime: endTime - startTime
       };
     }
