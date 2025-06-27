@@ -101,6 +101,9 @@ export const dbscan = async (
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     
+    // CRITICAL: Merge undersized beats with nearest beats
+    const optimizedRoutes = await mergeUndersizedBeatsWithNearest(routes, config, distributor);
+    
     // CRITICAL: Final verification - ensure ALL customers are assigned exactly once
     const finalAssignedCount = globalAssignedCustomerIds.size;
     const totalCustomers = allCustomers.length;
@@ -116,7 +119,7 @@ export const dbscan = async (
       
       missingCustomers.forEach(customer => {
         // Find a route in the same cluster with space
-        const sameClusterRoutes = routes.filter(route => 
+        const sameClusterRoutes = optimizedRoutes.filter(route => 
           route.clusterIds.includes(customer.clusterId) && 
           route.stops.length < config.maxOutletsPerBeat
         );
@@ -126,7 +129,7 @@ export const dbscan = async (
         if (!targetRoute) {
           // Create emergency route if no space in existing routes
           targetRoute = {
-            salesmanId: currentSalesmanId++,
+            salesmanId: optimizedRoutes.length + 1,
             stops: [],
             totalDistance: 0,
             totalTime: 0,
@@ -134,7 +137,7 @@ export const dbscan = async (
             distributorLat: distributor.latitude,
             distributorLng: distributor.longitude
           };
-          routes.push(targetRoute);
+          optimizedRoutes.push(targetRoute);
         }
         
         targetRoute.stops.push({
@@ -154,12 +157,12 @@ export const dbscan = async (
     }
     
     // Update route metrics for all routes
-    routes.forEach(route => {
+    optimizedRoutes.forEach(route => {
       updateRouteMetrics(route, distributor, config);
     });
     
     // Reassign beat IDs sequentially
-    const finalRoutes = routes.map((route, index) => ({
+    const finalRoutes = optimizedRoutes.map((route, index) => ({
       ...route,
       salesmanId: index + 1
     }));
@@ -277,6 +280,112 @@ async function createOptimizedDBSCANBeats(
   }
   
   return routes;
+}
+
+async function mergeUndersizedBeatsWithNearest(
+  routes: SalesmanRoute[],
+  config: ClusteringConfig,
+  distributor: { latitude: number; longitude: number }
+): Promise<SalesmanRoute[]> {
+  console.log('Merging undersized beats with nearest beats...');
+  
+  const optimizedRoutes = [...routes];
+  let mergesMade = true;
+  let iterations = 0;
+  const maxIterations = 10;
+  
+  while (mergesMade && iterations < maxIterations) {
+    mergesMade = false;
+    iterations++;
+    
+    // Find undersized beats
+    const undersizedBeats = optimizedRoutes.filter(route => 
+      route.stops.length < config.minOutletsPerBeat
+    );
+    
+    console.log(`Iteration ${iterations}: Found ${undersizedBeats.length} undersized beats`);
+    
+    for (const undersizedBeat of undersizedBeats) {
+      // Find the nearest beat that can accommodate the merge
+      let nearestBeat: SalesmanRoute | null = null;
+      let minDistance = Infinity;
+      
+      // Calculate centroid of undersized beat
+      const undersizedCentroid = calculateBeatCentroid(undersizedBeat);
+      
+      for (const candidateBeat of optimizedRoutes) {
+        if (candidateBeat.salesmanId === undersizedBeat.salesmanId) continue;
+        
+        // Check if merge is possible (same cluster and size constraints)
+        const canMerge = candidateBeat.clusterIds.some(id => undersizedBeat.clusterIds.includes(id)) &&
+                        (candidateBeat.stops.length + undersizedBeat.stops.length <= config.maxOutletsPerBeat);
+        
+        if (canMerge) {
+          const candidateCentroid = calculateBeatCentroid(candidateBeat);
+          const distance = calculateHaversineDistance(
+            undersizedCentroid.latitude, undersizedCentroid.longitude,
+            candidateCentroid.latitude, candidateCentroid.longitude
+          );
+          
+          if (distance < minDistance) {
+            minDistance = distance;
+            nearestBeat = candidateBeat;
+          }
+        }
+      }
+      
+      // Perform merge if nearest beat found
+      if (nearestBeat) {
+        console.log(`Merging beat ${undersizedBeat.salesmanId} (${undersizedBeat.stops.length} stops) with beat ${nearestBeat.salesmanId} (${nearestBeat.stops.length} stops)`);
+        
+        // Add all stops from undersized beat to nearest beat
+        nearestBeat.stops.push(...undersizedBeat.stops);
+        
+        // Update cluster IDs
+        nearestBeat.clusterIds = [...new Set([...nearestBeat.clusterIds, ...undersizedBeat.clusterIds])];
+        
+        // Remove undersized beat from routes
+        const undersizedIndex = optimizedRoutes.findIndex(r => r.salesmanId === undersizedBeat.salesmanId);
+        if (undersizedIndex !== -1) {
+          optimizedRoutes.splice(undersizedIndex, 1);
+          mergesMade = true;
+        }
+        
+        // Update metrics for the merged beat
+        updateRouteMetrics(nearestBeat, distributor, config);
+        
+        console.log(`Merged beat now has ${nearestBeat.stops.length} stops`);
+      }
+    }
+    
+    // Yield control between iterations
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  
+  console.log(`Merge optimization completed after ${iterations} iterations`);
+  console.log(`Final number of beats: ${optimizedRoutes.length}`);
+  
+  // Report final beat sizes
+  const beatSizes = optimizedRoutes.map(route => route.stops.length);
+  const undersizedCount = beatSizes.filter(size => size < config.minOutletsPerBeat).length;
+  console.log(`Beat sizes: ${beatSizes.join(', ')}`);
+  console.log(`Remaining undersized beats: ${undersizedCount}`);
+  
+  return optimizedRoutes;
+}
+
+function calculateBeatCentroid(beat: SalesmanRoute): { latitude: number; longitude: number } {
+  if (beat.stops.length === 0) {
+    return { latitude: beat.distributorLat, longitude: beat.distributorLng };
+  }
+  
+  const totalLat = beat.stops.reduce((sum, stop) => sum + stop.latitude, 0);
+  const totalLng = beat.stops.reduce((sum, stop) => sum + stop.longitude, 0);
+  
+  return {
+    latitude: totalLat / beat.stops.length,
+    longitude: totalLng / beat.stops.length
+  };
 }
 
 async function performFastDBSCAN(

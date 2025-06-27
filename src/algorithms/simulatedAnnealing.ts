@@ -15,12 +15,16 @@ export const simulatedAnnealing = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting highly optimized simulated annealing with ${customers.length} total customers`);
+  console.log(`Starting simulated annealing with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
+  console.log(`Target: ${config.totalClusters * config.beatsPerCluster} total beats`);
   
   const startTime = Date.now();
   
   try {
+    // CRITICAL: Calculate exact target number of beats
+    const TARGET_TOTAL_BEATS = config.totalClusters * config.beatsPerCluster;
+    
     // CRITICAL: Track all customers to ensure no duplicates or missing outlets
     const allCustomers = [...customers];
     const globalAssignedCustomerIds = new Set<string>();
@@ -43,17 +47,18 @@ export const simulatedAnnealing = async (
     
     for (const [clusterId, clusterCustomers] of Object.entries(customersByCluster)) {
       const clusterAssignedIds = new Set<string>();
-      const routes = await processClusterWithHighlyOptimizedAnnealing(
+      const routes = await processClusterWithStrictBeatCount(
         Number(clusterId),
         clusterCustomers,
         distributor,
         config,
-        clusterAssignedIds
+        clusterAssignedIds,
+        config.beatsPerCluster
       );
       
       // Verify all cluster customers are assigned exactly once
       const assignedInCluster = routes.reduce((count, route) => count + route.stops.length, 0);
-      console.log(`Cluster ${clusterId}: ${assignedInCluster}/${clusterCustomers.length} customers assigned`);
+      console.log(`Cluster ${clusterId}: ${assignedInCluster}/${clusterCustomers.length} customers assigned in ${routes.length} beats`);
       
       if (assignedInCluster !== clusterCustomers.length) {
         console.error(`CLUSTER ${clusterId} ERROR: Expected ${clusterCustomers.length} customers, got ${assignedInCluster}`);
@@ -64,7 +69,9 @@ export const simulatedAnnealing = async (
         
         // Force assign missing customers
         missingCustomers.forEach(customer => {
-          const targetRoute = routes.find(r => r.stops.length < config.maxOutletsPerBeat) || routes[0];
+          const targetRoute = routes.reduce((min, route) => 
+            route.stops.length < min.stops.length ? route : min
+          );
           if (targetRoute) {
             targetRoute.stops.push({
               customerId: customer.id,
@@ -80,6 +87,11 @@ export const simulatedAnnealing = async (
             console.log(`Force-assigned missing customer ${customer.id} to route ${targetRoute.salesmanId}`);
           }
         });
+      }
+      
+      // Verify we have exactly the target number of beats
+      if (routes.length !== config.beatsPerCluster) {
+        console.warn(`Cluster ${clusterId}: Expected ${config.beatsPerCluster} beats, got ${routes.length}`);
       }
       
       // Add cluster customers to global tracking
@@ -99,6 +111,7 @@ export const simulatedAnnealing = async (
     const totalCustomers = allCustomers.length;
     
     console.log(`GLOBAL VERIFICATION: ${finalAssignedCount}/${totalCustomers} customers assigned`);
+    console.log(`BEAT COUNT VERIFICATION: ${routes.length}/${TARGET_TOTAL_BEATS} beats created`);
     
     if (finalAssignedCount !== totalCustomers) {
       console.error(`CRITICAL ERROR: ${totalCustomers - finalAssignedCount} customers missing from routes!`);
@@ -107,44 +120,31 @@ export const simulatedAnnealing = async (
       const missingCustomers = allCustomers.filter(customer => !globalAssignedCustomerIds.has(customer.id));
       console.error('Missing customers:', missingCustomers.map(c => c.id));
       
-      let currentSalesmanId = routes.length > 0 ? Math.max(...routes.map(r => r.salesmanId)) + 1 : 1;
-      
       missingCustomers.forEach(customer => {
         // Find a route in the same cluster with space
         const sameClusterRoutes = routes.filter(route => 
-          route.clusterIds.includes(customer.clusterId) && 
-          route.stops.length < config.maxOutletsPerBeat
+          route.clusterIds.includes(customer.clusterId)
         );
         
-        let targetRoute = sameClusterRoutes[0];
+        let targetRoute = sameClusterRoutes.reduce((min, route) => 
+          route.stops.length < min.stops.length ? route : min
+        );
         
-        if (!targetRoute) {
-          // Create emergency route if no space in existing routes
-          targetRoute = {
-            salesmanId: currentSalesmanId++,
-            stops: [],
-            totalDistance: 0,
-            totalTime: 0,
-            clusterIds: [customer.clusterId],
-            distributorLat: distributor.latitude,
-            distributorLng: distributor.longitude
-          };
-          routes.push(targetRoute);
+        if (targetRoute) {
+          targetRoute.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: config.customerVisitTimeMinutes,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          
+          globalAssignedCustomerIds.add(customer.id);
+          console.log(`Emergency assigned customer ${customer.id} to route ${targetRoute.salesmanId}`);
         }
-        
-        targetRoute.stops.push({
-          customerId: customer.id,
-          latitude: customer.latitude,
-          longitude: customer.longitude,
-          distanceToNext: 0,
-          timeToNext: 0,
-          visitTime: config.customerVisitTimeMinutes,
-          clusterId: customer.clusterId,
-          outletName: customer.outletName
-        });
-        
-        globalAssignedCustomerIds.add(customer.id);
-        console.log(`Emergency assigned customer ${customer.id} to route ${targetRoute.salesmanId}`);
       });
     }
     
@@ -159,6 +159,8 @@ export const simulatedAnnealing = async (
     console.log(`- Total customers in routes: ${finalCustomerCount}`);
     console.log(`- Unique customers: ${uniqueCustomerIds.size}`);
     console.log(`- Expected customers: ${totalCustomers}`);
+    console.log(`- Total beats created: ${routes.length}`);
+    console.log(`- Target beats: ${TARGET_TOTAL_BEATS}`);
     
     if (finalCustomerCount !== totalCustomers || uniqueCustomerIds.size !== totalCustomers) {
       console.error(`SIMULATED ANNEALING ERROR: Customer count mismatch!`);
@@ -169,7 +171,7 @@ export const simulatedAnnealing = async (
     const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
     
     return {
-      name: `Highly Optimized Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats)`,
+      name: `Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats)`,
       totalDistance,
       totalSalesmen: routes.length,
       processingTime: Date.now() - startTime,
@@ -182,17 +184,18 @@ export const simulatedAnnealing = async (
   }
 };
 
-async function processClusterWithHighlyOptimizedAnnealing(
+async function processClusterWithStrictBeatCount(
   clusterId: number,
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
-  assignedIds: Set<string>
+  assignedIds: Set<string>,
+  targetBeats: number
 ): Promise<SalesmanRoute[]> {
-  console.log(`Processing cluster ${clusterId} with highly optimized annealing for ${customers.length} customers`);
+  console.log(`Processing cluster ${clusterId} with strict beat count: ${targetBeats} beats for ${customers.length} customers`);
   
-  // Create initial solution very quickly
-  let bestSolution = createVeryFastInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds));
+  // Create initial solution with exact beat count
+  let bestSolution = createStrictBeatCountInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds), targetBeats);
   let bestEnergy = calculateVerySimpleEnergy(bestSolution);
   
   let currentSolution = JSON.parse(JSON.stringify(bestSolution));
@@ -247,17 +250,18 @@ async function processClusterWithHighlyOptimizedAnnealing(
     });
   });
   
-  console.log(`Cluster ${clusterId} annealing completed in ${totalIterations} iterations`);
+  console.log(`Cluster ${clusterId} annealing completed in ${totalIterations} iterations with ${bestSolution.length} beats`);
   
   return bestSolution;
 }
 
-function createVeryFastInitialSolution(
+function createStrictBeatCountInitialSolution(
   clusterId: number, 
   customers: ClusteredCustomer[], 
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
-  assignedIds: Set<string>
+  assignedIds: Set<string>,
+  targetBeats: number
 ): SalesmanRoute[] {
   const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
@@ -265,17 +269,13 @@ function createVeryFastInitialSolution(
   // Create a working copy to avoid modifying the original
   const remainingCustomers = customers.filter(c => !assignedIds.has(c.id));
   
-  // Calculate optimal number of beats for this cluster
-  const targetBeats = Math.min(
-    config.beatsPerCluster, 
-    Math.ceil(remainingCustomers.length / config.minOutletsPerBeat),
-    Math.ceil(remainingCustomers.length / (config.maxOutletsPerBeat * 0.8)) // Allow some flexibility
-  );
-  
+  // Calculate optimal distribution of customers across beats
   const customersPerBeat = Math.ceil(remainingCustomers.length / targetBeats);
   
-  // Simple chunking approach for speed
-  for (let beatIndex = 0; beatIndex < targetBeats && remainingCustomers.length > 0; beatIndex++) {
+  console.log(`Creating exactly ${targetBeats} beats with ~${customersPerBeat} customers each`);
+  
+  // Create exactly targetBeats number of beats
+  for (let beatIndex = 0; beatIndex < targetBeats; beatIndex++) {
     const route: SalesmanRoute = {
       salesmanId: salesmanId++,
       stops: [],
@@ -286,9 +286,13 @@ function createVeryFastInitialSolution(
       distributorLng: distributor.longitude
     };
     
-    // Take customers for this beat
-    const beatSize = Math.min(customersPerBeat, remainingCustomers.length, config.maxOutletsPerBeat);
-    const beatCustomers = remainingCustomers.splice(0, beatSize);
+    // Calculate how many customers this beat should get
+    const remainingBeats = targetBeats - beatIndex;
+    const remainingCustomersCount = remainingCustomers.length;
+    const customersForThisBeat = Math.ceil(remainingCustomersCount / remainingBeats);
+    
+    // Take customers for this beat using simple chunking for speed
+    const beatCustomers = remainingCustomers.splice(0, customersForThisBeat);
     
     beatCustomers.forEach(customer => {
       route.stops.push({
@@ -306,24 +310,19 @@ function createVeryFastInitialSolution(
     
     if (route.stops.length > 0) {
       updateRouteMetrics(route, config);
-      routes.push(route);
     }
+    
+    routes.push(route); // Add route even if empty to maintain exact beat count
   }
   
-  // Handle any remaining customers
+  // Handle any remaining customers by distributing to existing beats
   if (remainingCustomers.length > 0) {
-    const route: SalesmanRoute = {
-      salesmanId: salesmanId++,
-      stops: [],
-      totalDistance: 0,
-      totalTime: 0,
-      clusterIds: [clusterId],
-      distributorLat: distributor.latitude,
-      distributorLng: distributor.longitude
-    };
-    
     remainingCustomers.forEach(customer => {
-      route.stops.push({
+      const targetRoute = routes.reduce((min, route) => 
+        route.stops.length < min.stops.length ? route : min
+      );
+      
+      targetRoute.stops.push({
         customerId: customer.id,
         latitude: customer.latitude,
         longitude: customer.longitude,
@@ -334,10 +333,8 @@ function createVeryFastInitialSolution(
         outletName: customer.outletName
       });
       assignedIds.add(customer.id);
+      updateRouteMetrics(targetRoute, config);
     });
-    
-    updateRouteMetrics(route, config);
-    routes.push(route);
   }
   
   return routes;
@@ -414,8 +411,7 @@ function moveCustomerToNearbyRoute(solution: SalesmanRoute[], config: Clustering
   // Find a nearby route (prefer routes in same cluster)
   const sameClusterRoutes = solution.filter((route, index) => 
     index !== sourceRouteIndex && 
-    route.clusterIds.some(id => sourceRoute.clusterIds.includes(id)) &&
-    route.stops.length < config.maxOutletsPerBeat
+    route.clusterIds.some(id => sourceRoute.clusterIds.includes(id))
   );
   
   if (sameClusterRoutes.length === 0) return;
@@ -443,47 +439,8 @@ async function applyFinalOptimization(
     }
   });
   
-  // Simple route merging for very small routes
-  const optimizedRoutes = [];
-  let i = 0;
-  
-  while (i < routes.length) {
-    const currentRoute = routes[i];
-    
-    // If route is very small, try to merge with next route
-    if (currentRoute.stops.length < config.minOutletsPerBeat && i + 1 < routes.length) {
-      const nextRoute = routes[i + 1];
-      
-      // Check if they can be merged
-      if (currentRoute.stops.length + nextRoute.stops.length <= config.maxOutletsPerBeat &&
-          currentRoute.clusterIds.some(id => nextRoute.clusterIds.includes(id))) {
-        
-        // Merge routes
-        const mergedRoute: SalesmanRoute = {
-          salesmanId: currentRoute.salesmanId,
-          stops: [...currentRoute.stops, ...nextRoute.stops],
-          totalDistance: 0,
-          totalTime: 0,
-          clusterIds: [...new Set([...currentRoute.clusterIds, ...nextRoute.clusterIds])],
-          distributorLat: distributor.latitude,
-          distributorLng: distributor.longitude
-        };
-        
-        updateRouteMetrics(mergedRoute, config);
-        optimizedRoutes.push(mergedRoute);
-        i += 2; // Skip next route as it's been merged
-      } else {
-        optimizedRoutes.push(currentRoute);
-        i++;
-      }
-    } else {
-      optimizedRoutes.push(currentRoute);
-      i++;
-    }
-  }
-  
   // Reassign sequential IDs
-  return optimizedRoutes.map((route, index) => ({
+  return routes.map((route, index) => ({
     ...route,
     salesmanId: index + 1,
     distributorLat: distributor.latitude,
