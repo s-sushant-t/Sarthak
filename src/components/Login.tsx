@@ -33,23 +33,59 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
       // For distributor codes (no @ symbol), check if they exist in the database
       if (!loginId.includes('@')) {
-        // Check if this is a valid distributor code
+        // First, check if this distributor code has a mapping to a specific table
+        const { data: mappingData, error: mappingError } = await supabase
+          .from('distributor_table_mapping')
+          .select('table_name')
+          .eq('distributor_code', loginId)
+          .limit(1);
+
+        if (mappingError) {
+          throw new Error('Database error. Please try again or contact your administrator.');
+        }
+
+        let tableName = 'distributor_routes'; // Default table
+        let distributorExists = false;
+
+        if (mappingData && mappingData.length > 0) {
+          // Use the mapped table name
+          tableName = mappingData[0].table_name;
+        }
+
+        // Check if this distributor code exists in the determined table
         const { data, error: fetchError } = await supabase
-          .from('distributor_routes')
+          .from(tableName)
           .select('distributor_code')
           .eq('distributor_code', loginId)
           .limit(1);
 
         if (fetchError) {
-          throw new Error('Database error. Please try again or contact your administrator.');
+          // If the mapped table doesn't exist or there's an error, try the default table
+          if (tableName !== 'distributor_routes') {
+            const { data: fallbackData, error: fallbackError } = await supabase
+              .from('distributor_routes')
+              .select('distributor_code')
+              .eq('distributor_code', loginId)
+              .limit(1);
+
+            if (fallbackError) {
+              throw new Error('Database error. Please try again or contact your administrator.');
+            }
+
+            distributorExists = fallbackData && fallbackData.length > 0;
+          } else {
+            throw new Error('Database error. Please try again or contact your administrator.');
+          }
+        } else {
+          distributorExists = data && data.length > 0;
         }
 
-        if (!data || data.length === 0) {
+        if (!distributorExists) {
           throw new Error('Invalid distributor code. Please check your credentials or contact your administrator.');
         }
 
         // For distributor login, the password should match the distributor code
-        if (data[0].distributor_code === loginId && loginId === password) {
+        if (loginId === password) {
           localStorage.setItem('isAuthenticated', 'true');
           localStorage.setItem('userType', 'distributor');
           localStorage.setItem('distributorCode', loginId);
