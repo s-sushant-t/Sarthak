@@ -23,12 +23,23 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setError('');
     
     try {
-      // Special case for EDIS admin - bypass Supabase auth
+      // Special case for EDIS admin - authenticate with Supabase using edis@example.com
       if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('userType', 'admin');
-        await onLogin(loginId, password);
-        return;
+        const { data, error: authError } = await supabase.auth.signInWithPassword({
+          email: 'edis@example.com',
+          password: 'EDIS_2024-25'
+        });
+
+        if (authError) {
+          throw new Error('EDIS admin authentication failed. Please ensure the edis@example.com user exists in Supabase Auth with password EDIS_2024-25');
+        }
+
+        if (data.user) {
+          localStorage.setItem('isAuthenticated', 'true');
+          localStorage.setItem('userType', 'admin');
+          await onLogin(loginId, password);
+          return;
+        }
       }
 
       // For distributor codes (no @ symbol), check if they exist in the database
@@ -98,6 +109,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       } else if (error.message?.includes('Invalid distributor code')) {
         errorMessage = error.message;
       } else if (error.message?.includes('distributor access')) {
+        errorMessage = error.message;
+      } else if (error.message?.includes('EDIS admin authentication failed')) {
         errorMessage = error.message;
       }
       
