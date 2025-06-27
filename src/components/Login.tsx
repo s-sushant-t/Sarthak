@@ -38,15 +38,18 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           .from('distributor_routes')
           .select('distributor_code')
           .eq('distributor_code', loginId)
-          .limit(1)
-          .single();
+          .limit(1);
 
-        if (fetchError || !data) {
+        if (fetchError) {
+          throw new Error('Database error. Please try again or contact your administrator.');
+        }
+
+        if (!data || data.length === 0) {
           throw new Error('Invalid distributor code. Please check your credentials or contact your administrator.');
         }
 
         // For distributor login, the password should match the distributor code
-        if (data.distributor_code === loginId && loginId === password) {
+        if (data[0].distributor_code === loginId && loginId === password) {
           localStorage.setItem('isAuthenticated', 'true');
           localStorage.setItem('userType', 'distributor');
           localStorage.setItem('distributorCode', loginId);
@@ -98,6 +101,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       } else if (error.message?.includes('Invalid distributor code')) {
         errorMessage = error.message;
       } else if (error.message?.includes('distributor access')) {
+        errorMessage = error.message;
+      } else if (error.message?.includes('Database error')) {
         errorMessage = error.message;
       }
       
