@@ -27,6 +27,7 @@ function App() {
     return stored ? JSON.parse(stored) : {
       'nearest-neighbor': null,
       'simulated-annealing': null,
+      'dbscan': null,
       'custom': null
     };
   });
@@ -62,6 +63,7 @@ function App() {
     setAlgorithmResults({
       'nearest-neighbor': null,
       'simulated-annealing': null,
+      'dbscan': null,
       'custom': null
     });
     setSelectedAlgorithm(null);
@@ -133,7 +135,7 @@ function App() {
       localStorage.setItem('locationData', JSON.stringify(finalData));
       localStorage.setItem('clusteringConfig', JSON.stringify(config));
       
-      const algorithms: AlgorithmType[] = ['nearest-neighbor', 'simulated-annealing'];
+      const algorithms: AlgorithmType[] = ['nearest-neighbor', 'simulated-annealing', 'dbscan'];
       
       for (const algorithm of algorithms) {
         try {

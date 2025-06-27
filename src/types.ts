@@ -45,6 +45,7 @@ export type RouteData = SalesmanRoute[];
 export type AlgorithmType = 
   | 'nearest-neighbor'
   | 'simulated-annealing'
+  | 'dbscan'
   | 'custom';
 
 export interface AlgorithmResult {

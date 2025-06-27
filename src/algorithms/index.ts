@@ -2,6 +2,7 @@ import { LocationData, AlgorithmType, AlgorithmResult } from '../types';
 import { ClusteringConfig } from '../components/ClusteringConfiguration';
 import { nearestNeighbor } from './nearestNeighbor';
 import { simulatedAnnealing } from './simulatedAnnealing';
+import { dbscan } from './dbscan';
 
 export const executeAlgorithm = async (
   algorithmType: AlgorithmType,
@@ -26,6 +27,9 @@ export const executeAlgorithm = async (
           simulatedAnnealing(locationData, config),
           timeoutPromise
         ]);
+        break;
+      case 'dbscan':
+        result = await dbscan(locationData, config);
         break;
       case 'custom':
         throw new Error('Custom algorithm cannot be executed directly');

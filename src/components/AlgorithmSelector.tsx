@@ -106,6 +106,11 @@ const AlgorithmSelector: React.FC<AlgorithmSelectorProps> = ({ results, selected
       type: 'simulated-annealing' as AlgorithmType,
       name: 'Simulated Annealing',
       description: 'Advanced optimization technique that refines cluster-based routes through controlled randomization'
+    },
+    {
+      type: 'dbscan' as AlgorithmType,
+      name: 'DBSCAN Beat Formation',
+      description: 'Density-based clustering that forms beats of outlets within 200m radius, creating compact geographical groups'
     }
   ];
 
