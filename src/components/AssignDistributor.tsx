@@ -58,6 +58,21 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         -- Grant full public access to the new table
         GRANT ALL ON ${tableName} TO public;
         GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO public;
+        
+        -- Enable Row Level Security
+        ALTER TABLE ${tableName} ENABLE ROW LEVEL SECURITY;
+        
+        -- Create policies for authenticated users
+        CREATE POLICY "Allow authenticated inserts for ${tableName}" ON public.${tableName} FOR INSERT TO authenticated WITH CHECK (true);
+        CREATE POLICY "Allow authenticated selects for ${tableName}" ON public.${tableName} FOR SELECT TO authenticated USING (true);
+        CREATE POLICY "Allow authenticated updates for ${tableName}" ON public.${tableName} FOR UPDATE TO authenticated USING (true);
+        CREATE POLICY "Allow authenticated deletes for ${tableName}" ON public.${tableName} FOR DELETE TO authenticated USING (true);
+        
+        -- Create policies for anonymous users (public access)
+        CREATE POLICY "Allow public inserts for ${tableName}" ON public.${tableName} FOR INSERT TO anon WITH CHECK (true);
+        CREATE POLICY "Allow public selects for ${tableName}" ON public.${tableName} FOR SELECT TO anon USING (true);
+        CREATE POLICY "Allow public updates for ${tableName}" ON public.${tableName} FOR UPDATE TO anon USING (true);
+        CREATE POLICY "Allow public deletes for ${tableName}" ON public.${tableName} FOR DELETE TO anon USING (true);
       `;
       
       // Execute the SQL using the RPC function
