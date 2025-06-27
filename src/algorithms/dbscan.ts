@@ -230,7 +230,7 @@ async function createOptimizedDBSCANBeats(
   const remainingCustomers = [...customers];
   
   // Apply fast DBSCAN clustering to find dense groups
-  const dbscanClusters = performFastDBSCAN(remainingCustomers, EPS, MIN_PTS);
+  const dbscanClusters = await performFastDBSCAN(remainingCustomers, EPS, MIN_PTS);
   
   console.log(`Fast DBSCAN found ${dbscanClusters.length} dense clusters in cluster ${clusterId}`);
   
@@ -279,11 +279,11 @@ async function createOptimizedDBSCANBeats(
   return routes;
 }
 
-function performFastDBSCAN(
+async function performFastDBSCAN(
   customers: ClusteredCustomer[],
   eps: number,
   minPts: number
-): ClusteredCustomer[][] {
+): Promise<ClusteredCustomer[][]> {
   const clusters: ClusteredCustomer[][] = [];
   const visited = new Set<string>();
   const processed = new Set<string>();
