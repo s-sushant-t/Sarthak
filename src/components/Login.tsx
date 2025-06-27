@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogIn, Binary, Network, Cpu } from 'lucide-react';
+import { LogIn, Binary, Network, Cpu, Mail } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -102,10 +102,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         <div className="bg-white/10 backdrop-blur-lg py-8 px-4 shadow-2xl sm:rounded-xl sm:px-10 border border-white/20">
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div>
-              <label htmlFor="loginId" className="block text-sm font-medium text-blue-200">
-                Email
+              <label htmlFor="loginId" className="block text-sm font-medium text-blue-200 mb-2">
+                <div className="flex items-center gap-2">
+                  <Mail className="w-4 h-4" />
+                  Email Address
+                </div>
               </label>
-              <div className="mt-1">
+              <div className="relative">
                 <input
                   id="loginId"
                   name="loginId"
@@ -113,14 +116,22 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   required
                   value={loginId}
                   onChange={(e) => setLoginId(e.target.value)}
-                  className="appearance-none block w-full px-3 py-2 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                  placeholder="Enter your email address"
+                  className="appearance-none block w-full px-3 py-2 pr-8 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                  placeholder="user@company.com"
                   disabled={isLoading}
                 />
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                  <span className="text-blue-300/70 text-lg">@</span>
+                </div>
               </div>
-              <p className="mt-1 text-xs text-blue-300/70">
-                Use 'EDIS' for admin access or your distributor email
-              </p>
+              <div className="mt-2 space-y-1">
+                <p className="text-xs text-blue-300/70">
+                  • Use 'EDIS' for administrator access
+                </p>
+                <p className="text-xs text-blue-300/70">
+                  • Use your assigned email address for distributor access
+                </p>
+              </div>
             </div>
 
             <div>
@@ -156,7 +167,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               {isLoading ? (
                 <div className="flex items-center">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                  Logging in...
+                  Authenticating...
                 </div>
               ) : (
                 <>
@@ -168,11 +179,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </form>
 
           <div className="mt-6 p-4 bg-blue-900/20 rounded-lg border border-blue-500/20">
-            <h4 className="text-sm font-medium text-blue-200 mb-2">Authentication Note:</h4>
-            <p className="text-xs text-blue-300/80">
-              This system now uses secure Supabase authentication. Users must be registered in the system before they can log in.
-              Contact your administrator if you need access.
-            </p>
+            <h4 className="text-sm font-medium text-blue-200 mb-2">Authentication Requirements:</h4>
+            <ul className="text-xs text-blue-300/80 space-y-1">
+              <li>• Email address must include the @ symbol</li>
+              <li>• Users must be registered in the system before login</li>
+              <li>• Contact your administrator for account setup</li>
+              <li>• Secure authentication powered by Supabase</li>
+            </ul>
           </div>
         </div>
       </div>
