@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogIn, Binary, Network, Cpu, Mail } from 'lucide-react';
+import { LogIn, Binary, Network, Cpu } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -23,7 +23,41 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setError('');
     
     try {
-      // Use Supabase authentication
+      // Special case for EDIS admin - bypass Supabase auth
+      if (loginId === 'EDIS' && password === 'EDIS_2024-25') {
+        localStorage.setItem('isAuthenticated', 'true');
+        localStorage.setItem('userType', 'admin');
+        await onLogin(loginId, password);
+        return;
+      }
+
+      // For distributor codes (no @ symbol), check if they exist in the database
+      if (!loginId.includes('@')) {
+        // Check if this is a valid distributor code
+        const { data, error: fetchError } = await supabase
+          .from('distributor_routes')
+          .select('distributor_code')
+          .eq('distributor_code', loginId)
+          .limit(1)
+          .single();
+
+        if (fetchError || !data) {
+          throw new Error('Invalid distributor code. Please check your credentials or contact your administrator.');
+        }
+
+        // For distributor login, the password should match the distributor code
+        if (data.distributor_code === loginId && loginId === password) {
+          localStorage.setItem('isAuthenticated', 'true');
+          localStorage.setItem('userType', 'distributor');
+          localStorage.setItem('distributorCode', loginId);
+          window.location.reload(); // Trigger app re-render to pick up new auth state
+          return;
+        } else {
+          throw new Error('Invalid credentials. For distributor access, use your distributor code as both username and password.');
+        }
+      }
+
+      // For email-based login, use Supabase authentication
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email: loginId,
         password: password
@@ -34,29 +68,22 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       }
 
       if (data.user) {
-        // Check if this is the admin user
-        if (loginId === 'EDIS') {
-          localStorage.setItem('isAuthenticated', 'true');
-          localStorage.setItem('userType', 'admin');
-          await onLogin(loginId, password);
-        } else {
-          // For distributor users, check if they have routes assigned
-          const { data: routeData, error: fetchError } = await supabase
-            .from('distributor_routes')
-            .select('distributor_code')
-            .eq('distributor_code', loginId)
-            .limit(1);
+        // Check if this user has distributor routes assigned
+        const { data: routeData, error: fetchError } = await supabase
+          .from('distributor_routes')
+          .select('distributor_code')
+          .eq('distributor_code', data.user.email)
+          .limit(1);
 
-          if (fetchError) {
-            console.error('Error checking distributor routes:', fetchError);
-            // Don't throw error here, user might be authenticated but no routes assigned yet
-          }
-
-          localStorage.setItem('isAuthenticated', 'true');
-          localStorage.setItem('userType', 'distributor');
-          localStorage.setItem('distributorCode', loginId);
-          window.location.reload(); // Trigger app re-render to pick up new auth state
+        if (fetchError) {
+          console.error('Error checking distributor routes:', fetchError);
+          // Don't throw error here, user might be authenticated but no routes assigned yet
         }
+
+        localStorage.setItem('isAuthenticated', 'true');
+        localStorage.setItem('userType', 'distributor');
+        localStorage.setItem('distributorCode', data.user.email || loginId);
+        window.location.reload(); // Trigger app re-render to pick up new auth state
       }
     } catch (error: any) {
       console.error('Login error:', error);
@@ -68,6 +95,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         errorMessage = 'Please confirm your email address before logging in.';
       } else if (error.message?.includes('Too many requests')) {
         errorMessage = 'Too many login attempts. Please try again later.';
+      } else if (error.message?.includes('Invalid distributor code')) {
+        errorMessage = error.message;
+      } else if (error.message?.includes('distributor access')) {
+        errorMessage = error.message;
       }
       
       setError(errorMessage);
@@ -102,34 +133,37 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         <div className="bg-white/10 backdrop-blur-lg py-8 px-4 shadow-2xl sm:rounded-xl sm:px-10 border border-white/20">
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div>
-              <label htmlFor="loginId" className="block text-sm font-medium text-blue-200 mb-2">
-                <div className="flex items-center gap-2">
-                  <Mail className="w-4 h-4" />
-                  Email Address
-                </div>
+              <label htmlFor="loginId" className="block text-sm font-medium text-blue-200">
+                Login ID
               </label>
-              <div className="relative">
+              <div className="mt-1">
                 <input
                   id="loginId"
                   name="loginId"
-                  type="email"
+                  type="text"
                   required
                   value={loginId}
-                  onChange={(e) => setLoginId(e.target.value)}
-                  className="appearance-none block w-full px-3 py-2 pr-8 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                  placeholder="user@company.com"
+                  onChange={(e) => {
+                    setLoginId(e.target.value);
+                    // Auto-set password for distributor login (no @ symbol)
+                    if (!e.target.value.includes('@')) {
+                      setPassword(e.target.value);
+                    }
+                  }}
+                  className="appearance-none block w-full px-3 py-2 border border-white/20 rounded-md shadow-sm placeholder-blue-300/50 bg-white/10 text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                  placeholder="Enter EDIS, distributor code, or email"
                   disabled={isLoading}
                 />
-                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                  <span className="text-blue-300/70 text-lg">@</span>
-                </div>
               </div>
               <div className="mt-2 space-y-1">
                 <p className="text-xs text-blue-300/70">
                   • Use 'EDIS' for administrator access
                 </p>
                 <p className="text-xs text-blue-300/70">
-                  • Use your assigned email address for distributor access
+                  • Use your distributor code (e.g., DIST001) for distributor access
+                </p>
+                <p className="text-xs text-blue-300/70">
+                  • Use your email address for registered user access
                 </p>
               </div>
             </div>
@@ -151,6 +185,11 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   disabled={isLoading}
                 />
               </div>
+              {!loginId.includes('@') && loginId && (
+                <p className="mt-1 text-xs text-blue-300/70">
+                  For distributor access, password should match your distributor code
+                </p>
+              )}
             </div>
 
             {error && (
@@ -179,12 +218,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </form>
 
           <div className="mt-6 p-4 bg-blue-900/20 rounded-lg border border-blue-500/20">
-            <h4 className="text-sm font-medium text-blue-200 mb-2">Authentication Requirements:</h4>
+            <h4 className="text-sm font-medium text-blue-200 mb-2">Access Methods:</h4>
             <ul className="text-xs text-blue-300/80 space-y-1">
-              <li>• Email address must include the @ symbol</li>
-              <li>• Users must be registered in the system before login</li>
-              <li>• Contact your administrator for account setup</li>
-              <li>• Secure authentication powered by Supabase</li>
+              <li>• <strong>Admin:</strong> Use 'EDIS' with password 'EDIS_2024-25'</li>
+              <li>• <strong>Distributor:</strong> Use your distributor code as both username and password</li>
+              <li>• <strong>Registered User:</strong> Use your email address and assigned password</li>
+              <li>• Contact your administrator for account setup if needed</li>
             </ul>
           </div>
         </div>

@@ -62,11 +62,11 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         TO authenticated
         USING (
           (auth.jwt()->>'email' = 'EDIS') OR 
-          (distributor_code = auth.jwt()->>'email')
+          (distributor_code = '${distributorCode}')
         )
         WITH CHECK (
           (auth.jwt()->>'email' = 'EDIS') OR 
-          (distributor_code = auth.jwt()->>'email')
+          (distributor_code = '${distributorCode}')
         );
       `;
       
@@ -114,8 +114,8 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     try {
       // Check if user is authenticated
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error('You must be logged in to assign routes');
+      if (!user && localStorage.getItem('userType') !== 'admin') {
+        throw new Error('You must be logged in as an administrator to assign routes');
       }
 
       // Calculate total records to process
@@ -276,19 +276,19 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
       <div className="space-y-4">
         <div>
           <label htmlFor="distributorCode" className="block text-sm font-medium text-gray-700 mb-2">
-            Distributor Email
+            Distributor Code
           </label>
           <input
             id="distributorCode"
-            type="email"
+            type="text"
             value={distributorCode}
             onChange={(e) => setDistributorCode(e.target.value.trim())}
-            placeholder="Enter distributor email (e.g., distributor@company.com)"
+            placeholder="Enter distributor code (e.g., DIST001)"
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             disabled={isLoading}
           />
           <p className="mt-1 text-xs text-gray-500">
-            This should match the email address the distributor will use to log in
+            This distributor code will be used for login access (same code for username and password)
           </p>
         </div>
 
@@ -344,8 +344,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
       <div className="mt-4 p-4 bg-blue-50 rounded-lg">
         <p className="text-sm text-blue-800">
           <strong>Note:</strong> The system will create a dedicated table for this distributor to ensure data isolation. 
-          The distributor will use their email address to log in and access their assigned routes. Make sure the distributor 
-          is registered in the system with the email address you specify above.
+          The distributor will use their distributor code as both username and password to log in and access their assigned routes.
         </p>
       </div>
     </div>

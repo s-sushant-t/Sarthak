@@ -73,23 +73,34 @@ const BeatHygieneCorrection: React.FC = () => {
   const [distributorCode, setDistributorCode] = useState<string | null>(null);
   const { latitude, longitude, error: locationError } = useGeolocation();
 
-  // Get distributor code from authenticated user
+  // Get distributor code from authenticated user or localStorage
   useEffect(() => {
     const getDistributorCode = async () => {
       try {
+        // First try to get from Supabase auth
         const { data: { user } } = await supabase.auth.getUser();
         if (user?.email) {
           setDistributorCode(user.email);
           localStorage.setItem('distributorCode', user.email);
         } else {
-          // Fallback to localStorage for backward compatibility
+          // Fallback to localStorage for distributor code login
           const storedCode = localStorage.getItem('distributorCode');
-          setDistributorCode(storedCode);
+          if (storedCode) {
+            setDistributorCode(storedCode);
+          } else {
+            // If no stored code, redirect to login
+            window.location.href = '/';
+          }
         }
       } catch (error) {
         console.error('Error getting user:', error);
+        // Fallback to localStorage
         const storedCode = localStorage.getItem('distributorCode');
-        setDistributorCode(storedCode);
+        if (storedCode) {
+          setDistributorCode(storedCode);
+        } else {
+          window.location.href = '/';
+        }
       }
     };
 
