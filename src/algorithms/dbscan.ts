@@ -10,11 +10,7 @@ export const dbscan = async (
   
   console.log(`Starting DBSCAN-based beat formation with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
-  console.log(`REQUIRED TOTAL BEATS: ${config.totalClusters * config.beatsPerCluster}`);
   console.log(`DBSCAN parameters: 200m radius, minimum ${config.minOutletsPerBeat} outlets per beat`);
-  
-  // CRITICAL: Calculate exact number of beats required
-  const REQUIRED_TOTAL_BEATS = config.totalClusters * config.beatsPerCluster;
   
   // Add timeout mechanism
   const startTime = Date.now();
@@ -47,7 +43,7 @@ export const dbscan = async (
     const routes: SalesmanRoute[] = [];
     let currentSalesmanId = 1;
     
-    // Process each cluster independently using DBSCAN with exact beat count enforcement
+    // Process each cluster independently using DBSCAN
     for (const clusterId of Object.keys(customersByCluster)) {
       checkTimeout(); // Check timeout before processing each cluster
       
@@ -55,32 +51,24 @@ export const dbscan = async (
       const clusterSize = clusterCustomers.length;
       
       console.log(`Processing cluster ${clusterId} with ${clusterCustomers.length} customers using DBSCAN`);
-      console.log(`Target beats for this cluster: ${config.beatsPerCluster}`);
       
       // CRITICAL: Track assigned customers within this cluster only
       const clusterAssignedIds = new Set<string>();
       
-      // Create DBSCAN-based beats within the cluster with EXACT beat count enforcement
-      const clusterRoutes = await createDBSCANBasedBeatsWithExactCount(
+      // Create DBSCAN-based beats within the cluster with timeout checking
+      const clusterRoutes = await createDBSCANBasedBeatsWithMinimumSize(
         clusterCustomers,
         distributor,
         config,
         currentSalesmanId,
         Number(clusterId),
         clusterAssignedIds,
-        config.beatsPerCluster, // EXACT number of beats required for this cluster
         checkTimeout
       );
       
       // Verify all cluster customers are assigned exactly once
       const assignedInCluster = clusterRoutes.reduce((count, route) => count + route.stops.length, 0);
-      console.log(`Cluster ${clusterId}: ${assignedInCluster}/${clusterSize} customers assigned in ${clusterRoutes.length} beats`);
-      
-      // CRITICAL: Verify exact beat count for this cluster
-      if (clusterRoutes.length !== config.beatsPerCluster) {
-        console.error(`CLUSTER ${clusterId} BEAT COUNT ERROR: Expected ${config.beatsPerCluster} beats, got ${clusterRoutes.length}`);
-        throw new Error(`Beat count constraint violated for cluster ${clusterId}`);
-      }
+      console.log(`Cluster ${clusterId}: ${assignedInCluster}/${clusterSize} customers assigned`);
       
       if (assignedInCluster !== clusterSize) {
         console.error(`CLUSTER ${clusterId} ERROR: Expected ${clusterSize} customers, got ${assignedInCluster}`);
@@ -118,13 +106,7 @@ export const dbscan = async (
       routes.push(...clusterRoutes);
       currentSalesmanId += clusterRoutes.length;
       
-      console.log(`Cluster ${clusterId} complete: ${clusterRoutes.length} DBSCAN-based beats created (EXACT TARGET MET)`);
-    }
-    
-    // CRITICAL: Verify total beat count matches requirement
-    if (routes.length !== REQUIRED_TOTAL_BEATS) {
-      console.error(`CRITICAL BEAT COUNT ERROR: Expected ${REQUIRED_TOTAL_BEATS} total beats, got ${routes.length}`);
-      throw new Error(`Total beat count constraint violated: Expected ${REQUIRED_TOTAL_BEATS}, got ${routes.length}`);
+      console.log(`Cluster ${clusterId} complete: ${clusterRoutes.length} DBSCAN-based beats created`);
     }
     
     // CRITICAL: Final verification - ensure ALL customers are assigned exactly once
@@ -150,25 +132,32 @@ export const dbscan = async (
         let targetRoute = sameClusterRoutes[0];
         
         if (!targetRoute) {
-          // Find any route with space (emergency case)
-          targetRoute = routes.find(route => route.stops.length < config.maxOutletsPerBeat);
+          // Create emergency route if no space in existing routes
+          targetRoute = {
+            salesmanId: currentSalesmanId++,
+            stops: [],
+            totalDistance: 0,
+            totalTime: 0,
+            clusterIds: [customer.clusterId],
+            distributorLat: distributor.latitude,
+            distributorLng: distributor.longitude
+          };
+          routes.push(targetRoute);
         }
         
-        if (targetRoute) {
-          targetRoute.stops.push({
-            customerId: customer.id,
-            latitude: customer.latitude,
-            longitude: customer.longitude,
-            distanceToNext: 0,
-            timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
-            clusterId: customer.clusterId,
-            outletName: customer.outletName
-          });
-          
-          globalAssignedCustomerIds.add(customer.id);
-          console.log(`Emergency assigned customer ${customer.id} to route ${targetRoute.salesmanId}`);
-        }
+        targetRoute.stops.push({
+          customerId: customer.id,
+          latitude: customer.latitude,
+          longitude: customer.longitude,
+          distanceToNext: 0,
+          timeToNext: 0,
+          visitTime: config.customerVisitTimeMinutes,
+          clusterId: customer.clusterId,
+          outletName: customer.outletName
+        });
+        
+        globalAssignedCustomerIds.add(customer.id);
+        console.log(`Emergency assigned customer ${customer.id} to route ${targetRoute.salesmanId}`);
       });
     }
     
@@ -192,8 +181,6 @@ export const dbscan = async (
     console.log(`- Unique customers: ${uniqueCustomerIds.size}`);
     console.log(`- Expected customers: ${totalCustomers}`);
     console.log(`- Total beats created: ${finalRoutes.length}`);
-    console.log(`- Required beats: ${REQUIRED_TOTAL_BEATS}`);
-    console.log(`- Beat count constraint satisfied: ${finalRoutes.length === REQUIRED_TOTAL_BEATS ? 'YES' : 'NO'}`);
     
     // Report beats per cluster
     const beatsByCluster = finalRoutes.reduce((acc, route) => {
@@ -206,28 +193,16 @@ export const dbscan = async (
     
     console.log('Beats per cluster:', beatsByCluster);
     
-    // Verify each cluster has exactly the required number of beats
-    Object.entries(beatsByCluster).forEach(([clusterId, beatCount]) => {
-      if (beatCount !== config.beatsPerCluster) {
-        console.error(`Cluster ${clusterId} has ${beatCount} beats, expected ${config.beatsPerCluster}`);
-      }
-    });
-    
     if (finalCustomerCount !== totalCustomers || uniqueCustomerIds.size !== totalCustomers) {
       console.error(`FINAL ERROR: Customer count mismatch!`);
       console.error(`Expected: ${totalCustomers}, Got: ${finalCustomerCount}, Unique: ${uniqueCustomerIds.size}`);
-    }
-    
-    if (finalRoutes.length !== REQUIRED_TOTAL_BEATS) {
-      console.error(`FINAL ERROR: Beat count mismatch!`);
-      console.error(`Expected: ${REQUIRED_TOTAL_BEATS}, Got: ${finalRoutes.length}`);
     }
     
     // Calculate total distance
     const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
     
     return {
-      name: `DBSCAN-Based Beat Formation (${config.totalClusters} Clusters × ${config.beatsPerCluster} Beats = ${finalRoutes.length} Total Beats)`,
+      name: `DBSCAN-Based Beat Formation (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
       totalDistance,
       totalSalesmen: finalRoutes.length,
       processingTime: Date.now() - startTime,
@@ -236,38 +211,26 @@ export const dbscan = async (
     
   } catch (error) {
     console.error('DBSCAN algorithm failed:', error);
-    // Fallback to simple approach that guarantees exact beat count
-    return createFallbackSolutionWithExactBeatCount(locationData, config);
+    // Fallback to simple nearest neighbor approach
+    return createFallbackSolution(locationData, config);
   }
 };
 
-async function createDBSCANBasedBeatsWithExactCount(
+async function createDBSCANBasedBeatsWithMinimumSize(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   startingSalesmanId: number,
   clusterId: number,
   assignedIds: Set<string>,
-  requiredBeats: number,
   checkTimeout: () => void
 ): Promise<SalesmanRoute[]> {
-  if (customers.length === 0) {
-    // Even if no customers, we need to create empty beats to meet the count requirement
-    console.log(`Creating ${requiredBeats} empty beats for cluster ${clusterId} (no customers)`);
-    return Array.from({ length: requiredBeats }, (_, index) => ({
-      salesmanId: startingSalesmanId + index,
-      stops: [],
-      totalDistance: 0,
-      totalTime: 0,
-      clusterIds: [clusterId],
-      distributorLat: distributor.latitude,
-      distributorLng: distributor.longitude
-    }));
-  }
+  if (customers.length === 0) return [];
   
-  console.log(`Creating EXACTLY ${requiredBeats} DBSCAN-based beats for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`Creating DBSCAN-based beats for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`Minimum outlets per beat: ${config.minOutletsPerBeat}, Maximum: ${config.maxOutletsPerBeat}`);
   
-  let routes: SalesmanRoute[] = [];
+  const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
   
   // DBSCAN parameters - optimized for performance
@@ -283,7 +246,7 @@ async function createDBSCANBasedBeatsWithExactCount(
     
     console.log(`DBSCAN found ${dbscanClusters.length} dense clusters in cluster ${clusterId}`);
     
-    // Step 1: Create initial beats from DBSCAN clusters
+    // Process each DBSCAN cluster to create initial beats
     const initialBeats: SalesmanRoute[] = [];
     
     for (let index = 0; index < dbscanClusters.length; index++) {
@@ -300,7 +263,7 @@ async function createDBSCANBasedBeatsWithExactCount(
           if (route) initialBeats.push(route);
         });
       } else {
-        // Create a beat from this DBSCAN cluster
+        // Create a beat from this DBSCAN cluster (regardless of size for now)
         const route = createRouteFromCustomers(dbscanCluster, salesmanId++, clusterId, distributor, config, assignedIds);
         if (route) initialBeats.push(route);
       }
@@ -323,271 +286,221 @@ async function createDBSCANBasedBeatsWithExactCount(
       }
     }
     
-    console.log(`Created ${initialBeats.length} initial beats, need exactly ${requiredBeats} beats`);
+    // CRITICAL: Apply minimum size constraint - merge undersized beats with nearest beats
+    const finalBeats = enforceMinimumBeatSize(initialBeats, config, distributor);
     
-    // Step 2: Adjust beat count to match EXACT requirement
-    routes = adjustBeatCountToExactRequirement(initialBeats, requiredBeats, config, distributor, clusterId);
+    console.log(`Cluster ${clusterId}: Created ${initialBeats.length} initial beats, merged to ${finalBeats.length} final beats`);
     
-    console.log(`Cluster ${clusterId}: Adjusted to exactly ${routes.length} beats (target: ${requiredBeats})`);
+    routes.push(...finalBeats);
     
   } catch (error) {
-    console.warn('DBSCAN processing failed, using simple grouping with exact count:', error);
+    console.warn('DBSCAN processing failed, using simple grouping:', error);
     
-    // Fallback: Simple grouping by proximity with exact beat count
-    routes = createExactBeatCountFallback(remainingCustomers, requiredBeats, config, distributor, clusterId, assignedIds, startingSalesmanId);
-  }
-  
-  // CRITICAL: Verify exact beat count
-  if (routes.length !== requiredBeats) {
-    console.error(`Beat count mismatch for cluster ${clusterId}: Expected ${requiredBeats}, got ${routes.length}`);
-    // Force adjustment
-    routes = forceExactBeatCount(routes, requiredBeats, config, distributor, clusterId);
+    // Fallback: Simple grouping by proximity
+    while (remainingCustomers.length > 0) {
+      const batchSize = Math.min(config.maxOutletsPerBeat, remainingCustomers.length);
+      const batch = remainingCustomers.splice(0, batchSize);
+      
+      const route = createRouteFromCustomers(batch, salesmanId++, clusterId, distributor, config, assignedIds);
+      if (route) routes.push(route);
+    }
+    
+    // Apply minimum size constraint to fallback routes as well
+    const finalRoutes = enforceMinimumBeatSize(routes, config, distributor);
+    return finalRoutes;
   }
   
   return routes;
 }
 
-function adjustBeatCountToExactRequirement(
-  initialBeats: SalesmanRoute[],
-  requiredBeats: number,
-  config: ClusteringConfig,
-  distributor: { latitude: number; longitude: number },
-  clusterId: number
-): SalesmanRoute[] {
-  console.log(`Adjusting ${initialBeats.length} initial beats to exactly ${requiredBeats} required beats`);
-  
-  if (initialBeats.length === requiredBeats) {
-    console.log('Beat count already matches requirement');
-    return initialBeats;
-  }
-  
-  if (initialBeats.length < requiredBeats) {
-    // Need to create more beats by splitting existing ones
-    console.log(`Need to create ${requiredBeats - initialBeats.length} additional beats by splitting`);
-    return splitBeatsToIncreaseCount(initialBeats, requiredBeats, config, distributor, clusterId);
-  } else {
-    // Need to merge beats to reduce count
-    console.log(`Need to merge ${initialBeats.length - requiredBeats} beats to reduce count`);
-    return mergeBeatsToReduceCount(initialBeats, requiredBeats, config, distributor);
-  }
-}
-
-function splitBeatsToIncreaseCount(
+function enforceMinimumBeatSize(
   beats: SalesmanRoute[],
-  requiredBeats: number,
-  config: ClusteringConfig,
-  distributor: { latitude: number; longitude: number },
-  clusterId: number
-): SalesmanRoute[] {
-  const result = [...beats];
-  const additionalBeatsNeeded = requiredBeats - beats.length;
-  
-  console.log(`Splitting beats to create ${additionalBeatsNeeded} additional beats`);
-  
-  // Sort beats by size (largest first) to split the biggest ones
-  const sortedBeats = result.sort((a, b) => b.stops.length - a.stops.length);
-  
-  let beatsCreated = 0;
-  
-  for (let i = 0; i < sortedBeats.length && beatsCreated < additionalBeatsNeeded; i++) {
-    const beat = sortedBeats[i];
-    
-    if (beat.stops.length >= 2) { // Can only split if at least 2 customers
-      const midPoint = Math.ceil(beat.stops.length / 2);
-      
-      // Create new beat with second half of customers
-      const newBeat: SalesmanRoute = {
-        salesmanId: result.length + beatsCreated + 1, // Temporary ID
-        stops: beat.stops.splice(midPoint),
-        totalDistance: 0,
-        totalTime: 0,
-        clusterIds: [clusterId],
-        distributorLat: distributor.latitude,
-        distributorLng: distributor.longitude
-      };
-      
-      result.push(newBeat);
-      beatsCreated++;
-      
-      console.log(`Split beat ${beat.salesmanId}: ${beat.stops.length + newBeat.stops.length} customers → ${beat.stops.length} + ${newBeat.stops.length}`);
-    }
-  }
-  
-  // If we still need more beats, create empty ones
-  while (result.length < requiredBeats) {
-    const emptyBeat: SalesmanRoute = {
-      salesmanId: result.length + 1, // Temporary ID
-      stops: [],
-      totalDistance: 0,
-      totalTime: 0,
-      clusterIds: [clusterId],
-      distributorLat: distributor.latitude,
-      distributorLng: distributor.longitude
-    };
-    
-    result.push(emptyBeat);
-    console.log(`Created empty beat to meet count requirement`);
-  }
-  
-  return result;
-}
-
-function mergeBeatsToReduceCount(
-  beats: SalesmanRoute[],
-  requiredBeats: number,
   config: ClusteringConfig,
   distributor: { latitude: number; longitude: number }
 ): SalesmanRoute[] {
-  const result = [...beats];
-  const beatsToRemove = beats.length - requiredBeats;
+  console.log(`Enforcing minimum beat size of ${config.minOutletsPerBeat} outlets per beat`);
+  console.log(`Input: ${beats.length} beats with sizes: [${beats.map(b => b.stops.length).join(', ')}]`);
   
-  console.log(`Merging beats to remove ${beatsToRemove} beats`);
+  if (beats.length === 0) return beats;
   
-  // Sort beats by size (smallest first) to merge the smallest ones
-  result.sort((a, b) => a.stops.length - b.stops.length);
+  // Separate beats into undersized and properly sized
+  const undersizedBeats = beats.filter(beat => beat.stops.length < config.minOutletsPerBeat);
+  const properSizedBeats = beats.filter(beat => beat.stops.length >= config.minOutletsPerBeat);
   
-  let beatsRemoved = 0;
+  console.log(`Found ${undersizedBeats.length} undersized beats and ${properSizedBeats.length} properly sized beats`);
   
-  while (beatsRemoved < beatsToRemove && result.length > 1) {
-    // Take the smallest beat
-    const smallestBeat = result.shift()!;
-    
-    // Find the best target beat to merge with (one that won't exceed max size)
-    let targetBeat = null;
-    let minSizeIncrease = Infinity;
-    
-    for (const beat of result) {
-      if (beat.stops.length + smallestBeat.stops.length <= config.maxOutletsPerBeat) {
-        const sizeIncrease = smallestBeat.stops.length;
-        if (sizeIncrease < minSizeIncrease) {
-          minSizeIncrease = sizeIncrease;
-          targetBeat = beat;
-        }
-      }
-    }
-    
-    if (targetBeat) {
-      // Merge smallest beat into target beat
-      targetBeat.stops.push(...smallestBeat.stops);
-      
-      // Update cluster IDs
-      const allClusterIds = new Set([...targetBeat.clusterIds, ...smallestBeat.clusterIds]);
-      targetBeat.clusterIds = Array.from(allClusterIds);
-      
-      beatsRemoved++;
-      console.log(`Merged beat with ${smallestBeat.stops.length} customers into beat with ${targetBeat.stops.length - smallestBeat.stops.length} customers`);
-    } else {
-      // If no suitable target found, put the beat back and try with next smallest
-      result.unshift(smallestBeat);
-      break;
-    }
+  if (undersizedBeats.length === 0) {
+    console.log('No undersized beats found, returning original beats');
+    return beats;
   }
   
-  return result;
-}
-
-function forceExactBeatCount(
-  beats: SalesmanRoute[],
-  requiredBeats: number,
-  config: ClusteringConfig,
-  distributor: { latitude: number; longitude: number },
-  clusterId: number
-): SalesmanRoute[] {
-  console.log(`Force adjusting beat count from ${beats.length} to ${requiredBeats}`);
+  // If all beats are undersized, merge them intelligently
+  if (properSizedBeats.length === 0) {
+    console.log('All beats are undersized, merging them intelligently');
+    return mergeAllUndersizedBeats(undersizedBeats, config, distributor);
+  }
   
-  if (beats.length === requiredBeats) return beats;
+  // Merge each undersized beat with the nearest properly sized beat
+  const finalBeats = [...properSizedBeats];
   
-  if (beats.length < requiredBeats) {
-    // Add empty beats
-    const result = [...beats];
-    while (result.length < requiredBeats) {
-      result.push({
-        salesmanId: result.length + 1,
-        stops: [],
-        totalDistance: 0,
-        totalTime: 0,
-        clusterIds: [clusterId],
-        distributorLat: distributor.latitude,
-        distributorLng: distributor.longitude
-      });
-    }
-    return result;
-  } else {
-    // Remove excess beats by merging them into remaining ones
-    const result = beats.slice(0, requiredBeats);
-    const excessBeats = beats.slice(requiredBeats);
+  undersizedBeats.forEach(undersizedBeat => {
+    console.log(`Processing undersized beat ${undersizedBeat.salesmanId} with ${undersizedBeat.stops.length} outlets`);
     
-    // Distribute customers from excess beats
-    excessBeats.forEach(excessBeat => {
-      excessBeat.stops.forEach(stop => {
-        // Find the beat with the least customers
-        const targetBeat = result.reduce((min, beat) => 
-          beat.stops.length < min.stops.length ? beat : min
+    // Find the nearest properly sized beat that can accommodate the undersized beat
+    let bestTargetBeat: SalesmanRoute | null = null;
+    let minDistance = Infinity;
+    
+    for (const targetBeat of finalBeats) {
+      // Check if target beat can accommodate the undersized beat without exceeding max size
+      if (targetBeat.stops.length + undersizedBeat.stops.length <= config.maxOutletsPerBeat) {
+        // Calculate distance between beat centroids
+        const undersizedCentroid = calculateBeatCentroid(undersizedBeat);
+        const targetCentroid = calculateBeatCentroid(targetBeat);
+        
+        const distance = calculateHaversineDistance(
+          undersizedCentroid.latitude, undersizedCentroid.longitude,
+          targetCentroid.latitude, targetCentroid.longitude
         );
         
-        if (targetBeat.stops.length < config.maxOutletsPerBeat) {
-          targetBeat.stops.push(stop);
+        if (distance < minDistance) {
+          minDistance = distance;
+          bestTargetBeat = targetBeat;
         }
-      });
-    });
+      }
+    }
     
-    return result;
+    if (bestTargetBeat) {
+      console.log(`Merging undersized beat ${undersizedBeat.salesmanId} (${undersizedBeat.stops.length} outlets) with beat ${bestTargetBeat.salesmanId} (${bestTargetBeat.stops.length} outlets)`);
+      console.log(`Distance between beats: ${minDistance.toFixed(2)} km`);
+      
+      // Merge the undersized beat into the target beat
+      bestTargetBeat.stops.push(...undersizedBeat.stops);
+      
+      // Update the target beat's cluster IDs to include all clusters
+      const allClusterIds = new Set([...bestTargetBeat.clusterIds, ...undersizedBeat.clusterIds]);
+      bestTargetBeat.clusterIds = Array.from(allClusterIds);
+      
+      console.log(`After merge: beat ${bestTargetBeat.salesmanId} now has ${bestTargetBeat.stops.length} outlets`);
+    } else {
+      // If no suitable target beat found, try to merge with the smallest beat that won't exceed max size
+      const smallestCompatibleBeat = finalBeats
+        .filter(beat => beat.stops.length + undersizedBeat.stops.length <= config.maxOutletsPerBeat)
+        .sort((a, b) => a.stops.length - b.stops.length)[0];
+      
+      if (smallestCompatibleBeat) {
+        console.log(`No nearby beat found, merging undersized beat ${undersizedBeat.salesmanId} with smallest compatible beat ${smallestCompatibleBeat.salesmanId}`);
+        
+        smallestCompatibleBeat.stops.push(...undersizedBeat.stops);
+        const allClusterIds = new Set([...smallestCompatibleBeat.clusterIds, ...undersizedBeat.clusterIds]);
+        smallestCompatibleBeat.clusterIds = Array.from(allClusterIds);
+      } else {
+        // If still no suitable beat, keep the undersized beat as is (emergency case)
+        console.warn(`Could not merge undersized beat ${undersizedBeat.salesmanId}, keeping as separate beat`);
+        finalBeats.push(undersizedBeat);
+      }
+    }
+  });
+  
+  // Update route metrics for all final beats
+  finalBeats.forEach(beat => {
+    updateRouteMetrics(beat, distributor, config);
+  });
+  
+  // Reassign beat IDs sequentially
+  const reindexedBeats = finalBeats.map((beat, index) => ({
+    ...beat,
+    salesmanId: index + 1
+  }));
+  
+  console.log(`Final result: ${reindexedBeats.length} beats with sizes: [${reindexedBeats.map(b => b.stops.length).join(', ')}]`);
+  
+  // Verify no beat is below minimum size (except if unavoidable)
+  const stillUndersized = reindexedBeats.filter(beat => beat.stops.length < config.minOutletsPerBeat);
+  if (stillUndersized.length > 0) {
+    console.warn(`Warning: ${stillUndersized.length} beats still below minimum size after merging`);
+    stillUndersized.forEach(beat => {
+      console.warn(`Beat ${beat.salesmanId}: ${beat.stops.length} outlets (minimum: ${config.minOutletsPerBeat})`);
+    });
   }
+  
+  return reindexedBeats;
 }
 
-function createExactBeatCountFallback(
-  customers: ClusteredCustomer[],
-  requiredBeats: number,
+function mergeAllUndersizedBeats(
+  undersizedBeats: SalesmanRoute[],
   config: ClusteringConfig,
-  distributor: { latitude: number; longitude: number },
-  clusterId: number,
-  assignedIds: Set<string>,
-  startingSalesmanId: number
+  distributor: { latitude: number; longitude: number }
 ): SalesmanRoute[] {
-  console.log(`Creating exactly ${requiredBeats} beats using fallback method for ${customers.length} customers`);
+  console.log(`Merging ${undersizedBeats.length} undersized beats intelligently`);
   
-  const routes: SalesmanRoute[] = [];
+  if (undersizedBeats.length === 0) return [];
+  if (undersizedBeats.length === 1) return undersizedBeats;
   
-  // Calculate customers per beat
-  const customersPerBeat = Math.ceil(customers.length / requiredBeats);
+  const finalBeats: SalesmanRoute[] = [];
+  const remainingBeats = [...undersizedBeats];
   
-  for (let i = 0; i < requiredBeats; i++) {
-    const startIndex = i * customersPerBeat;
-    const endIndex = Math.min(startIndex + customersPerBeat, customers.length);
-    const beatCustomers = customers.slice(startIndex, endIndex);
+  while (remainingBeats.length > 0) {
+    const currentBeat = remainingBeats.shift()!;
     
-    const route: SalesmanRoute = {
-      salesmanId: startingSalesmanId + i,
-      stops: [],
-      totalDistance: 0,
-      totalTime: 0,
-      clusterIds: [clusterId],
-      distributorLat: distributor.latitude,
-      distributorLng: distributor.longitude
-    };
-    
-    // Add customers to this beat
-    beatCustomers.forEach(customer => {
-      if (!assignedIds.has(customer.id)) {
-        route.stops.push({
-          customerId: customer.id,
-          latitude: customer.latitude,
-          longitude: customer.longitude,
-          distanceToNext: 0,
-          timeToNext: 0,
-          visitTime: config.customerVisitTimeMinutes,
-          clusterId: customer.clusterId,
-          outletName: customer.outletName
-        });
-        assignedIds.add(customer.id);
+    // Try to merge with other beats until we reach minimum size or max size
+    while (currentBeat.stops.length < config.minOutletsPerBeat && remainingBeats.length > 0) {
+      // Find the nearest beat that can be merged without exceeding max size
+      let nearestBeatIndex = -1;
+      let minDistance = Infinity;
+      
+      const currentCentroid = calculateBeatCentroid(currentBeat);
+      
+      for (let i = 0; i < remainingBeats.length; i++) {
+        const candidateBeat = remainingBeats[i];
+        
+        // Check if merging would exceed max size
+        if (currentBeat.stops.length + candidateBeat.stops.length <= config.maxOutletsPerBeat) {
+          const candidateCentroid = calculateBeatCentroid(candidateBeat);
+          const distance = calculateHaversineDistance(
+            currentCentroid.latitude, currentCentroid.longitude,
+            candidateCentroid.latitude, candidateCentroid.longitude
+          );
+          
+          if (distance < minDistance) {
+            minDistance = distance;
+            nearestBeatIndex = i;
+          }
+        }
       }
-    });
+      
+      if (nearestBeatIndex !== -1) {
+        const beatToMerge = remainingBeats.splice(nearestBeatIndex, 1)[0];
+        console.log(`Merging beat ${currentBeat.salesmanId} (${currentBeat.stops.length}) with beat ${beatToMerge.salesmanId} (${beatToMerge.stops.length})`);
+        
+        currentBeat.stops.push(...beatToMerge.stops);
+        const allClusterIds = new Set([...currentBeat.clusterIds, ...beatToMerge.clusterIds]);
+        currentBeat.clusterIds = Array.from(allClusterIds);
+      } else {
+        // No more beats can be merged without exceeding max size
+        break;
+      }
+    }
     
-    routes.push(route);
+    finalBeats.push(currentBeat);
   }
   
-  console.log(`Created exactly ${routes.length} beats using fallback method`);
-  return routes;
+  console.log(`Merged ${undersizedBeats.length} undersized beats into ${finalBeats.length} final beats`);
+  
+  return finalBeats;
+}
+
+function calculateBeatCentroid(beat: SalesmanRoute): { latitude: number; longitude: number } {
+  if (beat.stops.length === 0) {
+    return { latitude: beat.distributorLat, longitude: beat.distributorLng };
+  }
+  
+  const totalLat = beat.stops.reduce((sum, stop) => sum + stop.latitude, 0);
+  const totalLng = beat.stops.reduce((sum, stop) => sum + stop.longitude, 0);
+  
+  return {
+    latitude: totalLat / beat.stops.length,
+    longitude: totalLng / beat.stops.length
+  };
 }
 
 function performOptimizedDBSCAN(
@@ -856,18 +769,16 @@ function updateRouteMetrics(
   }
 }
 
-function createFallbackSolutionWithExactBeatCount(
+function createFallbackSolution(
   locationData: LocationData,
   config: ClusteringConfig
 ): AlgorithmResult {
-  console.log('Creating fallback solution for DBSCAN with EXACT beat count enforcement');
+  console.log('Creating fallback solution for DBSCAN');
   
   const { distributor, customers } = locationData;
-  const REQUIRED_TOTAL_BEATS = config.totalClusters * config.beatsPerCluster;
+  const routes: SalesmanRoute[] = [];
   
-  console.log(`FALLBACK: Must create exactly ${REQUIRED_TOTAL_BEATS} beats (${config.totalClusters} clusters × ${config.beatsPerCluster} beats)`);
-  
-  // Group customers by cluster
+  // Simple grouping by cluster
   const customersByCluster = customers.reduce((acc, customer) => {
     if (!acc[customer.clusterId]) {
       acc[customer.clusterId] = [];
@@ -876,82 +787,48 @@ function createFallbackSolutionWithExactBeatCount(
     return acc;
   }, {} as Record<number, ClusteredCustomer[]>);
   
-  const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
   
-  // Process each cluster to create exactly the required number of beats
   Object.entries(customersByCluster).forEach(([clusterId, clusterCustomers]) => {
-    console.log(`Fallback processing cluster ${clusterId} with ${clusterCustomers.length} customers`);
+    // Split cluster customers into beats
+    const beatsPerCluster = Math.ceil(clusterCustomers.length / config.maxOutletsPerBeat);
+    const customersPerBeat = Math.ceil(clusterCustomers.length / beatsPerCluster);
     
-    // Create exactly beatsPerCluster beats for this cluster
-    for (let beatIndex = 0; beatIndex < config.beatsPerCluster; beatIndex++) {
-      const route: SalesmanRoute = {
-        salesmanId: salesmanId++,
-        stops: [],
-        totalDistance: 0,
-        totalTime: 0,
-        clusterIds: [Number(clusterId)],
-        distributorLat: distributor.latitude,
-        distributorLng: distributor.longitude
-      };
-      
-      // Distribute customers evenly across beats
-      const customersPerBeat = Math.ceil(clusterCustomers.length / config.beatsPerCluster);
-      const startIndex = beatIndex * customersPerBeat;
+    for (let i = 0; i < beatsPerCluster; i++) {
+      const startIndex = i * customersPerBeat;
       const endIndex = Math.min(startIndex + customersPerBeat, clusterCustomers.length);
       const beatCustomers = clusterCustomers.slice(startIndex, endIndex);
       
-      // Add customers to this beat
-      beatCustomers.forEach(customer => {
-        route.stops.push({
-          customerId: customer.id,
-          latitude: customer.latitude,
-          longitude: customer.longitude,
-          distanceToNext: 0,
-          timeToNext: 0,
-          visitTime: config.customerVisitTimeMinutes,
-          clusterId: customer.clusterId,
-          outletName: customer.outletName
-        });
-      });
-      
-      updateRouteMetrics(route, distributor, config);
-      routes.push(route);
-      
-      console.log(`Fallback created beat ${route.salesmanId} for cluster ${clusterId} with ${route.stops.length} customers`);
+      if (beatCustomers.length > 0) {
+        const route: SalesmanRoute = {
+          salesmanId: salesmanId++,
+          stops: beatCustomers.map(customer => ({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: config.customerVisitTimeMinutes,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          })),
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [Number(clusterId)],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        
+        updateRouteMetrics(route, distributor, config);
+        routes.push(route);
+      }
     }
   });
   
-  // CRITICAL: Verify exact beat count
-  if (routes.length !== REQUIRED_TOTAL_BEATS) {
-    console.error(`FALLBACK ERROR: Expected ${REQUIRED_TOTAL_BEATS} beats, got ${routes.length}`);
-    
-    // Force correct count
-    if (routes.length < REQUIRED_TOTAL_BEATS) {
-      // Add empty beats
-      while (routes.length < REQUIRED_TOTAL_BEATS) {
-        routes.push({
-          salesmanId: routes.length + 1,
-          stops: [],
-          totalDistance: 0,
-          totalTime: 0,
-          clusterIds: [0], // Default cluster
-          distributorLat: distributor.latitude,
-          distributorLng: distributor.longitude
-        });
-      }
-    } else {
-      // Remove excess beats
-      routes.splice(REQUIRED_TOTAL_BEATS);
-    }
-  }
-  
   const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
   
-  console.log(`FALLBACK COMPLETE: Created exactly ${routes.length} beats as required`);
-  
   return {
-    name: `DBSCAN-Based Beat Formation (Fallback) (${config.totalClusters} Clusters × ${config.beatsPerCluster} Beats = ${routes.length} Total Beats)`,
+    name: `DBSCAN-Based Beat Formation (Fallback) (${config.totalClusters} Clusters, ${routes.length} Beats)`,
     totalDistance,
     totalSalesmen: routes.length,
     processingTime: 0,
