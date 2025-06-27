@@ -55,19 +55,9 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
           CONSTRAINT ${tableName}_unique_constraint UNIQUE (distributor_code, beat, stop_order)
         );
         
-        ALTER TABLE ${tableName} ENABLE ROW LEVEL SECURITY;
-        
-        CREATE POLICY "Users can access their routes" ON ${tableName}
-        FOR ALL
-        TO authenticated
-        USING (
-          (auth.jwt()->>'email' = 'EDIS') OR 
-          (distributor_code = '${distributorCode}')
-        )
-        WITH CHECK (
-          (auth.jwt()->>'email' = 'EDIS') OR 
-          (distributor_code = '${distributorCode}')
-        );
+        -- Grant full public access to the new table
+        GRANT ALL ON ${tableName} TO public;
+        GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO public;
       `;
       
       // Execute the SQL using the RPC function
@@ -112,12 +102,6 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     setSuccess(null);
 
     try {
-      // Check if user is authenticated
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user && localStorage.getItem('userType') !== 'admin') {
-        throw new Error('You must be logged in as an administrator to assign routes');
-      }
-
       // Calculate total records to process
       const totalRecords = routes.reduce((acc, route) => acc + route.stops.length + 1, 0); // +1 for distributor point
       setImportStats({ total: totalRecords, processed: 0 });
