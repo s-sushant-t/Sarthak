@@ -61,11 +61,11 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         FOR ALL
         TO authenticated
         USING (
-          (auth.jwt()->>'email' = 'edis@example.com') OR 
+          (auth.jwt()->>'email' = 'EDIS') OR 
           (distributor_code = '${distributorCode}')
         )
         WITH CHECK (
-          (auth.jwt()->>'email' = 'edis@example.com') OR 
+          (auth.jwt()->>'email' = 'EDIS') OR 
           (distributor_code = '${distributorCode}')
         );
       `;
@@ -112,16 +112,10 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
     setSuccess(null);
 
     try {
-      // Check if user is authenticated with Supabase
+      // Check if user is authenticated
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error('You must be logged in to assign routes. Please ensure you are authenticated with Supabase.');
-      }
-
-      // Verify the user has admin privileges (either EDIS email or admin user type)
-      const userType = localStorage.getItem('userType');
-      if (user.email !== 'edis@example.com' && userType !== 'admin') {
-        throw new Error('You must be logged in as an administrator (EDIS) to assign routes');
+      if (!user && localStorage.getItem('userType') !== 'admin') {
+        throw new Error('You must be logged in as an administrator to assign routes');
       }
 
       // Calculate total records to process
@@ -351,13 +345,6 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
         <p className="text-sm text-blue-800">
           <strong>Note:</strong> The system will create a dedicated table for this distributor to ensure data isolation. 
           The distributor will use their distributor code as both username and password to log in and access their assigned routes.
-        </p>
-      </div>
-
-      <div className="mt-4 p-4 bg-yellow-50 rounded-lg border border-yellow-200">
-        <p className="text-sm text-yellow-800">
-          <strong>Setup Required:</strong> To use EDIS admin functionality, ensure a user with email 'edis@example.com' 
-          and password 'EDIS_2024-25\' exists in your Supabase project's Authentication section.
         </p>
       </div>
     </div>
