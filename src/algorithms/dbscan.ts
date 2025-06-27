@@ -247,11 +247,11 @@ async function createExactDBSCANBeats(
   const remainingCustomers = customers.filter(c => !assignedIds.has(c.id));
   
   // Step 1: Apply DBSCAN to find natural dense groups
-  const EPS = 0.2; // 200 meters in kilometers
+  const EPS = 0.5; // 500 meters in kilometers (changed from 0.2)
   const MIN_PTS = Math.max(2, Math.floor(config.minOutletsPerBeat * 0.4)); // Flexible minimum
   
   const dbscanClusters = await performOptimizedDBSCAN(remainingCustomers, EPS, MIN_PTS);
-  console.log(`DBSCAN found ${dbscanClusters.length} natural clusters in cluster ${clusterId}`);
+  console.log(`DBSCAN found ${dbscanClusters.length} natural clusters in cluster ${clusterId} (using 500m radius)`);
   
   // Step 2: Create exactly targetBeats number of beats
   for (let beatIndex = 0; beatIndex < targetBeats; beatIndex++) {
