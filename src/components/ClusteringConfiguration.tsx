@@ -36,25 +36,33 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
 
   const calculateMetrics = () => {
     const totalBeats = config.totalClusters * config.beatsPerCluster;
-    const avgOutletsPerBeat = Math.ceil(totalCustomers / totalBeats);
-    const avgOutletsPerCluster = Math.ceil(totalCustomers / config.totalClusters);
+    const targetOutletsPerBeat = Math.floor(totalCustomers / totalBeats);
+    const targetOutletsPerCluster = Math.floor(totalCustomers / config.totalClusters);
+    
+    // Calculate 5% deviation tolerance
+    const maxDeviation = Math.ceil(targetOutletsPerBeat * 0.05);
+    const minOutletsPerBeat = Math.max(1, targetOutletsPerBeat - maxDeviation);
+    const maxOutletsPerBeat = targetOutletsPerBeat + maxDeviation;
     
     // More realistic working time estimation
-    const estimatedTravelTime = avgOutletsPerBeat * 8; // 8 minutes average travel between outlets
-    const estimatedVisitTime = avgOutletsPerBeat * config.customerVisitTimeMinutes;
+    const estimatedTravelTime = targetOutletsPerBeat * 8; // 8 minutes average travel between outlets
+    const estimatedVisitTime = targetOutletsPerBeat * config.customerVisitTimeMinutes;
     const estimatedWorkingTime = estimatedTravelTime + estimatedVisitTime;
     
-    // Relaxed feasibility check - allow some flexibility
-    const feasible = totalBeats <= totalCustomers && 
-                    avgOutletsPerBeat <= config.maxOutletsPerBeat * 1.2 && // Allow 20% flexibility
-                    estimatedWorkingTime <= config.maxWorkingTimeMinutes * 1.1; // Allow 10% flexibility
+    // Check if equal distribution is achievable
+    const equalDistributionFeasible = totalBeats <= totalCustomers && 
+                                    targetOutletsPerBeat >= 1 &&
+                                    maxDeviation <= 3; // Maximum 3 outlet deviation
     
     return {
       totalBeats,
-      avgOutletsPerBeat,
-      avgOutletsPerCluster,
+      targetOutletsPerBeat,
+      targetOutletsPerCluster,
+      minOutletsPerBeat,
+      maxOutletsPerBeat,
+      maxDeviation,
       estimatedWorkingTime,
-      feasible
+      equalDistributionFeasible
     };
   };
 
@@ -98,6 +106,12 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
       newErrors.totalClusters = `Total beats (${totalBeats}) cannot exceed total customers (${totalCustomers})`;
     }
 
+    // Check if equal distribution with 5% deviation is possible
+    const targetOutletsPerBeat = Math.floor(totalCustomers / totalBeats);
+    if (targetOutletsPerBeat < 1) {
+      newErrors.beatsPerCluster = 'Too many beats for the number of customers. Reduce beats per cluster.';
+    }
+
     return newErrors;
   };
 
@@ -130,12 +144,25 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
             </div>
             <div>
               <h2 className="text-2xl font-semibold text-gray-800">Configure Route Parameters</h2>
-              <p className="text-gray-600">Set up clustering and routing constraints for {totalCustomers.toLocaleString()} customers</p>
+              <p className="text-gray-600">Set up equal distribution routing for {totalCustomers.toLocaleString()} customers</p>
             </div>
           </div>
         </div>
 
         <div className="p-6 space-y-8">
+          {/* Equal Distribution Notice */}
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+            <h3 className="text-lg font-semibold text-green-800 mb-2 flex items-center gap-2">
+              <Target className="w-5 h-5" />
+              Equal Distribution Optimization
+            </h3>
+            <div className="text-sm text-green-700 space-y-1">
+              <p>• <strong>Primary Goal:</strong> Minimize distance from first outlet to last outlet in each beat</p>
+              <p>• <strong>Distribution:</strong> All beats and clusters will contain equal number of outlets (±5% deviation)</p>
+              <p>• <strong>Constraint:</strong> Maximum 5% variation in outlet count between beats</p>
+            </div>
+          </div>
+
           {/* Cluster Configuration */}
           <div className="bg-blue-50 rounded-lg p-6">
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -187,7 +214,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
           <div className="bg-green-50 rounded-lg p-6">
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
               <Users className="w-5 h-5 text-green-600" />
-              Beat Size Constraints
+              Beat Size Constraints (For Reference Only)
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
@@ -207,6 +234,9 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                 {errors.minOutletsPerBeat && (
                   <p className="text-red-500 text-sm mt-1">{errors.minOutletsPerBeat}</p>
                 )}
+                <p className="text-xs text-gray-500 mt-1">
+                  Actual minimum will be calculated for equal distribution
+                </p>
               </div>
 
               <div>
@@ -226,6 +256,9 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                 {errors.maxOutletsPerBeat && (
                   <p className="text-red-500 text-sm mt-1">{errors.maxOutletsPerBeat}</p>
                 )}
+                <p className="text-xs text-gray-500 mt-1">
+                  Actual maximum will be calculated for equal distribution
+                </p>
               </div>
             </div>
           </div>
@@ -301,7 +334,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
           <div className="bg-gray-50 rounded-lg p-6">
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
               <Calculator className="w-5 h-5 text-gray-600" />
-              Calculated Metrics
+              Equal Distribution Metrics
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-white p-4 rounded-lg border">
@@ -309,23 +342,33 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                 <div className="text-sm text-gray-600">Total Beats</div>
               </div>
               <div className="bg-white p-4 rounded-lg border">
-                <div className="text-2xl font-bold text-green-600">{metrics.avgOutletsPerBeat}</div>
-                <div className="text-sm text-gray-600">Avg Outlets/Beat</div>
+                <div className="text-2xl font-bold text-green-600">{metrics.targetOutletsPerBeat}</div>
+                <div className="text-sm text-gray-600">Target Outlets/Beat</div>
               </div>
               <div className="bg-white p-4 rounded-lg border">
-                <div className="text-2xl font-bold text-purple-600">{metrics.avgOutletsPerCluster}</div>
-                <div className="text-sm text-gray-600">Avg Outlets/Cluster</div>
+                <div className="text-2xl font-bold text-purple-600">{metrics.minOutletsPerBeat}-{metrics.maxOutletsPerBeat}</div>
+                <div className="text-sm text-gray-600">Actual Range</div>
               </div>
               <div className="bg-white p-4 rounded-lg border">
-                <div className="text-2xl font-bold text-orange-600">{Math.round(metrics.estimatedWorkingTime)}</div>
-                <div className="text-sm text-gray-600">Est. Working Time (min)</div>
+                <div className="text-2xl font-bold text-orange-600">{metrics.maxDeviation}</div>
+                <div className="text-sm text-gray-600">Max Deviation</div>
               </div>
             </div>
             
-            {!metrics.feasible && (
+            <div className="mt-4 p-4 bg-blue-100 rounded-lg">
+              <h4 className="font-medium text-blue-800 mb-2">Equal Distribution Summary:</h4>
+              <ul className="text-sm text-blue-700 space-y-1">
+                <li>• Each beat will have {metrics.targetOutletsPerBeat} outlets (±{metrics.maxDeviation} max)</li>
+                <li>• Total variation between beats: ≤5%</li>
+                <li>• Primary optimization: Minimize first-to-last outlet distance per beat</li>
+                <li>• Secondary optimization: Minimize total travel time</li>
+              </ul>
+            </div>
+            
+            {!metrics.equalDistributionFeasible && (
               <div className="mt-4 p-3 bg-yellow-100 border border-yellow-300 rounded-lg">
                 <p className="text-yellow-800 text-sm">
-                  ⚠️ Note: Configuration may require some adjustments during optimization, but the algorithm will handle this automatically.
+                  ⚠️ Current configuration may not achieve perfect equal distribution. Consider adjusting the number of clusters or beats per cluster.
                 </p>
               </div>
             )}
@@ -354,7 +397,7 @@ const ClusteringConfiguration: React.FC<ClusteringConfigurationProps> = ({
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
             }`}
           >
-            Apply Configuration
+            Apply Equal Distribution Configuration
           </button>
         </div>
       </div>
