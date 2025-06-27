@@ -357,7 +357,7 @@ const AssignDistributor: React.FC<AssignDistributorProps> = ({ routes, onAssign 
       <div className="mt-4 p-4 bg-yellow-50 rounded-lg border border-yellow-200">
         <p className="text-sm text-yellow-800">
           <strong>Setup Required:</strong> To use EDIS admin functionality, ensure a user with email 'edis@example.com' 
-          and password 'EDIS_2024-25' exists in your Supabase project's Authentication section.
+          and password 'EDIS_2024-25\' exists in your Supabase project's Authentication section.
         </p>
       </div>
     </div>
