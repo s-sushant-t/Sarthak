@@ -19,24 +19,12 @@ export const executeAlgorithm = async (
         result = await nearestNeighbor(locationData, config);
         break;
       case 'simulated-annealing':
-        // Add timeout for simulated annealing to prevent infinite processing
-        const timeoutPromise = new Promise<AlgorithmResult>((_, reject) => {
-          setTimeout(() => reject(new Error('Algorithm timeout')), 30000); // 30 second timeout
-        });
-        result = await Promise.race([
-          simulatedAnnealing(locationData, config),
-          timeoutPromise
-        ]);
+        console.log('Starting optimized simulated annealing...');
+        result = await simulatedAnnealing(locationData, config);
         break;
       case 'dbscan':
-        // Add timeout for DBSCAN to prevent infinite processing
-        const dbscanTimeoutPromise = new Promise<AlgorithmResult>((_, reject) => {
-          setTimeout(() => reject(new Error('Algorithm timeout')), 35000); // 35 second timeout
-        });
-        result = await Promise.race([
-          dbscan(locationData, config),
-          dbscanTimeoutPromise
-        ]);
+        console.log('Starting optimized DBSCAN...');
+        result = await dbscan(locationData, config);
         break;
       case 'custom':
         throw new Error('Custom algorithm cannot be executed directly');
@@ -47,14 +35,22 @@ export const executeAlgorithm = async (
     const endTime = performance.now();
     const processingTime = endTime - startTime;
     
+    console.log(`${algorithmType} completed in ${processingTime.toFixed(2)}ms`);
+    
     return {
       ...result,
       processingTime
     };
   } catch (error) {
-    if (error instanceof Error && error.message === 'Algorithm timeout') {
-      // Fallback to nearest neighbor if algorithm times out
-      console.warn(`${algorithmType} timed out, falling back to nearest neighbor`);
+    console.error(`Error executing ${algorithmType}:`, error);
+    
+    // Only fallback to nearest neighbor if there's a critical error
+    if (error instanceof Error && (
+      error.message.includes('timeout') || 
+      error.message.includes('memory') ||
+      error.message.includes('critical')
+    )) {
+      console.warn(`${algorithmType} failed with critical error, falling back to nearest neighbor`);
       result = await nearestNeighbor(locationData, config);
       const endTime = performance.now();
       return {
@@ -63,7 +59,8 @@ export const executeAlgorithm = async (
         processingTime: endTime - startTime
       };
     }
-    console.error(`Error executing ${algorithmType}:`, error);
+    
+    // Re-throw non-critical errors
     throw error;
   }
 };

@@ -2,12 +2,12 @@ import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmRes
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
-// Optimized annealing parameters for faster processing
-const INITIAL_TEMPERATURE = 100; // Reduced from 1000
-const COOLING_RATE = 0.95; // Faster cooling
-const MIN_TEMPERATURE = 0.1; // Higher minimum
-const ITERATIONS_PER_TEMP = 20; // Reduced from 100
-const MAX_TOTAL_ITERATIONS = 500; // Hard limit on total iterations
+// Highly optimized annealing parameters for fast processing
+const INITIAL_TEMPERATURE = 50; // Reduced for faster convergence
+const COOLING_RATE = 0.92; // Faster cooling
+const MIN_TEMPERATURE = 0.5; // Higher minimum
+const ITERATIONS_PER_TEMP = 15; // Reduced iterations
+const MAX_TOTAL_ITERATIONS = 300; // Hard limit on total iterations
 
 export const simulatedAnnealing = async (
   locationData: LocationData, 
@@ -15,18 +15,10 @@ export const simulatedAnnealing = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting optimized simulated annealing with ${customers.length} total customers`);
+  console.log(`Starting highly optimized simulated annealing with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
   
-  // Add timeout mechanism
   const startTime = Date.now();
-  const TIMEOUT_MS = 25000; // 25 seconds timeout
-  
-  const checkTimeout = () => {
-    if (Date.now() - startTime > TIMEOUT_MS) {
-      throw new Error('Simulated annealing timeout - falling back to nearest neighbor');
-    }
-  };
   
   try {
     // CRITICAL: Track all customers to ensure no duplicates or missing outlets
@@ -46,20 +38,17 @@ export const simulatedAnnealing = async (
       `Cluster ${id}: ${custs.length} customers`
     ));
     
-    // Process each cluster independently with timeout checking
+    // Process each cluster independently with optimized annealing
     const clusterResults: SalesmanRoute[][] = [];
     
     for (const [clusterId, clusterCustomers] of Object.entries(customersByCluster)) {
-      checkTimeout(); // Check timeout before processing each cluster
-      
       const clusterAssignedIds = new Set<string>();
-      const routes = await processClusterWithOptimizedAnnealing(
+      const routes = await processClusterWithHighlyOptimizedAnnealing(
         Number(clusterId),
         clusterCustomers,
         distributor,
         config,
-        clusterAssignedIds,
-        checkTimeout
+        clusterAssignedIds
       );
       
       // Verify all cluster customers are assigned exactly once
@@ -97,6 +86,9 @@ export const simulatedAnnealing = async (
       clusterAssignedIds.forEach(id => globalAssignedCustomerIds.add(id));
       
       clusterResults.push(routes);
+      
+      // Yield control between clusters
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
     
     // Combine routes from all clusters
@@ -156,8 +148,8 @@ export const simulatedAnnealing = async (
       });
     }
     
-    // Apply lightweight optimization while maintaining strict assignment
-    routes = await optimizeRoutesLightweight(routes, distributor, config, checkTimeout);
+    // Apply final lightweight optimization
+    routes = await applyFinalOptimization(routes, distributor, config);
     
     // FINAL verification
     const finalCustomerCount = routes.reduce((count, route) => count + route.stops.length, 0);
@@ -177,7 +169,7 @@ export const simulatedAnnealing = async (
     const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
     
     return {
-      name: `Optimized Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats)`,
+      name: `Highly Optimized Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats)`,
       totalDistance,
       totalSalesmen: routes.length,
       processingTime: Date.now() - startTime,
@@ -186,40 +178,40 @@ export const simulatedAnnealing = async (
     
   } catch (error) {
     console.error('Simulated annealing failed:', error);
-    // Fallback to nearest neighbor approach
-    return createFallbackSolution(locationData, config);
+    throw error; // Re-throw to let the caller handle fallback
   }
 };
 
-async function processClusterWithOptimizedAnnealing(
+async function processClusterWithHighlyOptimizedAnnealing(
   clusterId: number,
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
-  assignedIds: Set<string>,
-  checkTimeout: () => void
+  assignedIds: Set<string>
 ): Promise<SalesmanRoute[]> {
-  console.log(`Processing cluster ${clusterId} with optimized annealing for ${customers.length} customers`);
+  console.log(`Processing cluster ${clusterId} with highly optimized annealing for ${customers.length} customers`);
   
-  // Create initial solution quickly
-  let bestSolution = createFastInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds));
-  let bestEnergy = calculateSimpleEnergy(bestSolution);
+  // Create initial solution very quickly
+  let bestSolution = createVeryFastInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds));
+  let bestEnergy = calculateVerySimpleEnergy(bestSolution);
   
   let currentSolution = JSON.parse(JSON.stringify(bestSolution));
   let currentEnergy = bestEnergy;
   
   let temperature = INITIAL_TEMPERATURE;
   let totalIterations = 0;
+  let noImprovementCount = 0;
+  const maxNoImprovement = 20; // Early stopping
   
-  while (temperature > MIN_TEMPERATURE && totalIterations < MAX_TOTAL_ITERATIONS) {
-    checkTimeout(); // Check timeout during annealing
+  while (temperature > MIN_TEMPERATURE && totalIterations < MAX_TOTAL_ITERATIONS && noImprovementCount < maxNoImprovement) {
+    let improved = false;
     
     for (let i = 0; i < ITERATIONS_PER_TEMP && totalIterations < MAX_TOTAL_ITERATIONS; i++) {
       totalIterations++;
       
-      // Create neighbor solution with simple operations
-      const neighborSolution = createSimpleNeighborSolution(currentSolution, config);
-      const neighborEnergy = calculateSimpleEnergy(neighborSolution);
+      // Create neighbor solution with very simple operations
+      const neighborSolution = createVerySimpleNeighborSolution(currentSolution, config);
+      const neighborEnergy = calculateVerySimpleEnergy(neighborSolution);
       
       const acceptanceProbability = Math.exp(-(neighborEnergy - currentEnergy) / temperature);
       
@@ -230,13 +222,19 @@ async function processClusterWithOptimizedAnnealing(
         if (neighborEnergy < bestEnergy) {
           bestSolution = JSON.parse(JSON.stringify(neighborSolution));
           bestEnergy = neighborEnergy;
+          improved = true;
+          noImprovementCount = 0;
         }
       }
       
-      // Yield control occasionally
-      if (totalIterations % 50 === 0) {
+      // Yield control every 25 iterations
+      if (totalIterations % 25 === 0) {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
+    }
+    
+    if (!improved) {
+      noImprovementCount++;
     }
     
     temperature *= COOLING_RATE;
@@ -254,7 +252,7 @@ async function processClusterWithOptimizedAnnealing(
   return bestSolution;
 }
 
-function createFastInitialSolution(
+function createVeryFastInitialSolution(
   clusterId: number, 
   customers: ClusteredCustomer[], 
   distributor: { latitude: number; longitude: number },
@@ -267,9 +265,16 @@ function createFastInitialSolution(
   // Create a working copy to avoid modifying the original
   const remainingCustomers = customers.filter(c => !assignedIds.has(c.id));
   
-  const targetBeats = Math.min(config.beatsPerCluster, Math.ceil(remainingCustomers.length / config.minOutletsPerBeat));
+  // Calculate optimal number of beats for this cluster
+  const targetBeats = Math.min(
+    config.beatsPerCluster, 
+    Math.ceil(remainingCustomers.length / config.minOutletsPerBeat),
+    Math.ceil(remainingCustomers.length / (config.maxOutletsPerBeat * 0.8)) // Allow some flexibility
+  );
+  
   const customersPerBeat = Math.ceil(remainingCustomers.length / targetBeats);
   
+  // Simple chunking approach for speed
   for (let beatIndex = 0; beatIndex < targetBeats && remainingCustomers.length > 0; beatIndex++) {
     const route: SalesmanRoute = {
       salesmanId: salesmanId++,
@@ -338,22 +343,29 @@ function createFastInitialSolution(
   return routes;
 }
 
-function calculateSimpleEnergy(solution: SalesmanRoute[]): number {
-  // Simple energy calculation based on total distance and route count
+function calculateVerySimpleEnergy(solution: SalesmanRoute[]): number {
+  // Very simple energy calculation for speed
   const totalDistance = solution.reduce((sum, route) => sum + route.totalDistance, 0);
-  const routeCountPenalty = solution.length * 10; // Prefer fewer routes
+  const routeCountPenalty = solution.length * 5; // Light penalty for route count
   
-  return totalDistance + routeCountPenalty;
+  // Add penalty for unbalanced routes
+  const avgRouteSize = solution.reduce((sum, route) => sum + route.stops.length, 0) / solution.length;
+  const balancePenalty = solution.reduce((penalty, route) => {
+    const deviation = Math.abs(route.stops.length - avgRouteSize);
+    return penalty + deviation * 2;
+  }, 0);
+  
+  return totalDistance + routeCountPenalty + balancePenalty;
 }
 
-function createSimpleNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig): SalesmanRoute[] {
+function createVerySimpleNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig): SalesmanRoute[] {
   const newSolution = JSON.parse(JSON.stringify(solution));
   
-  // Simple operations only
+  // Very simple operations only - choose one randomly
   const operations = [
-    () => swapAdjacentStopsSimple(newSolution),
-    () => reverseSegmentSimple(newSolution),
-    () => moveCustomerBetweenRoutes(newSolution, config)
+    () => swapAdjacentStopsVerySimple(newSolution),
+    () => reverseSmallSegment(newSolution),
+    () => moveCustomerToNearbyRoute(newSolution, config)
   ];
   
   // Apply one random operation
@@ -363,7 +375,7 @@ function createSimpleNeighborSolution(solution: SalesmanRoute[], config: Cluster
   return newSolution;
 }
 
-function swapAdjacentStopsSimple(solution: SalesmanRoute[]): void {
+function swapAdjacentStopsVerySimple(solution: SalesmanRoute[]): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -375,7 +387,7 @@ function swapAdjacentStopsSimple(solution: SalesmanRoute[]): void {
   [route.stops[i], route.stops[i + 1]] = [route.stops[i + 1], route.stops[i]];
 }
 
-function reverseSegmentSimple(solution: SalesmanRoute[]): void {
+function reverseSmallSegment(solution: SalesmanRoute[]): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -384,25 +396,31 @@ function reverseSegmentSimple(solution: SalesmanRoute[]): void {
   if (route.stops.length < 3) return;
   
   const start = Math.floor(Math.random() * (route.stops.length - 2));
-  const length = 2 + Math.floor(Math.random() * Math.min(3, route.stops.length - start - 1));
+  const length = 2; // Always reverse just 2 elements for simplicity
   
   const segment = route.stops.slice(start, start + length);
   segment.reverse();
   route.stops.splice(start, length, ...segment);
 }
 
-function moveCustomerBetweenRoutes(solution: SalesmanRoute[], config: ClusteringConfig): void {
+function moveCustomerToNearbyRoute(solution: SalesmanRoute[], config: ClusteringConfig): void {
   if (solution.length < 2) return;
   
   const sourceRouteIndex = Math.floor(Math.random() * solution.length);
-  const targetRouteIndex = Math.floor(Math.random() * solution.length);
-  
-  if (sourceRouteIndex === targetRouteIndex) return;
-  
   const sourceRoute = solution[sourceRouteIndex];
-  const targetRoute = solution[targetRouteIndex];
   
-  if (sourceRoute.stops.length <= 1 || targetRoute.stops.length >= config.maxOutletsPerBeat) return;
+  if (sourceRoute.stops.length <= 1) return;
+  
+  // Find a nearby route (prefer routes in same cluster)
+  const sameClusterRoutes = solution.filter((route, index) => 
+    index !== sourceRouteIndex && 
+    route.clusterIds.some(id => sourceRoute.clusterIds.includes(id)) &&
+    route.stops.length < config.maxOutletsPerBeat
+  );
+  
+  if (sameClusterRoutes.length === 0) return;
+  
+  const targetRoute = sameClusterRoutes[Math.floor(Math.random() * sameClusterRoutes.length)];
   
   // Move a random customer
   const customerIndex = Math.floor(Math.random() * sourceRoute.stops.length);
@@ -410,19 +428,67 @@ function moveCustomerBetweenRoutes(solution: SalesmanRoute[], config: Clustering
   targetRoute.stops.push(customer);
 }
 
-async function optimizeRoutesLightweight(
+async function applyFinalOptimization(
   routes: SalesmanRoute[],
   distributor: { latitude: number; longitude: number },
-  config: ClusteringConfig,
-  checkTimeout: () => void
+  config: ClusteringConfig
 ): Promise<SalesmanRoute[]> {
-  // Lightweight optimization - just update metrics and do basic improvements
-  routes.forEach(route => {
-    checkTimeout();
+  // Very lightweight final optimization
+  routes.forEach((route, index) => {
     updateRouteMetrics(route, config);
+    
+    // Yield control every 20 routes
+    if (index % 20 === 0) {
+      setTimeout(() => {}, 0);
+    }
   });
   
-  return routes;
+  // Simple route merging for very small routes
+  const optimizedRoutes = [];
+  let i = 0;
+  
+  while (i < routes.length) {
+    const currentRoute = routes[i];
+    
+    // If route is very small, try to merge with next route
+    if (currentRoute.stops.length < config.minOutletsPerBeat && i + 1 < routes.length) {
+      const nextRoute = routes[i + 1];
+      
+      // Check if they can be merged
+      if (currentRoute.stops.length + nextRoute.stops.length <= config.maxOutletsPerBeat &&
+          currentRoute.clusterIds.some(id => nextRoute.clusterIds.includes(id))) {
+        
+        // Merge routes
+        const mergedRoute: SalesmanRoute = {
+          salesmanId: currentRoute.salesmanId,
+          stops: [...currentRoute.stops, ...nextRoute.stops],
+          totalDistance: 0,
+          totalTime: 0,
+          clusterIds: [...new Set([...currentRoute.clusterIds, ...nextRoute.clusterIds])],
+          distributorLat: distributor.latitude,
+          distributorLng: distributor.longitude
+        };
+        
+        updateRouteMetrics(mergedRoute, config);
+        optimizedRoutes.push(mergedRoute);
+        i += 2; // Skip next route as it's been merged
+      } else {
+        optimizedRoutes.push(currentRoute);
+        i++;
+      }
+    } else {
+      optimizedRoutes.push(currentRoute);
+      i++;
+    }
+  }
+  
+  // Reassign sequential IDs
+  return optimizedRoutes.map((route, index) => ({
+    ...route,
+    salesmanId: index + 1,
+    distributorLat: distributor.latitude,
+    distributorLng: distributor.longitude
+  }));
 }
 
 function updateRouteMetrics(route: SalesmanRoute, config: ClusteringConfig): void {
@@ -465,71 +531,4 @@ function updateRouteMetrics(route: SalesmanRoute, config: ClusteringConfig): voi
     prevLat = stop.latitude;
     prevLng = stop.longitude;
   }
-}
-
-function createFallbackSolution(
-  locationData: LocationData,
-  config: ClusteringConfig
-): AlgorithmResult {
-  console.log('Creating fallback solution for simulated annealing');
-  
-  const { distributor, customers } = locationData;
-  const routes: SalesmanRoute[] = [];
-  
-  // Simple grouping by cluster
-  const customersByCluster = customers.reduce((acc, customer) => {
-    if (!acc[customer.clusterId]) {
-      acc[customer.clusterId] = [];
-    }
-    acc[customer.clusterId].push(customer);
-    return acc;
-  }, {} as Record<number, ClusteredCustomer[]>);
-  
-  let salesmanId = 1;
-  
-  Object.entries(customersByCluster).forEach(([clusterId, clusterCustomers]) => {
-    // Split cluster customers into beats
-    const beatsPerCluster = Math.ceil(clusterCustomers.length / config.maxOutletsPerBeat);
-    const customersPerBeat = Math.ceil(clusterCustomers.length / beatsPerCluster);
-    
-    for (let i = 0; i < beatsPerCluster; i++) {
-      const startIndex = i * customersPerBeat;
-      const endIndex = Math.min(startIndex + customersPerBeat, clusterCustomers.length);
-      const beatCustomers = clusterCustomers.slice(startIndex, endIndex);
-      
-      if (beatCustomers.length > 0) {
-        const route: SalesmanRoute = {
-          salesmanId: salesmanId++,
-          stops: beatCustomers.map(customer => ({
-            customerId: customer.id,
-            latitude: customer.latitude,
-            longitude: customer.longitude,
-            distanceToNext: 0,
-            timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
-            clusterId: customer.clusterId,
-            outletName: customer.outletName
-          })),
-          totalDistance: 0,
-          totalTime: 0,
-          clusterIds: [Number(clusterId)],
-          distributorLat: distributor.latitude,
-          distributorLng: distributor.longitude
-        };
-        
-        updateRouteMetrics(route, config);
-        routes.push(route);
-      }
-    }
-  });
-  
-  const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
-  
-  return {
-    name: `Simulated Annealing (Fallback) (${config.totalClusters} Clusters, ${routes.length} Beats)`,
-    totalDistance,
-    totalSalesmen: routes.length,
-    processingTime: 0,
-    routes
-  };
 }
