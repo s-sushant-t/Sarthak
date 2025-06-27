@@ -244,7 +244,7 @@ function createExactDBSCANBeats(
       config,
       salesmanId,
       clusterId,
-      new Set<string>(),
+      assignedIds, // Pass the shared assignedIds set
       testDistance,
       targetBeats
     );
@@ -353,12 +353,12 @@ function tryDBSCANWithDistance(
     if (dbscanCluster.length > config.maxOutletsPerBeat) {
       const subBeats = splitLargeCluster(dbscanCluster, config.maxOutletsPerBeat, distributor);
       subBeats.forEach(subBeat => {
-        const route = createRouteFromCustomers(subBeat, salesmanId++, clusterId, distributor, config, new Set());
+        const route = createRouteFromCustomers(subBeat, salesmanId++, clusterId, distributor, config, assignedIds);
         if (route) routes.push(route);
       });
     } else if (dbscanCluster.length >= Math.max(1, config.minOutletsPerBeat * 0.5)) {
       // Create a single beat from this DBSCAN cluster (relaxed minimum)
-      const route = createRouteFromCustomers(dbscanCluster, salesmanId++, clusterId, distributor, config, new Set());
+      const route = createRouteFromCustomers(dbscanCluster, salesmanId++, clusterId, distributor, config, assignedIds);
       if (route) routes.push(route);
     }
   });
@@ -404,9 +404,10 @@ function tryDBSCANWithDistance(
           clusterId: customer.clusterId,
           outletName: customer.outletName
         });
+        assignedIds.add(customer.id);
       } else {
         // Create a new route for remaining customers
-        const newRoute = createRouteFromCustomers([customer], salesmanId++, clusterId, distributor, config, new Set());
+        const newRoute = createRouteFromCustomers([customer], salesmanId++, clusterId, distributor, config, assignedIds);
         if (newRoute) routes.push(newRoute);
       }
     });
