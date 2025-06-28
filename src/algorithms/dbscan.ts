@@ -225,7 +225,7 @@ async function createOptimizedDBSCANBeats(
   const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
   
-  // Optimized DBSCAN parameters
+  // Optimized DBSCAN parameters - Changed from 0.5 to 0.2 (500m to 200m)
   const EPS = 0.2; // 200 meters in kilometers
   const MIN_PTS = Math.max(2, Math.floor(config.minOutletsPerBeat * 0.3)); // More flexible minimum
   
