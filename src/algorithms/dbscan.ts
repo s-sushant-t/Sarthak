@@ -8,7 +8,7 @@ export const dbscan = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting optimized DBSCAN with ${customers.length} customers`);
+  console.log(`Starting DBSCAN with strict 200m isolation for ${customers.length} customers`);
   console.log(`Target: ${config.totalClusters} clusters × ${config.beatsPerCluster} beats = ${config.totalClusters * config.beatsPerCluster} total beats`);
   
   const startTime = Date.now();
@@ -30,14 +30,14 @@ export const dbscan = async (
     const routes: SalesmanRoute[] = [];
     let currentSalesmanId = 1;
     
-    // Process each cluster with optimized approach
+    // Process each cluster with strict isolation
     for (const [clusterId, clusterCustomers] of Object.entries(customersByCluster)) {
       console.log(`Processing cluster ${clusterId}: ${clusterCustomers.length} customers → ${config.beatsPerCluster} beats`);
       
       const clusterAssignedIds = new Set<string>();
       
-      // Use fast geographical partitioning instead of complex DBSCAN
-      const clusterRoutes = await createFastGeographicalBeats(
+      // Create geographically isolated beats with 200m minimum separation
+      const clusterRoutes = await createStrictlyIsolatedBeats(
         clusterCustomers,
         distributor,
         config,
@@ -51,25 +51,40 @@ export const dbscan = async (
       const assignedCount = clusterRoutes.reduce((count, route) => count + route.stops.length, 0);
       console.log(`Cluster ${clusterId}: ${assignedCount}/${clusterCustomers.length} assigned to ${clusterRoutes.length} beats`);
       
-      // Handle any missing customers
+      // Handle any missing customers with isolation constraints
       const missingCustomers = clusterCustomers.filter(c => !clusterAssignedIds.has(c.id));
-      missingCustomers.forEach(customer => {
-        const targetRoute = clusterRoutes.reduce((min, route) => 
-          route.stops.length < min.stops.length ? route : min
-        );
-        
-        targetRoute.stops.push({
-          customerId: customer.id,
-          latitude: customer.latitude,
-          longitude: customer.longitude,
-          distanceToNext: 0,
-          timeToNext: 0,
-          visitTime: config.customerVisitTimeMinutes,
-          clusterId: customer.clusterId,
-          outletName: customer.outletName
-        });
-        clusterAssignedIds.add(customer.id);
-      });
+      for (const customer of missingCustomers) {
+        const suitableBeat = findSuitableBeatWithIsolation(customer, clusterRoutes, 0.2); // 200m
+        if (suitableBeat) {
+          suitableBeat.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: config.customerVisitTimeMinutes,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          clusterAssignedIds.add(customer.id);
+        } else {
+          // Force assign to least conflicted beat if no suitable beat found
+          const targetRoute = clusterRoutes.reduce((min, route) => 
+            route.stops.length < min.stops.length ? route : min
+          );
+          targetRoute.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: config.customerVisitTimeMinutes,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          clusterAssignedIds.add(customer.id);
+        }
+      }
       
       // Add to global tracking
       clusterAssignedIds.forEach(id => globalAssignedIds.add(id));
@@ -80,24 +95,28 @@ export const dbscan = async (
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     
-    // Apply fast isolation optimization
-    const optimizedRoutes = await applyFastIsolationOptimization(routes, config);
+    // Apply comprehensive isolation optimization
+    const optimizedRoutes = await enforceStrictIsolation(routes, config);
     
     // Update metrics
     optimizedRoutes.forEach(route => {
       updateRouteMetrics(route, distributor, config);
     });
     
-    // Final verification
+    // Final verification and reporting
     const finalRoutes = optimizedRoutes.map((route, index) => ({
       ...route,
       salesmanId: index + 1
     }));
     
+    const isolationReport = generateIsolationReport(finalRoutes);
+    console.log('📊 Final Isolation Report:', isolationReport);
+    
     const finalCustomerCount = finalRoutes.reduce((count, route) => count + route.stops.length, 0);
     const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
     
     console.log(`✅ DBSCAN completed: ${finalRoutes.length} beats, ${finalCustomerCount} customers, ${totalDistance.toFixed(2)}km`);
+    console.log(`🎯 Isolation violations: ${isolationReport.totalViolations} (${isolationReport.violationPercentage.toFixed(1)}%)`);
     
     return {
       name: `DBSCAN-Based Beat Formation (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
@@ -113,7 +132,7 @@ export const dbscan = async (
   }
 };
 
-async function createFastGeographicalBeats(
+async function createStrictlyIsolatedBeats(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
@@ -125,24 +144,11 @@ async function createFastGeographicalBeats(
   
   if (customers.length === 0) return [];
   
-  console.log(`Creating ${targetBeats} beats for cluster ${clusterId} with fast geographical partitioning`);
+  console.log(`Creating ${targetBeats} strictly isolated beats for cluster ${clusterId}`);
   
-  // Step 1: Calculate cluster bounds
-  const bounds = {
-    minLat: Math.min(...customers.map(c => c.latitude)),
-    maxLat: Math.max(...customers.map(c => c.latitude)),
-    minLng: Math.min(...customers.map(c => c.longitude)),
-    maxLng: Math.max(...customers.map(c => c.longitude))
-  };
+  const ISOLATION_DISTANCE = 0.2; // 200m minimum separation
   
-  // Step 2: Create spatial grid for beat assignment
-  const gridCols = Math.ceil(Math.sqrt(targetBeats));
-  const gridRows = Math.ceil(targetBeats / gridCols);
-  
-  const cellWidth = (bounds.maxLng - bounds.minLng) / gridCols;
-  const cellHeight = (bounds.maxLat - bounds.minLat) / gridRows;
-  
-  // Step 3: Initialize beats
+  // Initialize beats
   const routes: SalesmanRoute[] = [];
   for (let i = 0; i < targetBeats; i++) {
     routes.push({
@@ -156,106 +162,177 @@ async function createFastGeographicalBeats(
     });
   }
   
-  // Step 4: Assign customers to beats based on spatial grid
-  customers.forEach(customer => {
-    // Determine grid cell
-    const colIndex = Math.min(
-      Math.floor((customer.longitude - bounds.minLng) / cellWidth),
-      gridCols - 1
-    );
-    const rowIndex = Math.min(
-      Math.floor((customer.latitude - bounds.minLat) / cellHeight),
-      gridRows - 1
-    );
-    
-    // Map to beat index
-    const beatIndex = (rowIndex * gridCols + colIndex) % targetBeats;
-    
-    // Assign to beat
-    routes[beatIndex].stops.push({
-      customerId: customer.id,
-      latitude: customer.latitude,
-      longitude: customer.longitude,
-      distanceToNext: 0,
-      timeToNext: 0,
-      visitTime: config.customerVisitTimeMinutes,
-      clusterId: customer.clusterId,
-      outletName: customer.outletName
-    });
-    
-    assignedIds.add(customer.id);
+  // Sort customers by geographical position for better spatial distribution
+  const sortedCustomers = [...customers].sort((a, b) => {
+    return (a.latitude + a.longitude) - (b.latitude + b.longitude);
   });
   
-  // Step 5: Balance beat sizes
-  const avgSize = Math.ceil(customers.length / targetBeats);
-  const tolerance = Math.max(1, Math.floor(avgSize * 0.3));
-  
-  // Move customers from oversized to undersized beats
-  let balanceIterations = 0;
-  const maxBalanceIterations = 3;
-  
-  while (balanceIterations < maxBalanceIterations) {
-    const oversized = routes.filter(r => r.stops.length > avgSize + tolerance);
-    const undersized = routes.filter(r => r.stops.length < avgSize - tolerance);
+  // Assign customers using isolation-aware algorithm
+  for (const customer of sortedCustomers) {
+    let assigned = false;
     
-    if (oversized.length === 0 || undersized.length === 0) break;
-    
-    // Move customers from oversized to undersized beats
-    oversized.forEach(oversizedBeat => {
-      while (oversizedBeat.stops.length > avgSize + tolerance && undersized.length > 0) {
-        const undersizedBeat = undersized.find(r => r.stops.length < avgSize + tolerance);
-        if (!undersizedBeat) break;
-        
-        // Move the last customer (arbitrary choice for speed)
-        const customer = oversizedBeat.stops.pop();
-        if (customer) {
-          undersizedBeat.stops.push(customer);
-        }
+    // Try to find a beat where this customer can be placed without violating 200m rule
+    for (const route of routes) {
+      if (canAddCustomerWithIsolation(customer, route, routes, ISOLATION_DISTANCE)) {
+        route.stops.push({
+          customerId: customer.id,
+          latitude: customer.latitude,
+          longitude: customer.longitude,
+          distanceToNext: 0,
+          timeToNext: 0,
+          visitTime: config.customerVisitTimeMinutes,
+          clusterId: customer.clusterId,
+          outletName: customer.outletName
+        });
+        assignedIds.add(customer.id);
+        assigned = true;
+        break;
       }
-    });
+    }
     
-    balanceIterations++;
+    // If no suitable beat found, assign to the beat with minimum conflicts
+    if (!assigned) {
+      const bestBeat = findBeatWithMinimumConflicts(customer, routes, ISOLATION_DISTANCE);
+      bestBeat.stops.push({
+        customerId: customer.id,
+        latitude: customer.latitude,
+        longitude: customer.longitude,
+        distanceToNext: 0,
+        timeToNext: 0,
+        visitTime: config.customerVisitTimeMinutes,
+        clusterId: customer.clusterId,
+        outletName: customer.outletName
+      });
+      assignedIds.add(customer.id);
+    }
   }
   
-  console.log(`Cluster ${clusterId}: Beat sizes after balancing: ${routes.map(r => r.stops.length).join(', ')}`);
+  console.log(`Cluster ${clusterId}: Initial assignment complete. Beat sizes: ${routes.map(r => r.stops.length).join(', ')}`);
   
   return routes;
 }
 
-async function applyFastIsolationOptimization(
+function canAddCustomerWithIsolation(
+  customer: ClusteredCustomer,
+  targetBeat: SalesmanRoute,
+  allBeats: SalesmanRoute[],
+  minDistance: number
+): boolean {
+  // Check against all customers in other beats
+  for (const otherBeat of allBeats) {
+    if (otherBeat.salesmanId === targetBeat.salesmanId) continue;
+    
+    for (const stop of otherBeat.stops) {
+      const distance = calculateHaversineDistance(
+        customer.latitude, customer.longitude,
+        stop.latitude, stop.longitude
+      );
+      
+      if (distance < minDistance) {
+        return false; // Violation found
+      }
+    }
+  }
+  
+  return true; // No violations
+}
+
+function findBeatWithMinimumConflicts(
+  customer: ClusteredCustomer,
+  routes: SalesmanRoute[],
+  minDistance: number
+): SalesmanRoute {
+  let bestBeat = routes[0];
+  let minConflicts = Infinity;
+  
+  for (const route of routes) {
+    let conflicts = 0;
+    
+    // Count conflicts with other beats
+    for (const otherRoute of routes) {
+      if (otherRoute.salesmanId === route.salesmanId) continue;
+      
+      for (const stop of otherRoute.stops) {
+        const distance = calculateHaversineDistance(
+          customer.latitude, customer.longitude,
+          stop.latitude, stop.longitude
+        );
+        
+        if (distance < minDistance) {
+          conflicts++;
+        }
+      }
+    }
+    
+    // Prefer beats with fewer customers if conflicts are equal
+    const score = conflicts * 1000 + route.stops.length;
+    
+    if (score < minConflicts) {
+      minConflicts = score;
+      bestBeat = route;
+    }
+  }
+  
+  return bestBeat;
+}
+
+function findSuitableBeatWithIsolation(
+  customer: ClusteredCustomer,
+  routes: SalesmanRoute[],
+  minDistance: number
+): SalesmanRoute | null {
+  for (const route of routes) {
+    if (canAddCustomerWithIsolation(customer, route, routes, minDistance)) {
+      return route;
+    }
+  }
+  return null;
+}
+
+async function enforceStrictIsolation(
   routes: SalesmanRoute[],
   config: ClusteringConfig
 ): Promise<SalesmanRoute[]> {
-  console.log('Applying fast isolation optimization...');
+  console.log('🔧 Enforcing strict 200m isolation between beats...');
   
-  const ISOLATION_DISTANCE = 0.2; // 200m minimum separation
-  const MAX_ITERATIONS = 3; // Limit iterations to prevent hanging
+  const ISOLATION_DISTANCE = 0.2; // 200m
+  const MAX_ITERATIONS = 5;
+  const MAX_MOVES_PER_ITERATION = 20;
   
   let optimizedRoutes = [...routes];
   
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-    let movesMade = 0;
+    console.log(`🔄 Isolation iteration ${iteration + 1}/${MAX_ITERATIONS}`);
     
-    // Find and resolve the most critical violations only
-    const violations = findCriticalViolations(optimizedRoutes, ISOLATION_DISTANCE);
+    // Find all violations
+    const violations = findAllIsolationViolations(optimizedRoutes, ISOLATION_DISTANCE);
     
     if (violations.length === 0) {
-      console.log(`Isolation optimization completed after ${iteration + 1} iterations`);
+      console.log(`✅ Perfect isolation achieved after ${iteration + 1} iterations`);
       break;
     }
     
-    console.log(`Iteration ${iteration + 1}: Resolving ${Math.min(violations.length, 10)} critical violations`);
+    console.log(`🚨 Found ${violations.length} isolation violations`);
     
-    // Resolve only the first 10 violations to prevent hanging
-    const violationsToResolve = violations.slice(0, 10);
+    // Sort violations by severity (closest distances first)
+    violations.sort((a, b) => a.distance - b.distance);
     
-    for (const violation of violationsToResolve) {
-      const moved = attemptCustomerMove(violation, optimizedRoutes, ISOLATION_DISTANCE);
-      if (moved) movesMade++;
+    let movesMade = 0;
+    const maxMovesThisIteration = Math.min(violations.length, MAX_MOVES_PER_ITERATION);
+    
+    // Attempt to resolve violations by moving customers
+    for (let i = 0; i < maxMovesThisIteration; i++) {
+      const violation = violations[i];
+      
+      if (attemptViolationResolution(violation, optimizedRoutes, ISOLATION_DISTANCE)) {
+        movesMade++;
+      }
     }
     
+    console.log(`📊 Iteration ${iteration + 1}: Resolved ${movesMade}/${maxMovesThisIteration} violations`);
+    
     if (movesMade === 0) {
-      console.log('No beneficial moves found, stopping optimization');
+      console.log('⚠️ No more beneficial moves possible');
       break;
     }
     
@@ -263,125 +340,167 @@ async function applyFastIsolationOptimization(
     await new Promise(resolve => setTimeout(resolve, 0));
   }
   
-  const finalViolations = findCriticalViolations(optimizedRoutes, ISOLATION_DISTANCE);
-  console.log(`Final isolation violations: ${finalViolations.length}`);
-  
   return optimizedRoutes;
 }
 
-function findCriticalViolations(
+function findAllIsolationViolations(
   routes: SalesmanRoute[],
   minDistance: number
 ): Array<{
-  customer: RouteStop;
-  fromBeatId: number;
-  conflictBeatId: number;
+  customer1: RouteStop;
+  customer2: RouteStop;
+  beat1Id: number;
+  beat2Id: number;
   distance: number;
 }> {
   const violations: Array<{
-    customer: RouteStop;
-    fromBeatId: number;
-    conflictBeatId: number;
+    customer1: RouteStop;
+    customer2: RouteStop;
+    beat1Id: number;
+    beat2Id: number;
     distance: number;
   }> = [];
   
-  // Only check first 5 customers per beat to prevent hanging
-  for (let i = 0; i < routes.length && violations.length < 50; i++) {
+  // Check all pairs of beats
+  for (let i = 0; i < routes.length; i++) {
     const beat1 = routes[i];
-    const customersToCheck = beat1.stops.slice(0, 5);
     
-    for (const customer of customersToCheck) {
-      for (let j = i + 1; j < routes.length; j++) {
-        const beat2 = routes[j];
-        const otherCustomersToCheck = beat2.stops.slice(0, 5);
-        
-        for (const otherCustomer of otherCustomersToCheck) {
+    for (let j = i + 1; j < routes.length; j++) {
+      const beat2 = routes[j];
+      
+      // Check all customer pairs between these beats
+      for (const customer1 of beat1.stops) {
+        for (const customer2 of beat2.stops) {
           const distance = calculateHaversineDistance(
-            customer.latitude, customer.longitude,
-            otherCustomer.latitude, otherCustomer.longitude
+            customer1.latitude, customer1.longitude,
+            customer2.latitude, customer2.longitude
           );
           
           if (distance < minDistance) {
             violations.push({
-              customer,
-              fromBeatId: beat1.salesmanId,
-              conflictBeatId: beat2.salesmanId,
+              customer1,
+              customer2,
+              beat1Id: beat1.salesmanId,
+              beat2Id: beat2.salesmanId,
               distance
             });
-            
-            // Limit violations to prevent excessive processing
-            if (violations.length >= 50) return violations;
           }
         }
       }
     }
   }
   
-  // Sort by distance (closest violations first)
-  return violations.sort((a, b) => a.distance - b.distance);
+  return violations;
 }
 
-function attemptCustomerMove(
+function attemptViolationResolution(
   violation: {
-    customer: RouteStop;
-    fromBeatId: number;
-    conflictBeatId: number;
+    customer1: RouteStop;
+    customer2: RouteStop;
+    beat1Id: number;
+    beat2Id: number;
     distance: number;
   },
   routes: SalesmanRoute[],
   minDistance: number
 ): boolean {
-  const { customer, fromBeatId } = violation;
+  const { customer1, customer2, beat1Id, beat2Id } = violation;
   
-  // Find alternative beats in the same cluster
+  // Try moving customer1 to a different beat in the same cluster
+  const customer1Beat = routes.find(r => r.salesmanId === beat1Id);
+  const customer2Beat = routes.find(r => r.salesmanId === beat2Id);
+  
+  if (!customer1Beat || !customer2Beat) return false;
+  
+  // Find alternative beats for customer1 in the same cluster
   const sameClusterBeats = routes.filter(route => 
-    route.salesmanId !== fromBeatId && 
-    route.clusterIds.some(id => customer.clusterId === id)
+    route.salesmanId !== beat1Id && 
+    route.clusterIds.some(id => customer1.clusterId === id)
   );
   
-  if (sameClusterBeats.length === 0) return false;
-  
-  // Find the beat with minimum conflicts (check only first few customers for speed)
-  let bestBeat: SalesmanRoute | null = null;
-  let minConflicts = Infinity;
-  
-  for (const candidateBeat of sameClusterBeats) {
-    let conflicts = 0;
-    
-    // Only check first 5 customers for speed
-    const customersToCheck = candidateBeat.stops.slice(0, 5);
-    
-    for (const stop of customersToCheck) {
-      const distance = calculateHaversineDistance(
-        customer.latitude, customer.longitude,
-        stop.latitude, stop.longitude
-      );
-      
-      if (distance < minDistance) {
-        conflicts++;
-      }
-    }
-    
-    if (conflicts < minConflicts) {
-      minConflicts = conflicts;
-      bestBeat = candidateBeat;
-    }
-  }
-  
-  // Move customer if it reduces conflicts
-  if (bestBeat && minConflicts === 0) {
-    const fromBeat = routes.find(r => r.salesmanId === fromBeatId);
-    if (fromBeat) {
-      const customerIndex = fromBeat.stops.findIndex(s => s.customerId === customer.customerId);
+  // Try moving customer1
+  for (const alternativeBeat of sameClusterBeats) {
+    if (canAddCustomerWithIsolation(
+      { 
+        id: customer1.customerId, 
+        latitude: customer1.latitude, 
+        longitude: customer1.longitude, 
+        clusterId: customer1.clusterId,
+        outletName: customer1.outletName 
+      }, 
+      alternativeBeat, 
+      routes, 
+      minDistance
+    )) {
+      // Move customer1 to alternative beat
+      const customerIndex = customer1Beat.stops.findIndex(s => s.customerId === customer1.customerId);
       if (customerIndex !== -1) {
-        fromBeat.stops.splice(customerIndex, 1);
-        bestBeat.stops.push(customer);
+        customer1Beat.stops.splice(customerIndex, 1);
+        alternativeBeat.stops.push(customer1);
+        console.log(`🔄 Moved customer ${customer1.customerId} from beat ${beat1Id} to beat ${alternativeBeat.salesmanId}`);
         return true;
       }
     }
   }
   
-  return false;
+  // Try moving customer2 if moving customer1 failed
+  const customer2SameClusterBeats = routes.filter(route => 
+    route.salesmanId !== beat2Id && 
+    route.clusterIds.some(id => customer2.clusterId === id)
+  );
+  
+  for (const alternativeBeat of customer2SameClusterBeats) {
+    if (canAddCustomerWithIsolation(
+      { 
+        id: customer2.customerId, 
+        latitude: customer2.latitude, 
+        longitude: customer2.longitude, 
+        clusterId: customer2.clusterId,
+        outletName: customer2.outletName 
+      }, 
+      alternativeBeat, 
+      routes, 
+      minDistance
+    )) {
+      // Move customer2 to alternative beat
+      const customerIndex = customer2Beat.stops.findIndex(s => s.customerId === customer2.customerId);
+      if (customerIndex !== -1) {
+        customer2Beat.stops.splice(customerIndex, 1);
+        alternativeBeat.stops.push(customer2);
+        console.log(`🔄 Moved customer ${customer2.customerId} from beat ${beat2Id} to beat ${alternativeBeat.salesmanId}`);
+        return true;
+      }
+    }
+  }
+  
+  return false; // Could not resolve this violation
+}
+
+function generateIsolationReport(routes: SalesmanRoute[]): {
+  totalViolations: number;
+  violationPercentage: number;
+  averageViolationDistance: number;
+  beatPairViolations: number;
+} {
+  const violations = findAllIsolationViolations(routes, 0.2); // 200m
+  const totalCustomerPairs = routes.reduce((total, route, i) => {
+    return total + routes.slice(i + 1).reduce((pairCount, otherRoute) => {
+      return pairCount + (route.stops.length * otherRoute.stops.length);
+    }, 0);
+  }, 0);
+  
+  const averageDistance = violations.length > 0 
+    ? violations.reduce((sum, v) => sum + v.distance, 0) / violations.length 
+    : 0;
+  
+  const beatPairs = new Set(violations.map(v => `${v.beat1Id}-${v.beat2Id}`)).size;
+  
+  return {
+    totalViolations: violations.length,
+    violationPercentage: totalCustomerPairs > 0 ? (violations.length / totalCustomerPairs) * 100 : 0,
+    averageViolationDistance: averageDistance * 1000, // Convert to meters
+    beatPairViolations: beatPairs
+  };
 }
 
 function updateRouteMetrics(
