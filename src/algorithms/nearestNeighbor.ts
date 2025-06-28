@@ -8,7 +8,7 @@ export const nearestNeighbor = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting Nearest Neighbor with DUAL constraints (50m isolation + 500m max intra-beat) for ${customers.length} customers`);
+  console.log(`Starting Nearest Neighbor with DUAL constraints (50m isolation + 200m max intra-beat) for ${customers.length} customers`);
   console.log(`Target: ${config.totalClusters} clusters × ${config.beatsPerCluster} beats = ${config.totalClusters * config.beatsPerCluster} total beats`);
   
   const startTime = Date.now();
@@ -16,7 +16,7 @@ export const nearestNeighbor = async (
   try {
     const TARGET_TOTAL_BEATS = config.totalClusters * config.beatsPerCluster;
     const STRICT_ISOLATION_DISTANCE = 0.05; // 50m minimum separation between beats
-    const MAX_INTRA_BEAT_DISTANCE = 0.5; // 500m maximum distance within a beat
+    const MAX_INTRA_BEAT_DISTANCE = 0.2; // 200m maximum distance within a beat
     const allCustomers = [...customers];
     const globalAssignedCustomerIds = new Set<string>();
     
@@ -112,7 +112,7 @@ export const nearestNeighbor = async (
     }
     
     // Apply comprehensive DUAL constraint optimization
-    console.log('🔧 Applying DUAL constraint optimization (50m isolation + 500m intra-beat)...');
+    console.log('🔧 Applying DUAL constraint optimization (50m isolation + 200m intra-beat)...');
     const optimizedRoutes = await enforceDualConstraintsNN(routes, config, STRICT_ISOLATION_DISTANCE, MAX_INTRA_BEAT_DISTANCE);
     
     // Update route metrics for all routes
@@ -141,7 +141,7 @@ export const nearestNeighbor = async (
     console.log(`- Total beats created: ${finalRoutes.length}`);
     console.log(`- Target beats: ${TARGET_TOTAL_BEATS}`);
     console.log(`🎯 Constraint violations: Isolation=${constraintReport.isolationViolations}, Intra-beat=${constraintReport.intraBeatViolations}`);
-    console.log(`📏 Max intra-beat distance found: ${constraintReport.maxIntraBeatDistanceFound.toFixed(0)}m (limit: 500m)`);
+    console.log(`📏 Max intra-beat distance found: ${constraintReport.maxIntraBeatDistanceFound.toFixed(0)}m (limit: 200m)`);
     
     // Report beats per cluster
     const beatsByCluster = finalRoutes.reduce((acc, route) => {
@@ -163,7 +163,7 @@ export const nearestNeighbor = async (
     const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
     
     return {
-      name: `Nearest Neighbor (${config.totalClusters} Clusters, ${finalRoutes.length} Beats, 50m+500m)`,
+      name: `Nearest Neighbor (${config.totalClusters} Clusters, ${finalRoutes.length} Beats, 50m+200m)`,
       totalDistance,
       totalSalesmen: finalRoutes.length,
       processingTime: Date.now() - startTime,
@@ -189,7 +189,7 @@ function createDualConstraintBeatsNearestNeighbor(
 ): SalesmanRoute[] {
   if (customers.length === 0) return [];
   
-  console.log(`Creating exactly ${targetBeats} beats with DUAL constraints (50m isolation + 500m max intra-beat) for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`Creating exactly ${targetBeats} beats with DUAL constraints (50m isolation + 200m max intra-beat) for cluster ${clusterId} with ${customers.length} customers`);
   
   const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
@@ -355,7 +355,7 @@ function canAddCustomerWithDualConstraints(
     }
   }
   
-  // CONSTRAINT 2: Check 500m max distance within the target beat
+  // CONSTRAINT 2: Check 200m max distance within the target beat
   for (const stop of targetBeat.stops) {
     const distance = calculateHaversineDistance(
       customer.latitude, customer.longitude,

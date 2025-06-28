@@ -8,7 +8,7 @@ export const dbscan = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting DBSCAN with STRICT 50m isolation + 500m max intra-beat distance for ${customers.length} customers`);
+  console.log(`Starting DBSCAN with STRICT 50m isolation + 200m max intra-beat distance for ${customers.length} customers`);
   console.log(`Target: ${config.totalClusters} clusters × ${config.beatsPerCluster} beats = ${config.totalClusters * config.beatsPerCluster} total beats`);
   
   const startTime = Date.now();
@@ -16,7 +16,7 @@ export const dbscan = async (
   try {
     const TARGET_TOTAL_BEATS = config.totalClusters * config.beatsPerCluster;
     const STRICT_ISOLATION_DISTANCE = 0.05; // 50m minimum separation between beats
-    const MAX_INTRA_BEAT_DISTANCE = 0.5; // 500m maximum distance within a beat
+    const MAX_INTRA_BEAT_DISTANCE = 0.2; // 200m maximum distance within a beat
     
     // CRITICAL: Track all customers to ensure no duplicates or missing outlets
     const allCustomers = [...customers];
@@ -103,7 +103,7 @@ export const dbscan = async (
     }
     
     // Apply final dual constraint optimization
-    console.log('🔧 Applying final dual constraint optimization (50m isolation + 500m intra-beat)...');
+    console.log('🔧 Applying final dual constraint optimization (50m isolation + 200m intra-beat)...');
     const optimizedRoutes = await enforceDualConstraintsDBSCAN(routes, config, STRICT_ISOLATION_DISTANCE, MAX_INTRA_BEAT_DISTANCE);
     
     // Update metrics
@@ -125,9 +125,10 @@ export const dbscan = async (
     
     console.log(`✅ DBSCAN completed: ${finalRoutes.length} beats, ${finalCustomerCount} customers, ${totalDistance.toFixed(2)}km`);
     console.log(`🎯 Constraint violations: Isolation=${constraintReport.isolationViolations}, Intra-beat=${constraintReport.intraBeatViolations}`);
+    console.log(`📏 Max intra-beat distance found: ${constraintReport.maxIntraBeatDistanceFound.toFixed(0)}m (limit: 200m)`);
     
     return {
-      name: `DBSCAN-Based Beat Formation (${config.totalClusters} Clusters, ${finalRoutes.length} Beats, 50m+500m)`,
+      name: `DBSCAN-Based Beat Formation (${config.totalClusters} Clusters, ${finalRoutes.length} Beats, 50m+200m)`,
       totalDistance,
       totalSalesmen: finalRoutes.length,
       processingTime: Date.now() - startTime,
@@ -154,7 +155,7 @@ async function createGuaranteedDistributionBeatsDBSCAN(
   
   if (customers.length === 0) return [];
   
-  console.log(`Creating ${targetBeats} beats with DUAL constraints (50m isolation + 500m max intra-beat) for cluster ${clusterId}`);
+  console.log(`Creating ${targetBeats} beats with DUAL constraints (50m isolation + 200m max intra-beat) for cluster ${clusterId}`);
   
   // STEP 1: Calculate guaranteed distribution
   const customersPerBeat = Math.floor(customers.length / targetBeats);
@@ -336,7 +337,7 @@ function canAddCustomerWithDualConstraints(
     }
   }
   
-  // CONSTRAINT 2: Check 500m max distance within the target beat
+  // CONSTRAINT 2: Check 200m max distance within the target beat
   for (const stop of targetBeat.stops) {
     const distance = calculateHaversineDistance(
       customer.latitude, customer.longitude,

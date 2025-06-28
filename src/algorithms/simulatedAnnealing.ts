@@ -9,7 +9,7 @@ const MIN_TEMPERATURE = 0.5; // Higher minimum
 const ITERATIONS_PER_TEMP = 15; // Reduced iterations
 const MAX_TOTAL_ITERATIONS = 300; // Hard limit on total iterations
 const STRICT_ISOLATION_DISTANCE = 0.05; // 50m minimum separation between beats
-const MAX_INTRA_BEAT_DISTANCE = 0.5; // 500m maximum distance within a beat
+const MAX_INTRA_BEAT_DISTANCE = 0.2; // 200m maximum distance within a beat
 
 export const simulatedAnnealing = async (
   locationData: LocationData, 
@@ -17,7 +17,7 @@ export const simulatedAnnealing = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting Simulated Annealing with DUAL constraints (50m isolation + 500m max intra-beat) for ${customers.length} customers`);
+  console.log(`Starting Simulated Annealing with DUAL constraints (50m isolation + 200m max intra-beat) for ${customers.length} customers`);
   console.log(`Target: ${config.totalClusters} clusters × ${config.beatsPerCluster} beats = ${config.totalClusters * config.beatsPerCluster} total beats`);
   
   const startTime = Date.now();
@@ -114,7 +114,7 @@ export const simulatedAnnealing = async (
     let routes = clusterResults.flat();
     
     // Apply comprehensive DUAL constraint optimization
-    console.log('🔧 Applying final DUAL constraint optimization (50m isolation + 500m intra-beat)...');
+    console.log('🔧 Applying final DUAL constraint optimization (50m isolation + 200m intra-beat)...');
     routes = await applyFinalOptimizationWithDualConstraints(routes, distributor, config, STRICT_ISOLATION_DISTANCE, MAX_INTRA_BEAT_DISTANCE);
     
     // CRITICAL: Final verification - ensure ALL customers are assigned exactly once
@@ -174,7 +174,7 @@ export const simulatedAnnealing = async (
     console.log(`- Total beats created: ${routes.length}`);
     console.log(`- Target beats: ${TARGET_TOTAL_BEATS}`);
     console.log(`🎯 Constraint violations: Isolation=${constraintReport.isolationViolations}, Intra-beat=${constraintReport.intraBeatViolations}`);
-    console.log(`📏 Max intra-beat distance found: ${constraintReport.maxIntraBeatDistanceFound.toFixed(0)}m (limit: 500m)`);
+    console.log(`📏 Max intra-beat distance found: ${constraintReport.maxIntraBeatDistanceFound.toFixed(0)}m (limit: 200m)`);
     
     if (finalCustomerCount !== totalCustomers || uniqueCustomerIds.size !== totalCustomers) {
       console.error(`SIMULATED ANNEALING ERROR: Customer count mismatch!`);
@@ -185,7 +185,7 @@ export const simulatedAnnealing = async (
     const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
     
     return {
-      name: `Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats, 50m+500m)`,
+      name: `Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats, 50m+200m)`,
       totalDistance,
       totalSalesmen: routes.length,
       processingTime: Date.now() - startTime,
@@ -597,7 +597,7 @@ function canAddCustomerWithDualConstraints(
     }
   }
   
-  // CONSTRAINT 2: Check 500m max distance within the target beat
+  // CONSTRAINT 2: Check 200m max distance within the target beat
   for (const stop of targetBeat.stops) {
     const distance = calculateHaversineDistance(
       customer.latitude, customer.longitude,
