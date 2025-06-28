@@ -2,13 +2,14 @@ import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmRes
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
-// Highly optimized annealing parameters for fast processing with STRICT isolation constraints
+// Highly optimized annealing parameters for fast processing with DUAL constraints
 const INITIAL_TEMPERATURE = 50; // Reduced for faster convergence
 const COOLING_RATE = 0.92; // Faster cooling
 const MIN_TEMPERATURE = 0.5; // Higher minimum
 const ITERATIONS_PER_TEMP = 15; // Reduced iterations
 const MAX_TOTAL_ITERATIONS = 300; // Hard limit on total iterations
-const STRICT_ISOLATION_DISTANCE = 0.05; // 50m minimum separation
+const STRICT_ISOLATION_DISTANCE = 0.05; // 50m minimum separation between beats
+const MAX_INTRA_BEAT_DISTANCE = 0.5; // 500m maximum distance within a beat
 
 export const simulatedAnnealing = async (
   locationData: LocationData, 
@@ -16,7 +17,7 @@ export const simulatedAnnealing = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting Simulated Annealing with STRICT 50m isolation for ${customers.length} customers`);
+  console.log(`Starting Simulated Annealing with DUAL constraints (50m isolation + 500m max intra-beat) for ${customers.length} customers`);
   console.log(`Target: ${config.totalClusters} clusters × ${config.beatsPerCluster} beats = ${config.totalClusters * config.beatsPerCluster} total beats`);
   
   const startTime = Date.now();
@@ -42,19 +43,20 @@ export const simulatedAnnealing = async (
       `Cluster ${id}: ${custs.length} customers`
     ));
     
-    // Process each cluster independently with optimized annealing and STRICT isolation
+    // Process each cluster independently with optimized annealing and DUAL constraints
     const clusterResults: SalesmanRoute[][] = [];
     
     for (const [clusterId, clusterCustomers] of Object.entries(customersByCluster)) {
       const clusterAssignedIds = new Set<string>();
-      const routes = await processClusterWithStrictBeatCountAndIsolation(
+      const routes = await processClusterWithDualConstraints(
         Number(clusterId),
         clusterCustomers,
         distributor,
         config,
         clusterAssignedIds,
         config.beatsPerCluster,
-        STRICT_ISOLATION_DISTANCE
+        STRICT_ISOLATION_DISTANCE,
+        MAX_INTRA_BEAT_DISTANCE
       );
       
       // Verify all cluster customers are assigned exactly once
@@ -64,17 +66,17 @@ export const simulatedAnnealing = async (
       if (assignedInCluster !== clusterCustomers.length) {
         console.error(`CLUSTER ${clusterId} ERROR: Expected ${clusterCustomers.length} customers, got ${assignedInCluster}`);
         
-        // Find and assign missing customers with STRICT isolation constraints
+        // Find and assign missing customers with DUAL constraints
         const missingCustomers = clusterCustomers.filter(c => !clusterAssignedIds.has(c.id));
         console.log(`Missing customers in cluster ${clusterId}:`, missingCustomers.map(c => c.id));
         
         // Force assign missing customers
         missingCustomers.forEach(customer => {
-          const suitableBeat = findSuitableBeatWithStrictIsolation(customer, routes, STRICT_ISOLATION_DISTANCE);
+          const suitableBeat = findSuitableBeatWithDualConstraints(customer, routes, STRICT_ISOLATION_DISTANCE, MAX_INTRA_BEAT_DISTANCE);
           let targetRoute = suitableBeat;
           
           if (!targetRoute) {
-            targetRoute = findBeatWithMinimumConflicts(customer, routes, STRICT_ISOLATION_DISTANCE);
+            targetRoute = findBeatWithMinimumConstraintViolations(customer, routes, STRICT_ISOLATION_DISTANCE, MAX_INTRA_BEAT_DISTANCE);
           }
           
           if (targetRoute) {
@@ -111,9 +113,9 @@ export const simulatedAnnealing = async (
     // Combine routes from all clusters
     let routes = clusterResults.flat();
     
-    // Apply comprehensive STRICT isolation optimization
-    console.log('🔧 Applying final STRICT 50m isolation optimization...');
-    routes = await applyFinalOptimizationWithStrictIsolation(routes, distributor, config, STRICT_ISOLATION_DISTANCE);
+    // Apply comprehensive DUAL constraint optimization
+    console.log('🔧 Applying final DUAL constraint optimization (50m isolation + 500m intra-beat)...');
+    routes = await applyFinalOptimizationWithDualConstraints(routes, distributor, config, STRICT_ISOLATION_DISTANCE, MAX_INTRA_BEAT_DISTANCE);
     
     // CRITICAL: Final verification - ensure ALL customers are assigned exactly once
     const finalAssignedCount = globalAssignedCustomerIds.size;
@@ -157,9 +159,9 @@ export const simulatedAnnealing = async (
       });
     }
     
-    // Generate isolation report
-    const isolationReport = generateIsolationReport(routes, STRICT_ISOLATION_DISTANCE);
-    console.log('📊 Final STRICT Isolation Report:', isolationReport);
+    // Generate dual constraint report
+    const constraintReport = generateDualConstraintReport(routes, STRICT_ISOLATION_DISTANCE, MAX_INTRA_BEAT_DISTANCE);
+    console.log('📊 Final Dual Constraint Report:', constraintReport);
     
     // FINAL verification
     const finalCustomerCount = routes.reduce((count, route) => count + route.stops.length, 0);
@@ -171,7 +173,8 @@ export const simulatedAnnealing = async (
     console.log(`- Expected customers: ${totalCustomers}`);
     console.log(`- Total beats created: ${routes.length}`);
     console.log(`- Target beats: ${TARGET_TOTAL_BEATS}`);
-    console.log(`🎯 STRICT Isolation violations: ${isolationReport.totalViolations} (${isolationReport.violationPercentage.toFixed(1)}%)`);
+    console.log(`🎯 Constraint violations: Isolation=${constraintReport.isolationViolations}, Intra-beat=${constraintReport.intraBeatViolations}`);
+    console.log(`📏 Max intra-beat distance found: ${constraintReport.maxIntraBeatDistanceFound.toFixed(0)}m (limit: 500m)`);
     
     if (finalCustomerCount !== totalCustomers || uniqueCustomerIds.size !== totalCustomers) {
       console.error(`SIMULATED ANNEALING ERROR: Customer count mismatch!`);
@@ -182,7 +185,7 @@ export const simulatedAnnealing = async (
     const totalDistance = routes.reduce((total, route) => total + route.totalDistance, 0);
     
     return {
-      name: `Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats, 50m Isolation)`,
+      name: `Simulated Annealing (${config.totalClusters} Clusters, ${routes.length} Beats, 50m+500m)`,
       totalDistance,
       totalSalesmen: routes.length,
       processingTime: Date.now() - startTime,
@@ -195,20 +198,21 @@ export const simulatedAnnealing = async (
   }
 };
 
-async function processClusterWithStrictBeatCountAndIsolation(
+async function processClusterWithDualConstraints(
   clusterId: number,
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   assignedIds: Set<string>,
   targetBeats: number,
-  isolationDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): Promise<SalesmanRoute[]> {
-  console.log(`Processing cluster ${clusterId} with STRICT beat count and 50m isolation: ${targetBeats} beats for ${customers.length} customers`);
+  console.log(`Processing cluster ${clusterId} with DUAL constraints: ${targetBeats} beats for ${customers.length} customers`);
   
-  // Create initial solution with exact beat count and STRICT isolation awareness
-  let bestSolution = createStrictIsolationAwareInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds), targetBeats, isolationDistance);
-  let bestEnergy = calculateStrictIsolationAwareEnergy(bestSolution, isolationDistance);
+  // Create initial solution with exact beat count and DUAL constraint awareness
+  let bestSolution = createDualConstraintAwareInitialSolution(clusterId, customers, distributor, config, new Set(assignedIds), targetBeats, isolationDistance, maxIntraBeatDistance);
+  let bestEnergy = calculateDualConstraintAwareEnergy(bestSolution, isolationDistance, maxIntraBeatDistance);
   
   let currentSolution = JSON.parse(JSON.stringify(bestSolution));
   let currentEnergy = bestEnergy;
@@ -224,9 +228,9 @@ async function processClusterWithStrictBeatCountAndIsolation(
     for (let i = 0; i < ITERATIONS_PER_TEMP && totalIterations < MAX_TOTAL_ITERATIONS; i++) {
       totalIterations++;
       
-      // Create neighbor solution with STRICT isolation-aware operations
-      const neighborSolution = createStrictIsolationAwareNeighborSolution(currentSolution, config, isolationDistance);
-      const neighborEnergy = calculateStrictIsolationAwareEnergy(neighborSolution, isolationDistance);
+      // Create neighbor solution with DUAL constraint-aware operations
+      const neighborSolution = createDualConstraintAwareNeighborSolution(currentSolution, config, isolationDistance, maxIntraBeatDistance);
+      const neighborEnergy = calculateDualConstraintAwareEnergy(neighborSolution, isolationDistance, maxIntraBeatDistance);
       
       const acceptanceProbability = Math.exp(-(neighborEnergy - currentEnergy) / temperature);
       
@@ -267,14 +271,15 @@ async function processClusterWithStrictBeatCountAndIsolation(
   return bestSolution;
 }
 
-function createStrictIsolationAwareInitialSolution(
+function createDualConstraintAwareInitialSolution(
   clusterId: number, 
   customers: ClusteredCustomer[], 
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   assignedIds: Set<string>,
   targetBeats: number,
-  isolationDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): SalesmanRoute[] {
   const routes: SalesmanRoute[] = [];
   let salesmanId = 1;
@@ -285,7 +290,7 @@ function createStrictIsolationAwareInitialSolution(
   // Calculate optimal distribution of customers across beats
   const customersPerBeat = Math.ceil(remainingCustomers.length / targetBeats);
   
-  console.log(`Creating exactly ${targetBeats} beats with ~${customersPerBeat} customers each (STRICT 50m isolation-aware)`);
+  console.log(`Creating exactly ${targetBeats} beats with ~${customersPerBeat} customers each (DUAL constraint-aware)`);
   
   // Create exactly targetBeats number of beats
   for (let beatIndex = 0; beatIndex < targetBeats; beatIndex++) {
@@ -304,18 +309,18 @@ function createStrictIsolationAwareInitialSolution(
     const remainingCustomersCount = remainingCustomers.length;
     const customersForThisBeat = Math.ceil(remainingCustomersCount / remainingBeats);
     
-    // Take customers for this beat using STRICT isolation-aware assignment
+    // Take customers for this beat using DUAL constraint-aware assignment
     for (let i = 0; i < customersForThisBeat && remainingCustomers.length > 0; i++) {
       let bestCustomerIndex = -1;
       let bestScore = Infinity;
       
-      // Find customer that minimizes STRICT isolation violations
+      // Find customer that minimizes DUAL constraint violations
       for (let j = 0; j < remainingCustomers.length; j++) {
         const customer = remainingCustomers[j];
-        const isolationScore = calculateStrictIsolationScore(customer, route, routes, isolationDistance);
+        const constraintScore = calculateDualConstraintScore(customer, route, routes, isolationDistance, maxIntraBeatDistance);
         
-        if (isolationScore < bestScore) {
-          bestScore = isolationScore;
+        if (constraintScore < bestScore) {
+          bestScore = constraintScore;
           bestCustomerIndex = j;
         }
       }
@@ -343,14 +348,14 @@ function createStrictIsolationAwareInitialSolution(
     routes.push(route); // Add route even if empty to maintain exact beat count
   }
   
-  // Handle any remaining customers by distributing to existing beats with STRICT isolation constraints
+  // Handle any remaining customers by distributing to existing beats with DUAL constraints
   if (remainingCustomers.length > 0) {
     remainingCustomers.forEach(customer => {
-      const suitableBeat = findSuitableBeatWithStrictIsolation(customer, routes, isolationDistance);
+      const suitableBeat = findSuitableBeatWithDualConstraints(customer, routes, isolationDistance, maxIntraBeatDistance);
       let targetRoute = suitableBeat;
       
       if (!targetRoute) {
-        targetRoute = findBeatWithMinimumConflicts(customer, routes, isolationDistance);
+        targetRoute = findBeatWithMinimumConstraintViolations(customer, routes, isolationDistance, maxIntraBeatDistance);
       }
       
       if (targetRoute) {
@@ -373,16 +378,18 @@ function createStrictIsolationAwareInitialSolution(
   return routes;
 }
 
-function calculateStrictIsolationScore(
+function calculateDualConstraintScore(
   customer: ClusteredCustomer,
   targetBeat: SalesmanRoute,
   allBeats: SalesmanRoute[],
-  isolationDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): number {
-  let violationCount = 0;
+  let isolationViolations = 0;
+  let intraBeatViolations = 0;
   let totalViolationDistance = 0;
   
-  // Check against all customers in other beats
+  // Check isolation violations with other beats
   for (const otherBeat of allBeats) {
     if (otherBeat.salesmanId === targetBeat.salesmanId) continue;
     
@@ -393,17 +400,30 @@ function calculateStrictIsolationScore(
       );
       
       if (distance < isolationDistance) {
-        violationCount++;
+        isolationViolations++;
         totalViolationDistance += (isolationDistance - distance);
       }
     }
   }
   
-  // Return score: higher is worse
-  return violationCount * 1000 + totalViolationDistance * 100;
+  // Check intra-beat distance violations
+  for (const stop of targetBeat.stops) {
+    const distance = calculateHaversineDistance(
+      customer.latitude, customer.longitude,
+      stop.latitude, stop.longitude
+    );
+    
+    if (distance > maxIntraBeatDistance) {
+      intraBeatViolations++;
+      totalViolationDistance += (distance - maxIntraBeatDistance);
+    }
+  }
+  
+  // Return score: higher is worse, prioritize isolation violations
+  return isolationViolations * 2000 + intraBeatViolations * 1000 + totalViolationDistance * 100;
 }
 
-function calculateStrictIsolationAwareEnergy(solution: SalesmanRoute[], isolationDistance: number): number {
+function calculateDualConstraintAwareEnergy(solution: SalesmanRoute[], isolationDistance: number, maxIntraBeatDistance: number): number {
   // Calculate base energy (distance + route count)
   const totalDistance = solution.reduce((sum, route) => sum + route.totalDistance, 0);
   const routeCountPenalty = solution.length * 5;
@@ -415,21 +435,24 @@ function calculateStrictIsolationAwareEnergy(solution: SalesmanRoute[], isolatio
     return penalty + deviation * 2;
   }, 0);
   
-  // Add HEAVY penalty for STRICT isolation violations
-  const violations = findAllIsolationViolations(solution, isolationDistance);
-  const isolationPenalty = violations.length * 500; // VERY heavy penalty for violations
+  // Add HEAVY penalty for DUAL constraint violations
+  const isolationViolations = findAllIsolationViolations(solution, isolationDistance);
+  const intraBeatViolations = findAllIntraBeatViolations(solution, maxIntraBeatDistance);
   
-  return totalDistance + routeCountPenalty + balancePenalty + isolationPenalty;
+  const isolationPenalty = isolationViolations.length * 1000; // Very heavy penalty for isolation violations
+  const intraBeatPenalty = intraBeatViolations.length * 500; // Heavy penalty for intra-beat violations
+  
+  return totalDistance + routeCountPenalty + balancePenalty + isolationPenalty + intraBeatPenalty;
 }
 
-function createStrictIsolationAwareNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig, isolationDistance: number): SalesmanRoute[] {
+function createDualConstraintAwareNeighborSolution(solution: SalesmanRoute[], config: ClusteringConfig, isolationDistance: number, maxIntraBeatDistance: number): SalesmanRoute[] {
   const newSolution = JSON.parse(JSON.stringify(solution));
   
-  // STRICT isolation-aware operations - choose one randomly
+  // DUAL constraint-aware operations - choose one randomly
   const operations = [
-    () => swapAdjacentStopsWithStrictIsolationCheck(newSolution, isolationDistance),
-    () => reverseSmallSegmentWithStrictIsolationCheck(newSolution, isolationDistance),
-    () => moveCustomerToNearbyRouteWithStrictIsolationCheck(newSolution, config, isolationDistance)
+    () => swapAdjacentStopsWithDualConstraintCheck(newSolution, isolationDistance, maxIntraBeatDistance),
+    () => reverseSmallSegmentWithDualConstraintCheck(newSolution, isolationDistance, maxIntraBeatDistance),
+    () => moveCustomerToNearbyRouteWithDualConstraintCheck(newSolution, config, isolationDistance, maxIntraBeatDistance)
   ];
   
   // Apply one random operation
@@ -439,7 +462,7 @@ function createStrictIsolationAwareNeighborSolution(solution: SalesmanRoute[], c
   return newSolution;
 }
 
-function swapAdjacentStopsWithStrictIsolationCheck(solution: SalesmanRoute[], isolationDistance: number): void {
+function swapAdjacentStopsWithDualConstraintCheck(solution: SalesmanRoute[], isolationDistance: number, maxIntraBeatDistance: number): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -449,7 +472,7 @@ function swapAdjacentStopsWithStrictIsolationCheck(solution: SalesmanRoute[], is
   
   const i = Math.floor(Math.random() * (route.stops.length - 1));
   
-  // Check if swap would create STRICT isolation violations
+  // Check if swap would create DUAL constraint violations
   const stop1 = route.stops[i];
   const stop2 = route.stops[i + 1];
   
@@ -457,8 +480,13 @@ function swapAdjacentStopsWithStrictIsolationCheck(solution: SalesmanRoute[], is
   [route.stops[i], route.stops[i + 1]] = [route.stops[i + 1], route.stops[i]];
   
   // Check for new violations
-  const violations = findAllIsolationViolations(solution, isolationDistance);
-  const hasNewViolations = violations.some(v => 
+  const isolationViolations = findAllIsolationViolations(solution, isolationDistance);
+  const intraBeatViolations = findAllIntraBeatViolations(solution, maxIntraBeatDistance);
+  
+  const hasNewViolations = isolationViolations.some(v => 
+    v.customer1.customerId === stop1.customerId || v.customer1.customerId === stop2.customerId ||
+    v.customer2.customerId === stop1.customerId || v.customer2.customerId === stop2.customerId
+  ) || intraBeatViolations.some(v => 
     v.customer1.customerId === stop1.customerId || v.customer1.customerId === stop2.customerId ||
     v.customer2.customerId === stop1.customerId || v.customer2.customerId === stop2.customerId
   );
@@ -469,7 +497,7 @@ function swapAdjacentStopsWithStrictIsolationCheck(solution: SalesmanRoute[], is
   }
 }
 
-function reverseSmallSegmentWithStrictIsolationCheck(solution: SalesmanRoute[], isolationDistance: number): void {
+function reverseSmallSegmentWithDualConstraintCheck(solution: SalesmanRoute[], isolationDistance: number, maxIntraBeatDistance: number): void {
   if (solution.length === 0) return;
   
   const routeIndex = Math.floor(Math.random() * solution.length);
@@ -486,8 +514,14 @@ function reverseSmallSegmentWithStrictIsolationCheck(solution: SalesmanRoute[], 
   route.stops.splice(start, length, ...segment);
   
   // Check for new violations
-  const violations = findAllIsolationViolations(solution, isolationDistance);
-  const hasNewViolations = violations.some(v => 
+  const isolationViolations = findAllIsolationViolations(solution, isolationDistance);
+  const intraBeatViolations = findAllIntraBeatViolations(solution, maxIntraBeatDistance);
+  
+  const hasNewViolations = isolationViolations.some(v => 
+    originalSegment.some(stop => 
+      v.customer1.customerId === stop.customerId || v.customer2.customerId === stop.customerId
+    )
+  ) || intraBeatViolations.some(v => 
     originalSegment.some(stop => 
       v.customer1.customerId === stop.customerId || v.customer2.customerId === stop.customerId
     )
@@ -499,7 +533,7 @@ function reverseSmallSegmentWithStrictIsolationCheck(solution: SalesmanRoute[], 
   }
 }
 
-function moveCustomerToNearbyRouteWithStrictIsolationCheck(solution: SalesmanRoute[], config: ClusteringConfig, isolationDistance: number): void {
+function moveCustomerToNearbyRouteWithDualConstraintCheck(solution: SalesmanRoute[], config: ClusteringConfig, isolationDistance: number, maxIntraBeatDistance: number): void {
   if (solution.length < 2) return;
   
   const sourceRouteIndex = Math.floor(Math.random() * solution.length);
@@ -521,8 +555,8 @@ function moveCustomerToNearbyRouteWithStrictIsolationCheck(solution: SalesmanRou
   const customerIndex = Math.floor(Math.random() * sourceRoute.stops.length);
   const customer = sourceRoute.stops[customerIndex];
   
-  // Check if move would violate STRICT isolation
-  if (canAddCustomerWithStrictIsolation(
+  // Check if move would violate DUAL constraints
+  if (canAddCustomerWithDualConstraints(
     {
       id: customer.customerId,
       latitude: customer.latitude,
@@ -532,20 +566,22 @@ function moveCustomerToNearbyRouteWithStrictIsolationCheck(solution: SalesmanRou
     },
     targetRoute,
     solution,
-    isolationDistance
+    isolationDistance,
+    maxIntraBeatDistance
   )) {
     sourceRoute.stops.splice(customerIndex, 1);
     targetRoute.stops.push(customer);
   }
 }
 
-function canAddCustomerWithStrictIsolation(
+function canAddCustomerWithDualConstraints(
   customer: ClusteredCustomer,
   targetBeat: SalesmanRoute,
   allBeats: SalesmanRoute[],
-  minDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): boolean {
-  // Check against all customers in other beats
+  // CONSTRAINT 1: Check 50m isolation with other beats
   for (const otherBeat of allBeats) {
     if (otherBeat.salesmanId === targetBeat.salesmanId) continue;
     
@@ -555,41 +591,56 @@ function canAddCustomerWithStrictIsolation(
         stop.latitude, stop.longitude
       );
       
-      if (distance < minDistance) {
-        return false; // Violation found
+      if (distance < isolationDistance) {
+        return false; // Isolation violation
       }
     }
   }
   
-  return true; // No violations
+  // CONSTRAINT 2: Check 500m max distance within the target beat
+  for (const stop of targetBeat.stops) {
+    const distance = calculateHaversineDistance(
+      customer.latitude, customer.longitude,
+      stop.latitude, stop.longitude
+    );
+    
+    if (distance > maxIntraBeatDistance) {
+      return false; // Intra-beat distance violation
+    }
+  }
+  
+  return true; // No violations found
 }
 
-function findSuitableBeatWithStrictIsolation(
+function findSuitableBeatWithDualConstraints(
   customer: ClusteredCustomer,
   routes: SalesmanRoute[],
-  minDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): SalesmanRoute | null {
   for (const route of routes) {
-    if (canAddCustomerWithStrictIsolation(customer, route, routes, minDistance)) {
+    if (canAddCustomerWithDualConstraints(customer, route, routes, isolationDistance, maxIntraBeatDistance)) {
       return route;
     }
   }
   return null;
 }
 
-function findBeatWithMinimumConflicts(
+function findBeatWithMinimumConstraintViolations(
   customer: ClusteredCustomer,
   routes: SalesmanRoute[],
-  minDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): SalesmanRoute {
   let bestBeat = routes[0];
-  let minConflicts = Infinity;
+  let minViolationScore = Infinity;
   
   for (const route of routes) {
-    let conflicts = 0;
+    let isolationViolations = 0;
+    let intraBeatViolations = 0;
     let totalViolationDistance = 0;
     
-    // Count conflicts with other beats
+    // Count isolation violations with other beats
     for (const otherRoute of routes) {
       if (otherRoute.salesmanId === route.salesmanId) continue;
       
@@ -599,18 +650,31 @@ function findBeatWithMinimumConflicts(
           stop.latitude, stop.longitude
         );
         
-        if (distance < minDistance) {
-          conflicts++;
-          totalViolationDistance += (minDistance - distance);
+        if (distance < isolationDistance) {
+          isolationViolations++;
+          totalViolationDistance += (isolationDistance - distance);
         }
       }
     }
     
-    // Prefer beats with fewer customers if conflicts are equal
-    const score = conflicts * 1000 + totalViolationDistance * 100 + route.stops.length;
+    // Count intra-beat distance violations
+    for (const stop of route.stops) {
+      const distance = calculateHaversineDistance(
+        customer.latitude, customer.longitude,
+        stop.latitude, stop.longitude
+      );
+      
+      if (distance > maxIntraBeatDistance) {
+        intraBeatViolations++;
+        totalViolationDistance += (distance - maxIntraBeatDistance);
+      }
+    }
     
-    if (score < minConflicts) {
-      minConflicts = score;
+    // Calculate violation score: prioritize isolation violations, then intra-beat violations
+    const violationScore = isolationViolations * 2000 + intraBeatViolations * 1000 + totalViolationDistance * 100 + route.stops.length;
+    
+    if (violationScore < minViolationScore) {
+      minViolationScore = violationScore;
       bestBeat = route;
     }
   }
@@ -618,14 +682,15 @@ function findBeatWithMinimumConflicts(
   return bestBeat;
 }
 
-async function applyFinalOptimizationWithStrictIsolation(
+async function applyFinalOptimizationWithDualConstraints(
   routes: SalesmanRoute[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
-  isolationDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): Promise<SalesmanRoute[]> {
-  // Apply STRICT isolation optimization
-  const optimizedRoutes = await enforceStrictIsolationSA(routes, config, isolationDistance);
+  // Apply DUAL constraint optimization
+  const optimizedRoutes = await enforceDualConstraintsSA(routes, config, isolationDistance, maxIntraBeatDistance);
   
   // Very lightweight final optimization
   optimizedRoutes.forEach((route, index) => {
@@ -646,12 +711,13 @@ async function applyFinalOptimizationWithStrictIsolation(
   }));
 }
 
-async function enforceStrictIsolationSA(
+async function enforceDualConstraintsSA(
   routes: SalesmanRoute[],
   config: ClusteringConfig,
-  isolationDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): Promise<SalesmanRoute[]> {
-  console.log(`🔧 Enforcing STRICT ${isolationDistance * 1000}m isolation between beats...`);
+  console.log(`🔧 Enforcing dual constraints: ${isolationDistance * 1000}m isolation + ${maxIntraBeatDistance * 1000}m max intra-beat...`);
   
   const MAX_ITERATIONS = 10;
   const MAX_MOVES_PER_ITERATION = 50;
@@ -659,30 +725,43 @@ async function enforceStrictIsolationSA(
   let optimizedRoutes = [...routes];
   
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-    console.log(`🔄 STRICT Isolation iteration ${iteration + 1}/${MAX_ITERATIONS}`);
+    console.log(`🔄 Dual constraint iteration ${iteration + 1}/${MAX_ITERATIONS}`);
     
-    // Find all violations
-    const violations = findAllIsolationViolations(optimizedRoutes, isolationDistance);
+    // Find all constraint violations
+    const isolationViolations = findAllIsolationViolations(optimizedRoutes, isolationDistance);
+    const intraBeatViolations = findAllIntraBeatViolations(optimizedRoutes, maxIntraBeatDistance);
     
-    if (violations.length === 0) {
-      console.log(`✅ Perfect STRICT isolation achieved after ${iteration + 1} iterations`);
+    const totalViolations = isolationViolations.length + intraBeatViolations.length;
+    
+    if (totalViolations === 0) {
+      console.log(`✅ Perfect dual constraint compliance achieved after ${iteration + 1} iterations`);
       break;
     }
     
-    console.log(`🚨 Found ${violations.length} STRICT isolation violations`);
-    
-    // Sort violations by severity (closest distances first)
-    violations.sort((a, b) => a.distance - b.distance);
+    console.log(`🚨 Found ${isolationViolations.length} isolation + ${intraBeatViolations.length} intra-beat violations`);
     
     let movesMade = 0;
-    const maxMovesThisIteration = Math.min(violations.length, MAX_MOVES_PER_ITERATION);
+    
+    // Prioritize resolving isolation violations first (more critical)
+    const prioritizedViolations = [
+      ...isolationViolations.map(v => ({ ...v, type: 'isolation', priority: 1 })),
+      ...intraBeatViolations.map(v => ({ ...v, type: 'intra-beat', priority: 2 }))
+    ].sort((a, b) => a.priority - b.priority || a.distance - b.distance);
+    
+    const maxMovesThisIteration = Math.min(prioritizedViolations.length, MAX_MOVES_PER_ITERATION);
     
     // Attempt to resolve violations by moving customers
     for (let i = 0; i < maxMovesThisIteration; i++) {
-      const violation = violations[i];
+      const violation = prioritizedViolations[i];
       
-      if (attemptViolationResolution(violation, optimizedRoutes, isolationDistance)) {
-        movesMade++;
+      if (violation.type === 'isolation') {
+        if (attemptIsolationViolationResolution(violation, optimizedRoutes, isolationDistance, maxIntraBeatDistance)) {
+          movesMade++;
+        }
+      } else {
+        if (attemptIntraBeatViolationResolution(violation, optimizedRoutes, isolationDistance, maxIntraBeatDistance)) {
+          movesMade++;
+        }
       }
     }
     
@@ -750,7 +829,50 @@ function findAllIsolationViolations(
   return violations;
 }
 
-function attemptViolationResolution(
+function findAllIntraBeatViolations(
+  routes: SalesmanRoute[],
+  maxIntraBeatDistance: number
+): Array<{
+  customer1: RouteStop;
+  customer2: RouteStop;
+  beatId: number;
+  distance: number;
+}> {
+  const violations: Array<{
+    customer1: RouteStop;
+    customer2: RouteStop;
+    beatId: number;
+    distance: number;
+  }> = [];
+  
+  // Check all customer pairs within each beat
+  for (const beat of routes) {
+    for (let i = 0; i < beat.stops.length; i++) {
+      for (let j = i + 1; j < beat.stops.length; j++) {
+        const customer1 = beat.stops[i];
+        const customer2 = beat.stops[j];
+        
+        const distance = calculateHaversineDistance(
+          customer1.latitude, customer1.longitude,
+          customer2.latitude, customer2.longitude
+        );
+        
+        if (distance > maxIntraBeatDistance) {
+          violations.push({
+            customer1,
+            customer2,
+            beatId: beat.salesmanId,
+            distance
+          });
+        }
+      }
+    }
+  }
+  
+  return violations;
+}
+
+function attemptIsolationViolationResolution(
   violation: {
     customer1: RouteStop;
     customer2: RouteStop;
@@ -759,7 +881,8 @@ function attemptViolationResolution(
     distance: number;
   },
   routes: SalesmanRoute[],
-  minDistance: number
+  isolationDistance: number,
+  maxIntraBeatDistance: number
 ): boolean {
   const { customer1, customer2, beat1Id, beat2Id } = violation;
   
@@ -777,7 +900,7 @@ function attemptViolationResolution(
   
   // Try moving customer1
   for (const alternativeBeat of sameClusterBeats) {
-    if (canAddCustomerWithStrictIsolation(
+    if (canAddCustomerWithDualConstraints(
       { 
         id: customer1.customerId, 
         latitude: customer1.latitude, 
@@ -787,7 +910,8 @@ function attemptViolationResolution(
       }, 
       alternativeBeat, 
       routes, 
-      minDistance
+      isolationDistance,
+      maxIntraBeatDistance
     )) {
       // Move customer1 to alternative beat
       const customerIndex = customer1Beat.stops.findIndex(s => s.customerId === customer1.customerId);
@@ -807,7 +931,7 @@ function attemptViolationResolution(
   );
   
   for (const alternativeBeat of customer2SameClusterBeats) {
-    if (canAddCustomerWithStrictIsolation(
+    if (canAddCustomerWithDualConstraints(
       { 
         id: customer2.customerId, 
         latitude: customer2.latitude, 
@@ -817,7 +941,8 @@ function attemptViolationResolution(
       }, 
       alternativeBeat, 
       routes, 
-      minDistance
+      isolationDistance,
+      maxIntraBeatDistance
     )) {
       // Move customer2 to alternative beat
       const customerIndex = customer2Beat.stops.findIndex(s => s.customerId === customer2.customerId);
@@ -833,30 +958,139 @@ function attemptViolationResolution(
   return false; // Could not resolve this violation
 }
 
-function generateIsolationReport(routes: SalesmanRoute[], minDistance: number): {
+function attemptIntraBeatViolationResolution(
+  violation: {
+    customer1: RouteStop;
+    customer2: RouteStop;
+    beatId: number;
+    distance: number;
+  },
+  routes: SalesmanRoute[],
+  isolationDistance: number,
+  maxIntraBeatDistance: number
+): boolean {
+  const { customer1, customer2, beatId } = violation;
+  
+  console.log(`🔧 Attempting to resolve intra-beat violation: ${customer1.customerId} ↔ ${customer2.customerId} in beat ${beatId} = ${(violation.distance * 1000).toFixed(0)}m`);
+  
+  const sourceBeat = routes.find(r => r.salesmanId === beatId);
+  if (!sourceBeat) return false;
+  
+  // Try moving customer1 to a different beat in the same cluster
+  const sameClusterBeats = routes.filter(route => 
+    route.salesmanId !== beatId && 
+    route.clusterIds.some(id => customer1.clusterId === id)
+  );
+  
+  // Try moving customer1
+  for (const alternativeBeat of sameClusterBeats) {
+    if (canAddCustomerWithDualConstraints(
+      { 
+        id: customer1.customerId, 
+        latitude: customer1.latitude, 
+        longitude: customer1.longitude, 
+        clusterId: customer1.clusterId,
+        outletName: customer1.outletName 
+      }, 
+      alternativeBeat, 
+      routes, 
+      isolationDistance,
+      maxIntraBeatDistance
+    )) {
+      // Move customer1 to alternative beat
+      const customerIndex = sourceBeat.stops.findIndex(s => s.customerId === customer1.customerId);
+      if (customerIndex !== -1) {
+        sourceBeat.stops.splice(customerIndex, 1);
+        alternativeBeat.stops.push(customer1);
+        console.log(`✅ Moved customer ${customer1.customerId} from beat ${beatId} to beat ${alternativeBeat.salesmanId}`);
+        return true;
+      }
+    }
+  }
+  
+  // Try moving customer2 if moving customer1 failed
+  for (const alternativeBeat of sameClusterBeats) {
+    if (canAddCustomerWithDualConstraints(
+      { 
+        id: customer2.customerId, 
+        latitude: customer2.latitude, 
+        longitude: customer2.longitude, 
+        clusterId: customer2.clusterId,
+        outletName: customer2.outletName 
+      }, 
+      alternativeBeat, 
+      routes, 
+      isolationDistance,
+      maxIntraBeatDistance
+    )) {
+      // Move customer2 to alternative beat
+      const customerIndex = sourceBeat.stops.findIndex(s => s.customerId === customer2.customerId);
+      if (customerIndex !== -1) {
+        sourceBeat.stops.splice(customerIndex, 1);
+        alternativeBeat.stops.push(customer2);
+        console.log(`✅ Moved customer ${customer2.customerId} from beat ${beatId} to beat ${alternativeBeat.salesmanId}`);
+        return true;
+      }
+    }
+  }
+  
+  console.log(`❌ Could not resolve intra-beat violation between ${customer1.customerId} and ${customer2.customerId}`);
+  return false;
+}
+
+function generateDualConstraintReport(routes: SalesmanRoute[], isolationDistance: number, maxIntraBeatDistance: number): {
+  isolationViolations: number;
+  intraBeatViolations: number;
   totalViolations: number;
-  violationPercentage: number;
-  averageViolationDistance: number;
-  beatPairViolations: number;
+  isolationPercentage: number;
+  intraBeatPercentage: number;
+  averageIntraBeatDistance: number;
+  maxIntraBeatDistanceFound: number;
 } {
-  const violations = findAllIsolationViolations(routes, minDistance);
-  const totalCustomerPairs = routes.reduce((total, route, i) => {
+  const isolationViolations = findAllIsolationViolations(routes, isolationDistance);
+  const intraBeatViolations = findAllIntraBeatViolations(routes, maxIntraBeatDistance);
+  
+  // Calculate total customer pairs between different beats
+  const totalInterBeatPairs = routes.reduce((total, route, i) => {
     return total + routes.slice(i + 1).reduce((pairCount, otherRoute) => {
       return pairCount + (route.stops.length * otherRoute.stops.length);
     }, 0);
   }, 0);
   
-  const averageDistance = violations.length > 0 
-    ? violations.reduce((sum, v) => sum + v.distance, 0) / violations.length 
-    : 0;
+  // Calculate total customer pairs within beats
+  const totalIntraBeatPairs = routes.reduce((total, route) => {
+    return total + (route.stops.length * (route.stops.length - 1)) / 2;
+  }, 0);
   
-  const beatPairs = new Set(violations.map(v => `${v.beat1Id}-${v.beat2Id}`)).size;
+  // Calculate average and max intra-beat distances
+  let totalIntraBeatDistance = 0;
+  let intraBeatDistanceCount = 0;
+  let maxIntraBeatDistanceFound = 0;
+  
+  routes.forEach(route => {
+    for (let i = 0; i < route.stops.length; i++) {
+      for (let j = i + 1; j < route.stops.length; j++) {
+        const distance = calculateHaversineDistance(
+          route.stops[i].latitude, route.stops[i].longitude,
+          route.stops[j].latitude, route.stops[j].longitude
+        );
+        totalIntraBeatDistance += distance;
+        intraBeatDistanceCount++;
+        maxIntraBeatDistanceFound = Math.max(maxIntraBeatDistanceFound, distance);
+      }
+    }
+  });
+  
+  const averageIntraBeatDistance = intraBeatDistanceCount > 0 ? totalIntraBeatDistance / intraBeatDistanceCount : 0;
   
   return {
-    totalViolations: violations.length,
-    violationPercentage: totalCustomerPairs > 0 ? (violations.length / totalCustomerPairs) * 100 : 0,
-    averageViolationDistance: averageDistance * 1000, // Convert to meters
-    beatPairViolations: beatPairs
+    isolationViolations: isolationViolations.length,
+    intraBeatViolations: intraBeatViolations.length,
+    totalViolations: isolationViolations.length + intraBeatViolations.length,
+    isolationPercentage: totalInterBeatPairs > 0 ? (isolationViolations.length / totalInterBeatPairs) * 100 : 0,
+    intraBeatPercentage: totalIntraBeatPairs > 0 ? (intraBeatViolations.length / totalIntraBeatPairs) * 100 : 0,
+    averageIntraBeatDistance: averageIntraBeatDistance * 1000, // Convert to meters
+    maxIntraBeatDistanceFound: maxIntraBeatDistanceFound * 1000 // Convert to meters
   };
 }
 
