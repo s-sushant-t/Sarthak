@@ -8,15 +8,18 @@ export const dbscan = async (
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting DBSCAN with strict 200m isolation for ${customers.length} customers`);
+  console.log(`Starting DBSCAN with STRICT 50m isolation for ${customers.length} customers`);
   console.log(`Target: ${config.totalClusters} clusters × ${config.beatsPerCluster} beats = ${config.totalClusters * config.beatsPerCluster} total beats`);
   
   const startTime = Date.now();
   
   try {
     const TARGET_TOTAL_BEATS = config.totalClusters * config.beatsPerCluster;
+    const STRICT_ISOLATION_DISTANCE = 0.05; // 50m minimum separation
+    
+    // CRITICAL: Track all customers to ensure no duplicates or missing outlets
     const allCustomers = [...customers];
-    const globalAssignedIds = new Set<string>();
+    const globalAssignedCustomerIds = new Set<string>();
     
     // Group customers by cluster
     const customersByCluster = customers.reduce((acc, customer) => {
@@ -27,76 +30,79 @@ export const dbscan = async (
       return acc;
     }, {} as Record<number, ClusteredCustomer[]>);
     
+    console.log('Customers by cluster:', Object.entries(customersByCluster).map(([id, custs]) => 
+      `Cluster ${id}: ${custs.length} customers`
+    ));
+    
     const routes: SalesmanRoute[] = [];
     let currentSalesmanId = 1;
     
-    // Process each cluster with strict isolation
+    // Process each cluster with STRICT isolation enforcement
     for (const [clusterId, clusterCustomers] of Object.entries(customersByCluster)) {
-      console.log(`Processing cluster ${clusterId}: ${clusterCustomers.length} customers → ${config.beatsPerCluster} beats`);
-      
       const clusterAssignedIds = new Set<string>();
       
-      // Create geographically isolated beats with 200m minimum separation
-      const clusterRoutes = await createStrictlyIsolatedBeats(
+      console.log(`Processing cluster ${clusterId} with STRICT 50m isolation`);
+      
+      // Create exactly beatsPerCluster beats with STRICT isolation
+      const clusterRoutes = await createStrictlyIsolatedBeatsDBSCAN(
         clusterCustomers,
         distributor,
         config,
         currentSalesmanId,
         Number(clusterId),
         clusterAssignedIds,
-        config.beatsPerCluster
+        config.beatsPerCluster,
+        STRICT_ISOLATION_DISTANCE
       );
       
-      // Verify assignment
-      const assignedCount = clusterRoutes.reduce((count, route) => count + route.stops.length, 0);
-      console.log(`Cluster ${clusterId}: ${assignedCount}/${clusterCustomers.length} assigned to ${clusterRoutes.length} beats`);
+      // Verify all cluster customers are assigned exactly once
+      const assignedInCluster = clusterRoutes.reduce((count, route) => count + route.stops.length, 0);
+      console.log(`Cluster ${clusterId}: ${assignedInCluster}/${clusterCustomers.length} customers assigned in ${clusterRoutes.length} beats`);
       
-      // Handle any missing customers with isolation constraints
+      // Handle any missing customers with STRICT isolation constraints
       const missingCustomers = clusterCustomers.filter(c => !clusterAssignedIds.has(c.id));
-      for (const customer of missingCustomers) {
-        const suitableBeat = findSuitableBeatWithIsolation(customer, clusterRoutes, 0.2); // 200m
-        if (suitableBeat) {
-          suitableBeat.stops.push({
-            customerId: customer.id,
-            latitude: customer.latitude,
-            longitude: customer.longitude,
-            distanceToNext: 0,
-            timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
-            clusterId: customer.clusterId,
-            outletName: customer.outletName
-          });
-          clusterAssignedIds.add(customer.id);
-        } else {
-          // Force assign to least conflicted beat if no suitable beat found
-          const targetRoute = clusterRoutes.reduce((min, route) => 
-            route.stops.length < min.stops.length ? route : min
-          );
-          targetRoute.stops.push({
-            customerId: customer.id,
-            latitude: customer.latitude,
-            longitude: customer.longitude,
-            distanceToNext: 0,
-            timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
-            clusterId: customer.clusterId,
-            outletName: customer.outletName
-          });
-          clusterAssignedIds.add(customer.id);
+      if (missingCustomers.length > 0) {
+        console.log(`Force-assigning ${missingCustomers.length} missing customers with isolation constraints`);
+        
+        for (const customer of missingCustomers) {
+          const suitableBeat = findSuitableBeatWithStrictIsolation(customer, clusterRoutes, STRICT_ISOLATION_DISTANCE);
+          let targetRoute = suitableBeat;
+          
+          if (!targetRoute) {
+            // Find beat with minimum conflicts
+            targetRoute = findBeatWithMinimumConflicts(customer, clusterRoutes, STRICT_ISOLATION_DISTANCE);
+          }
+          
+          if (targetRoute) {
+            targetRoute.stops.push({
+              customerId: customer.id,
+              latitude: customer.latitude,
+              longitude: customer.longitude,
+              distanceToNext: 0,
+              timeToNext: 0,
+              visitTime: config.customerVisitTimeMinutes,
+              clusterId: customer.clusterId,
+              outletName: customer.outletName
+            });
+            clusterAssignedIds.add(customer.id);
+            console.log(`Force-assigned customer ${customer.id} to route ${targetRoute.salesmanId}`);
+          }
         }
       }
       
-      // Add to global tracking
-      clusterAssignedIds.forEach(id => globalAssignedIds.add(id));
+      // Add cluster customers to global tracking
+      clusterAssignedIds.forEach(id => globalAssignedCustomerIds.add(id));
+      
       routes.push(...clusterRoutes);
       currentSalesmanId += clusterRoutes.length;
       
-      // Yield control
+      // Yield control between clusters
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     
-    // Apply comprehensive isolation optimization
-    const optimizedRoutes = await enforceStrictIsolation(routes, config);
+    // Apply final strict isolation optimization
+    console.log('🔧 Applying final STRICT 50m isolation optimization...');
+    const optimizedRoutes = await enforceStrictIsolationDBSCAN(routes, config, STRICT_ISOLATION_DISTANCE);
     
     // Update metrics
     optimizedRoutes.forEach(route => {
@@ -109,17 +115,17 @@ export const dbscan = async (
       salesmanId: index + 1
     }));
     
-    const isolationReport = generateIsolationReport(finalRoutes);
-    console.log('📊 Final Isolation Report:', isolationReport);
+    const isolationReport = generateIsolationReport(finalRoutes, STRICT_ISOLATION_DISTANCE);
+    console.log('📊 Final STRICT Isolation Report:', isolationReport);
     
     const finalCustomerCount = finalRoutes.reduce((count, route) => count + route.stops.length, 0);
     const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
     
     console.log(`✅ DBSCAN completed: ${finalRoutes.length} beats, ${finalCustomerCount} customers, ${totalDistance.toFixed(2)}km`);
-    console.log(`🎯 Isolation violations: ${isolationReport.totalViolations} (${isolationReport.violationPercentage.toFixed(1)}%)`);
+    console.log(`🎯 STRICT Isolation violations: ${isolationReport.totalViolations} (${isolationReport.violationPercentage.toFixed(1)}%)`);
     
     return {
-      name: `DBSCAN-Based Beat Formation (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
+      name: `DBSCAN-Based Beat Formation (${config.totalClusters} Clusters, ${finalRoutes.length} Beats, 50m Isolation)`,
       totalDistance,
       totalSalesmen: finalRoutes.length,
       processingTime: Date.now() - startTime,
@@ -132,21 +138,20 @@ export const dbscan = async (
   }
 };
 
-async function createStrictlyIsolatedBeats(
+async function createStrictlyIsolatedBeatsDBSCAN(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
   startingSalesmanId: number,
   clusterId: number,
   assignedIds: Set<string>,
-  targetBeats: number
+  targetBeats: number,
+  isolationDistance: number
 ): Promise<SalesmanRoute[]> {
   
   if (customers.length === 0) return [];
   
-  console.log(`Creating ${targetBeats} strictly isolated beats for cluster ${clusterId}`);
-  
-  const ISOLATION_DISTANCE = 0.2; // 200m minimum separation
+  console.log(`Creating ${targetBeats} STRICTLY isolated beats (50m) for cluster ${clusterId}`);
   
   // Initialize beats
   const routes: SalesmanRoute[] = [];
@@ -167,13 +172,15 @@ async function createStrictlyIsolatedBeats(
     return (a.latitude + a.longitude) - (b.latitude + b.longitude);
   });
   
-  // Assign customers using isolation-aware algorithm
+  // STRICT assignment: Only assign if NO violations
   for (const customer of sortedCustomers) {
+    if (assignedIds.has(customer.id)) continue;
+    
     let assigned = false;
     
-    // Try to find a beat where this customer can be placed without violating 200m rule
+    // Try each beat in order, assign to FIRST beat with NO violations
     for (const route of routes) {
-      if (canAddCustomerWithIsolation(customer, route, routes, ISOLATION_DISTANCE)) {
+      if (canAddCustomerWithStrictIsolation(customer, route, routes, isolationDistance)) {
         route.stops.push({
           customerId: customer.id,
           latitude: customer.latitude,
@@ -186,13 +193,14 @@ async function createStrictlyIsolatedBeats(
         });
         assignedIds.add(customer.id);
         assigned = true;
+        console.log(`✅ Assigned customer ${customer.id} to beat ${route.salesmanId} (NO violations)`);
         break;
       }
     }
     
-    // If no suitable beat found, assign to the beat with minimum conflicts
+    // If no violation-free assignment possible, assign to beat with minimum conflicts
     if (!assigned) {
-      const bestBeat = findBeatWithMinimumConflicts(customer, routes, ISOLATION_DISTANCE);
+      const bestBeat = findBeatWithMinimumConflicts(customer, routes, isolationDistance);
       bestBeat.stops.push({
         customerId: customer.id,
         latitude: customer.latitude,
@@ -204,6 +212,7 @@ async function createStrictlyIsolatedBeats(
         outletName: customer.outletName
       });
       assignedIds.add(customer.id);
+      console.log(`⚠️ Force-assigned customer ${customer.id} to beat ${bestBeat.salesmanId} (minimum conflicts)`);
     }
   }
   
@@ -212,13 +221,13 @@ async function createStrictlyIsolatedBeats(
   return routes;
 }
 
-function canAddCustomerWithIsolation(
+function canAddCustomerWithStrictIsolation(
   customer: ClusteredCustomer,
   targetBeat: SalesmanRoute,
   allBeats: SalesmanRoute[],
   minDistance: number
 ): boolean {
-  // Check against all customers in other beats
+  // Check against ALL customers in ALL other beats
   for (const otherBeat of allBeats) {
     if (otherBeat.salesmanId === targetBeat.salesmanId) continue;
     
@@ -229,12 +238,13 @@ function canAddCustomerWithIsolation(
       );
       
       if (distance < minDistance) {
-        return false; // Violation found
+        console.log(`❌ Violation: Customer ${customer.id} would be ${(distance * 1000).toFixed(0)}m from customer ${stop.customerId} in beat ${otherBeat.salesmanId}`);
+        return false; // STRICT: Any violation = rejection
       }
     }
   }
   
-  return true; // No violations
+  return true; // No violations found
 }
 
 function findBeatWithMinimumConflicts(
@@ -244,9 +254,11 @@ function findBeatWithMinimumConflicts(
 ): SalesmanRoute {
   let bestBeat = routes[0];
   let minConflicts = Infinity;
+  let minTotalViolationDistance = Infinity;
   
   for (const route of routes) {
     let conflicts = 0;
+    let totalViolationDistance = 0;
     
     // Count conflicts with other beats
     for (const otherRoute of routes) {
@@ -260,59 +272,63 @@ function findBeatWithMinimumConflicts(
         
         if (distance < minDistance) {
           conflicts++;
+          totalViolationDistance += (minDistance - distance);
         }
       }
     }
     
     // Prefer beats with fewer customers if conflicts are equal
-    const score = conflicts * 1000 + route.stops.length;
+    const score = conflicts * 1000 + totalViolationDistance * 100 + route.stops.length;
     
     if (score < minConflicts) {
       minConflicts = score;
       bestBeat = route;
+      minTotalViolationDistance = totalViolationDistance;
     }
   }
+  
+  console.log(`🔍 Best beat for customer ${customer.id}: Beat ${bestBeat.salesmanId} (${Math.floor(minConflicts / 1000)} conflicts, ${minTotalViolationDistance.toFixed(3)}km total violation)`);
   
   return bestBeat;
 }
 
-function findSuitableBeatWithIsolation(
+function findSuitableBeatWithStrictIsolation(
   customer: ClusteredCustomer,
   routes: SalesmanRoute[],
   minDistance: number
 ): SalesmanRoute | null {
   for (const route of routes) {
-    if (canAddCustomerWithIsolation(customer, route, routes, minDistance)) {
+    if (canAddCustomerWithStrictIsolation(customer, route, routes, minDistance)) {
       return route;
     }
   }
   return null;
 }
 
-async function enforceStrictIsolation(
+async function enforceStrictIsolationDBSCAN(
   routes: SalesmanRoute[],
-  config: ClusteringConfig
+  config: ClusteringConfig,
+  isolationDistance: number
 ): Promise<SalesmanRoute[]> {
-  console.log('🔧 Enforcing strict 200m isolation between beats...');
+  console.log(`🔧 Enforcing STRICT ${isolationDistance * 1000}m isolation between beats...`);
   
-  const ISOLATION_DISTANCE = 0.2; // 200m
-  const MAX_ITERATIONS = 5;
-  const MAX_MOVES_PER_ITERATION = 20;
+  const MAX_ITERATIONS = 10; // More iterations for strict enforcement
+  const MAX_MOVES_PER_ITERATION = 50; // More moves per iteration
   
   let optimizedRoutes = [...routes];
   
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-    console.log(`🔄 Isolation iteration ${iteration + 1}/${MAX_ITERATIONS}`);
+    console.log(`🔄 STRICT Isolation iteration ${iteration + 1}/${MAX_ITERATIONS}`);
     
     // Find all violations
-    const violations = findAllIsolationViolations(optimizedRoutes, ISOLATION_DISTANCE);
+    const violations = findAllIsolationViolations(optimizedRoutes, isolationDistance);
     
     if (violations.length === 0) {
-      console.log(`✅ Perfect isolation achieved after ${iteration + 1} iterations`);
+      console.log(`✅ Perfect STRICT isolation achieved after ${iteration + 1} iterations`);
       break;
     }
     
-    console.log(`🚨 Found ${violations.length} isolation violations`);
+    console.log(`🚨 Found ${violations.length} STRICT isolation violations`);
     
     // Sort violations by severity (closest distances first)
     violations.sort((a, b) => a.distance - b.distance);
@@ -324,7 +340,7 @@ async function enforceStrictIsolation(
     for (let i = 0; i < maxMovesThisIteration; i++) {
       const violation = violations[i];
       
-      if (attemptViolationResolution(violation, optimizedRoutes, ISOLATION_DISTANCE)) {
+      if (attemptViolationResolution(violation, optimizedRoutes, isolationDistance)) {
         movesMade++;
       }
     }
@@ -406,6 +422,8 @@ function attemptViolationResolution(
 ): boolean {
   const { customer1, customer2, beat1Id, beat2Id } = violation;
   
+  console.log(`🔧 Attempting to resolve violation: ${customer1.customerId} (beat ${beat1Id}) ↔ ${customer2.customerId} (beat ${beat2Id}) = ${(violation.distance * 1000).toFixed(0)}m`);
+  
   // Try moving customer1 to a different beat in the same cluster
   const customer1Beat = routes.find(r => r.salesmanId === beat1Id);
   const customer2Beat = routes.find(r => r.salesmanId === beat2Id);
@@ -420,7 +438,7 @@ function attemptViolationResolution(
   
   // Try moving customer1
   for (const alternativeBeat of sameClusterBeats) {
-    if (canAddCustomerWithIsolation(
+    if (canAddCustomerWithStrictIsolation(
       { 
         id: customer1.customerId, 
         latitude: customer1.latitude, 
@@ -437,7 +455,7 @@ function attemptViolationResolution(
       if (customerIndex !== -1) {
         customer1Beat.stops.splice(customerIndex, 1);
         alternativeBeat.stops.push(customer1);
-        console.log(`🔄 Moved customer ${customer1.customerId} from beat ${beat1Id} to beat ${alternativeBeat.salesmanId}`);
+        console.log(`✅ Moved customer ${customer1.customerId} from beat ${beat1Id} to beat ${alternativeBeat.salesmanId}`);
         return true;
       }
     }
@@ -450,7 +468,7 @@ function attemptViolationResolution(
   );
   
   for (const alternativeBeat of customer2SameClusterBeats) {
-    if (canAddCustomerWithIsolation(
+    if (canAddCustomerWithStrictIsolation(
       { 
         id: customer2.customerId, 
         latitude: customer2.latitude, 
@@ -467,22 +485,23 @@ function attemptViolationResolution(
       if (customerIndex !== -1) {
         customer2Beat.stops.splice(customerIndex, 1);
         alternativeBeat.stops.push(customer2);
-        console.log(`🔄 Moved customer ${customer2.customerId} from beat ${beat2Id} to beat ${alternativeBeat.salesmanId}`);
+        console.log(`✅ Moved customer ${customer2.customerId} from beat ${beat2Id} to beat ${alternativeBeat.salesmanId}`);
         return true;
       }
     }
   }
   
+  console.log(`❌ Could not resolve violation between ${customer1.customerId} and ${customer2.customerId}`);
   return false; // Could not resolve this violation
 }
 
-function generateIsolationReport(routes: SalesmanRoute[]): {
+function generateIsolationReport(routes: SalesmanRoute[], minDistance: number): {
   totalViolations: number;
   violationPercentage: number;
   averageViolationDistance: number;
   beatPairViolations: number;
 } {
-  const violations = findAllIsolationViolations(routes, 0.2); // 200m
+  const violations = findAllIsolationViolations(routes, minDistance);
   const totalCustomerPairs = routes.reduce((total, route, i) => {
     return total + routes.slice(i + 1).reduce((pairCount, otherRoute) => {
       return pairCount + (route.stops.length * otherRoute.stops.length);
