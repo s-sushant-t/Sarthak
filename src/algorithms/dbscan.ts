@@ -2,15 +2,17 @@ import { LocationData, ClusteredCustomer, RouteStop, SalesmanRoute, AlgorithmRes
 import { calculateHaversineDistance, calculateTravelTime } from '../utils/distanceCalculator';
 import { ClusteringConfig } from '../components/ClusteringConfiguration';
 
+const PROXIMITY_CONSTRAINT = 0.2; // 200 meters in kilometers - strict constraint
+
 export const dbscan = async (
   locationData: LocationData, 
   config: ClusteringConfig
 ): Promise<AlgorithmResult> => {
   const { distributor, customers } = locationData;
   
-  console.log(`Starting optimized DBSCAN-based beat formation with ${customers.length} total customers`);
+  console.log(`Starting proximity-constrained DBSCAN beat formation with ${customers.length} total customers`);
   console.log(`Configuration: ${config.totalClusters} clusters, ${config.beatsPerCluster} beats per cluster`);
-  console.log(`DBSCAN parameters: 200m radius, minimum ${config.minOutletsPerBeat} outlets per beat`);
+  console.log(`STRICT PROXIMITY CONSTRAINT: All outlets within 200m of each other in the same beat`);
   
   const startTime = Date.now();
   
@@ -35,18 +37,18 @@ export const dbscan = async (
     const routes: SalesmanRoute[] = [];
     let currentSalesmanId = 1;
     
-    // Process each cluster independently using optimized DBSCAN
+    // Process each cluster independently using proximity-constrained DBSCAN
     for (const clusterId of Object.keys(customersByCluster)) {
       const clusterCustomers = [...customersByCluster[Number(clusterId)]];
       const clusterSize = clusterCustomers.length;
       
-      console.log(`Processing cluster ${clusterId} with ${clusterCustomers.length} customers using optimized DBSCAN`);
+      console.log(`Processing cluster ${clusterId} with ${clusterCustomers.length} customers using proximity-constrained DBSCAN`);
       
       // CRITICAL: Track assigned customers within this cluster only
       const clusterAssignedIds = new Set<string>();
       
-      // Create DBSCAN-based beats within the cluster
-      const clusterRoutes = await createOptimizedDBSCANBeats(
+      // Create proximity-constrained DBSCAN beats within the cluster
+      const clusterRoutes = await createProximityConstrainedDBSCANBeats(
         clusterCustomers,
         distributor,
         config,
@@ -62,18 +64,16 @@ export const dbscan = async (
       if (assignedInCluster !== clusterSize) {
         console.error(`CLUSTER ${clusterId} ERROR: Expected ${clusterSize} customers, got ${assignedInCluster}`);
         
-        // Find and assign missing customers
+        // Find and assign missing customers with strict proximity constraints
         const missingCustomers = clusterCustomers.filter(c => !clusterAssignedIds.has(c.id));
         console.log(`Missing customers in cluster ${clusterId}:`, missingCustomers.map(c => c.id));
         
-        // Force assign missing customers to the route with the least customers
+        // Force assign missing customers to compatible routes only
         missingCustomers.forEach(customer => {
-          const targetRoute = clusterRoutes.reduce((min, route) => 
-            route.stops.length < min.stops.length ? route : min
-          );
+          const compatibleRoute = findStrictlyCompatibleRoute(customer, clusterRoutes, PROXIMITY_CONSTRAINT, config.maxOutletsPerBeat);
           
-          if (targetRoute && targetRoute.stops.length < config.maxOutletsPerBeat) {
-            targetRoute.stops.push({
+          if (compatibleRoute) {
+            compatibleRoute.stops.push({
               customerId: customer.id,
               latitude: customer.latitude,
               longitude: customer.longitude,
@@ -84,7 +84,30 @@ export const dbscan = async (
               outletName: customer.outletName
             });
             clusterAssignedIds.add(customer.id);
-            console.log(`Force-assigned missing customer ${customer.id} to route ${targetRoute.salesmanId}`);
+            console.log(`Force-assigned missing customer ${customer.id} to route ${compatibleRoute.salesmanId} (proximity satisfied)`);
+          } else {
+            // Create new beat for incompatible customer
+            const newRoute: SalesmanRoute = {
+              salesmanId: currentSalesmanId + clusterRoutes.length,
+              stops: [{
+                customerId: customer.id,
+                latitude: customer.latitude,
+                longitude: customer.longitude,
+                distanceToNext: 0,
+                timeToNext: 0,
+                visitTime: config.customerVisitTimeMinutes,
+                clusterId: customer.clusterId,
+                outletName: customer.outletName
+              }],
+              totalDistance: 0,
+              totalTime: 0,
+              clusterIds: [Number(clusterId)],
+              distributorLat: distributor.latitude,
+              distributorLng: distributor.longitude
+            };
+            clusterRoutes.push(newRoute);
+            clusterAssignedIds.add(customer.id);
+            console.log(`Created new proximity-constrained beat ${newRoute.salesmanId} for customer ${customer.id}`);
           }
         });
       }
@@ -95,14 +118,14 @@ export const dbscan = async (
       routes.push(...clusterRoutes);
       currentSalesmanId += clusterRoutes.length;
       
-      console.log(`Cluster ${clusterId} complete: ${clusterRoutes.length} DBSCAN-based beats created`);
+      console.log(`Cluster ${clusterId} complete: ${clusterRoutes.length} proximity-constrained DBSCAN beats created`);
       
       // Yield control to prevent blocking
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     
-    // CRITICAL: Merge undersized beats with nearest beats
-    const optimizedRoutes = await mergeUndersizedBeatsWithNearest(routes, config, distributor);
+    // CRITICAL: Apply equal distribution balancing while maintaining proximity constraints
+    const balancedRoutes = await balanceRoutesWithProximityConstraints(routes, config, distributor);
     
     // CRITICAL: Final verification - ensure ALL customers are assigned exactly once
     const finalAssignedCount = globalAssignedCustomerIds.size;
@@ -113,61 +136,70 @@ export const dbscan = async (
     if (finalAssignedCount !== totalCustomers) {
       console.error(`CRITICAL ERROR: ${totalCustomers - finalAssignedCount} customers missing from routes!`);
       
-      // Emergency assignment of missing customers
+      // Emergency assignment of missing customers with proximity constraints
       const missingCustomers = allCustomers.filter(customer => !globalAssignedCustomerIds.has(customer.id));
       console.error('Missing customers:', missingCustomers.map(c => c.id));
       
       missingCustomers.forEach(customer => {
-        // Find a route in the same cluster with space
-        const sameClusterRoutes = optimizedRoutes.filter(route => 
-          route.clusterIds.includes(customer.clusterId) && 
-          route.stops.length < config.maxOutletsPerBeat
+        // Find a compatible route in the same cluster
+        const sameClusterRoutes = balancedRoutes.filter(route => 
+          route.clusterIds.includes(customer.clusterId)
         );
         
-        let targetRoute = sameClusterRoutes[0];
+        const compatibleRoute = findStrictlyCompatibleRoute(customer, sameClusterRoutes, PROXIMITY_CONSTRAINT, config.maxOutletsPerBeat);
         
-        if (!targetRoute) {
-          // Create emergency route if no space in existing routes
-          targetRoute = {
-            salesmanId: optimizedRoutes.length + 1,
-            stops: [],
+        if (compatibleRoute) {
+          compatibleRoute.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: config.customerVisitTimeMinutes,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          globalAssignedCustomerIds.add(customer.id);
+          console.log(`Emergency assigned customer ${customer.id} to route ${compatibleRoute.salesmanId} (proximity satisfied)`);
+        } else {
+          // Create emergency route for incompatible customer
+          const emergencyRoute: SalesmanRoute = {
+            salesmanId: balancedRoutes.length + 1,
+            stops: [{
+              customerId: customer.id,
+              latitude: customer.latitude,
+              longitude: customer.longitude,
+              distanceToNext: 0,
+              timeToNext: 0,
+              visitTime: config.customerVisitTimeMinutes,
+              clusterId: customer.clusterId,
+              outletName: customer.outletName
+            }],
             totalDistance: 0,
             totalTime: 0,
             clusterIds: [customer.clusterId],
             distributorLat: distributor.latitude,
             distributorLng: distributor.longitude
           };
-          optimizedRoutes.push(targetRoute);
+          balancedRoutes.push(emergencyRoute);
+          globalAssignedCustomerIds.add(customer.id);
+          console.log(`Created emergency proximity-constrained beat for customer ${customer.id}`);
         }
-        
-        targetRoute.stops.push({
-          customerId: customer.id,
-          latitude: customer.latitude,
-          longitude: customer.longitude,
-          distanceToNext: 0,
-          timeToNext: 0,
-          visitTime: config.customerVisitTimeMinutes,
-          clusterId: customer.clusterId,
-          outletName: customer.outletName
-        });
-        
-        globalAssignedCustomerIds.add(customer.id);
-        console.log(`Emergency assigned customer ${customer.id} to route ${targetRoute.salesmanId}`);
       });
     }
     
     // Update route metrics for all routes
-    optimizedRoutes.forEach(route => {
+    balancedRoutes.forEach(route => {
       updateRouteMetrics(route, distributor, config);
     });
     
     // Reassign beat IDs sequentially
-    const finalRoutes = optimizedRoutes.map((route, index) => ({
+    const finalRoutes = balancedRoutes.map((route, index) => ({
       ...route,
       salesmanId: index + 1
     }));
     
-    // FINAL verification
+    // FINAL verification and proximity validation
     const finalCustomerCount = finalRoutes.reduce((count, route) => count + route.stops.length, 0);
     const uniqueCustomerIds = new Set(finalRoutes.flatMap(route => route.stops.map(stop => stop.customerId)));
     
@@ -176,6 +208,10 @@ export const dbscan = async (
     console.log(`- Unique customers: ${uniqueCustomerIds.size}`);
     console.log(`- Expected customers: ${totalCustomers}`);
     console.log(`- Total beats created: ${finalRoutes.length}`);
+    
+    // Validate strict proximity constraints
+    const proximityViolations = validateStrictProximityConstraints(finalRoutes, PROXIMITY_CONSTRAINT);
+    console.log(`- Proximity constraint violations: ${proximityViolations}`);
     
     // Report beats per cluster
     const beatsByCluster = finalRoutes.reduce((acc, route) => {
@@ -193,11 +229,11 @@ export const dbscan = async (
       console.error(`Expected: ${totalCustomers}, Got: ${finalCustomerCount}, Unique: ${uniqueCustomerIds.size}`);
     }
     
-    // Calculate total distance
+    // Calculate total distance (not optimized, just for reporting)
     const totalDistance = finalRoutes.reduce((total, route) => total + route.totalDistance, 0);
     
     return {
-      name: `DBSCAN-Based Beat Formation (${config.totalClusters} Clusters, ${finalRoutes.length} Beats)`,
+      name: `Proximity-Constrained DBSCAN Beat Formation (${config.totalClusters} Clusters, ${finalRoutes.length} Beats, 200m Strict Constraint)`,
       totalDistance,
       totalSalesmen: finalRoutes.length,
       processingTime: Date.now() - startTime,
@@ -205,12 +241,12 @@ export const dbscan = async (
     };
     
   } catch (error) {
-    console.error('DBSCAN algorithm failed:', error);
+    console.error('Proximity-constrained DBSCAN algorithm failed:', error);
     throw error; // Re-throw to let the caller handle fallback
   }
 };
 
-async function createOptimizedDBSCANBeats(
+async function createProximityConstrainedDBSCANBeats(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
@@ -220,59 +256,78 @@ async function createOptimizedDBSCANBeats(
 ): Promise<SalesmanRoute[]> {
   if (customers.length === 0) return [];
   
-  console.log(`Creating optimized DBSCAN-based beats for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`Creating proximity-constrained DBSCAN beats for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`STRICT CONSTRAINT: All outlets within ${PROXIMITY_CONSTRAINT * 1000}m of each other`);
   
   const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
   
-  // Optimized DBSCAN parameters - Changed from 0.5 to 0.2 (500m to 200m)
-  const EPS = 0.2; // 200 meters in kilometers
-  const MIN_PTS = Math.max(2, Math.floor(config.minOutletsPerBeat * 0.3)); // More flexible minimum
+  // DBSCAN parameters optimized for 200m proximity constraint
+  const EPS = PROXIMITY_CONSTRAINT; // 200 meters exactly
+  const MIN_PTS = 2; // Minimum 2 points to form a cluster
   
   // Create a working copy of customers for this cluster
   const remainingCustomers = [...customers];
   
-  // Apply fast DBSCAN clustering to find dense groups
-  const dbscanClusters = await performFastDBSCAN(remainingCustomers, EPS, MIN_PTS);
+  // Apply strict proximity DBSCAN clustering
+  const dbscanClusters = await performStrictProximityDBSCAN(remainingCustomers, EPS, MIN_PTS);
   
-  console.log(`Fast DBSCAN found ${dbscanClusters.length} dense clusters in cluster ${clusterId}`);
+  console.log(`Strict proximity DBSCAN found ${dbscanClusters.length} valid clusters in cluster ${clusterId}`);
   
-  // Process each DBSCAN cluster to create beats
+  // Process each DBSCAN cluster to create beats with equal distribution
+  const targetBeatsPerCluster = Math.ceil(customers.length / ((config.minOutletsPerBeat + config.maxOutletsPerBeat) / 2));
+  
   for (let index = 0; index < dbscanClusters.length; index++) {
     const dbscanCluster = dbscanClusters[index];
     console.log(`Processing DBSCAN cluster ${index} with ${dbscanCluster.length} customers`);
     
-    // If the DBSCAN cluster is too large, split it into multiple beats
+    // Ensure equal distribution: split large clusters, merge small ones
     if (dbscanCluster.length > config.maxOutletsPerBeat) {
-      const subBeats = splitLargeClusterEfficiently(dbscanCluster, config.maxOutletsPerBeat);
+      const subBeats = splitClusterWithProximityConstraint(dbscanCluster, config.maxOutletsPerBeat, PROXIMITY_CONSTRAINT);
       subBeats.forEach(subBeat => {
-        const route = createRouteFromCustomers(subBeat, salesmanId++, clusterId, distributor, config, assignedIds);
+        const route = createRouteFromCustomersWithValidation(subBeat, salesmanId++, clusterId, distributor, config, assignedIds, PROXIMITY_CONSTRAINT);
         if (route) routes.push(route);
       });
-    } else if (dbscanCluster.length >= 1) { // Accept any size cluster
+    } else if (dbscanCluster.length >= config.minOutletsPerBeat) {
       // Create a single beat from this DBSCAN cluster
-      const route = createRouteFromCustomers(dbscanCluster, salesmanId++, clusterId, distributor, config, assignedIds);
+      const route = createRouteFromCustomersWithValidation(dbscanCluster, salesmanId++, clusterId, distributor, config, assignedIds, PROXIMITY_CONSTRAINT);
+      if (route) routes.push(route);
+    } else {
+      // Small cluster - try to merge with nearby clusters or create standalone beat
+      const route = createRouteFromCustomersWithValidation(dbscanCluster, salesmanId++, clusterId, distributor, config, assignedIds, PROXIMITY_CONSTRAINT);
       if (route) routes.push(route);
     }
     
     // Yield control periodically
-    if (index % 10 === 0) {
+    if (index % 5 === 0) {
       await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
   
-  // Handle any remaining unassigned customers efficiently
+  // Handle any remaining unassigned customers with strict proximity constraints
   const unassignedCustomers = remainingCustomers.filter(c => !assignedIds.has(c.id));
   if (unassignedCustomers.length > 0) {
-    console.log(`Handling ${unassignedCustomers.length} unassigned customers in cluster ${clusterId}`);
+    console.log(`Handling ${unassignedCustomers.length} unassigned customers in cluster ${clusterId} with proximity constraints`);
     
-    // Group remaining customers into beats efficiently
+    // Group remaining customers into proximity-constrained beats
     while (unassignedCustomers.length > 0) {
-      const batchSize = Math.min(config.maxOutletsPerBeat, unassignedCustomers.length);
-      const batch = unassignedCustomers.splice(0, batchSize);
+      const proximityGroup = buildProximityConstrainedGroup(unassignedCustomers, PROXIMITY_CONSTRAINT, config.maxOutletsPerBeat);
       
-      const route = createRouteFromCustomers(batch, salesmanId++, clusterId, distributor, config, assignedIds);
-      if (route) routes.push(route);
+      if (proximityGroup.length > 0) {
+        const route = createRouteFromCustomersWithValidation(proximityGroup, salesmanId++, clusterId, distributor, config, assignedIds, PROXIMITY_CONSTRAINT);
+        if (route) routes.push(route);
+        
+        // Remove assigned customers from unassigned list
+        proximityGroup.forEach(customer => {
+          const index = unassignedCustomers.findIndex(c => c.id === customer.id);
+          if (index !== -1) unassignedCustomers.splice(index, 1);
+        });
+      } else {
+        // If no proximity group can be formed, create individual beats
+        const customer = unassignedCustomers.shift()!;
+        const route = createRouteFromCustomersWithValidation([customer], salesmanId++, clusterId, distributor, config, assignedIds, PROXIMITY_CONSTRAINT);
+        if (route) routes.push(route);
+      }
       
       // Yield control
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -282,113 +337,57 @@ async function createOptimizedDBSCANBeats(
   return routes;
 }
 
-async function mergeUndersizedBeatsWithNearest(
+async function balanceRoutesWithProximityConstraints(
   routes: SalesmanRoute[],
   config: ClusteringConfig,
   distributor: { latitude: number; longitude: number }
 ): Promise<SalesmanRoute[]> {
-  console.log('Merging undersized beats with nearest beats...');
+  console.log('Balancing routes for equal distribution while maintaining proximity constraints...');
   
-  const optimizedRoutes = [...routes];
-  let mergesMade = true;
-  let iterations = 0;
-  const maxIterations = 10;
+  const balancedRoutes = [...routes];
+  const targetSize = Math.ceil(balancedRoutes.reduce((sum, route) => sum + route.stops.length, 0) / balancedRoutes.length);
   
-  while (mergesMade && iterations < maxIterations) {
-    mergesMade = false;
-    iterations++;
+  console.log(`Target size per beat: ${targetSize} outlets`);
+  
+  // Identify oversized and undersized routes
+  const oversizedRoutes = balancedRoutes.filter(r => r.stops.length > config.maxOutletsPerBeat);
+  const undersizedRoutes = balancedRoutes.filter(r => r.stops.length < config.minOutletsPerBeat);
+  
+  console.log(`Found ${oversizedRoutes.length} oversized routes and ${undersizedRoutes.length} undersized routes`);
+  
+  // Try to balance by moving customers between compatible routes
+  for (const oversizedRoute of oversizedRoutes) {
+    const excess = oversizedRoute.stops.length - config.maxOutletsPerBeat;
     
-    // Find undersized beats
-    const undersizedBeats = optimizedRoutes.filter(route => 
-      route.stops.length < config.minOutletsPerBeat
-    );
-    
-    console.log(`Iteration ${iterations}: Found ${undersizedBeats.length} undersized beats`);
-    
-    for (const undersizedBeat of undersizedBeats) {
-      // Find the nearest beat that can accommodate the merge
-      let nearestBeat: SalesmanRoute | null = null;
-      let minDistance = Infinity;
+    if (excess > 0) {
+      // Find customers that can be moved while maintaining proximity in the source route
+      const movableCustomers = findMovableCustomersWithProximityConstraint(oversizedRoute, excess, PROXIMITY_CONSTRAINT);
       
-      // Calculate centroid of undersized beat
-      const undersizedCentroid = calculateBeatCentroid(undersizedBeat);
-      
-      for (const candidateBeat of optimizedRoutes) {
-        if (candidateBeat.salesmanId === undersizedBeat.salesmanId) continue;
+      for (const customer of movableCustomers) {
+        // Find a compatible undersized route in the same cluster
+        const compatibleRoute = undersizedRoutes.find(route => 
+          route.clusterIds.some(id => oversizedRoute.clusterIds.includes(id)) &&
+          route.stops.length < config.maxOutletsPerBeat &&
+          canAddCustomerWithProximityConstraint(route, customer, PROXIMITY_CONSTRAINT)
+        );
         
-        // Check if merge is possible (same cluster and size constraints)
-        const canMerge = candidateBeat.clusterIds.some(id => undersizedBeat.clusterIds.includes(id)) &&
-                        (candidateBeat.stops.length + undersizedBeat.stops.length <= config.maxOutletsPerBeat);
-        
-        if (canMerge) {
-          const candidateCentroid = calculateBeatCentroid(candidateBeat);
-          const distance = calculateHaversineDistance(
-            undersizedCentroid.latitude, undersizedCentroid.longitude,
-            candidateCentroid.latitude, candidateCentroid.longitude
-          );
-          
-          if (distance < minDistance) {
-            minDistance = distance;
-            nearestBeat = candidateBeat;
+        if (compatibleRoute) {
+          // Move customer
+          const customerIndex = oversizedRoute.stops.findIndex(stop => stop.customerId === customer.id);
+          if (customerIndex !== -1) {
+            const stop = oversizedRoute.stops.splice(customerIndex, 1)[0];
+            compatibleRoute.stops.push(stop);
+            console.log(`Moved customer ${customer.id} from beat ${oversizedRoute.salesmanId} to beat ${compatibleRoute.salesmanId} (proximity maintained)`);
           }
         }
       }
-      
-      // Perform merge if nearest beat found
-      if (nearestBeat) {
-        console.log(`Merging beat ${undersizedBeat.salesmanId} (${undersizedBeat.stops.length} stops) with beat ${nearestBeat.salesmanId} (${nearestBeat.stops.length} stops)`);
-        
-        // Add all stops from undersized beat to nearest beat
-        nearestBeat.stops.push(...undersizedBeat.stops);
-        
-        // Update cluster IDs
-        nearestBeat.clusterIds = [...new Set([...nearestBeat.clusterIds, ...undersizedBeat.clusterIds])];
-        
-        // Remove undersized beat from routes
-        const undersizedIndex = optimizedRoutes.findIndex(r => r.salesmanId === undersizedBeat.salesmanId);
-        if (undersizedIndex !== -1) {
-          optimizedRoutes.splice(undersizedIndex, 1);
-          mergesMade = true;
-        }
-        
-        // Update metrics for the merged beat
-        updateRouteMetrics(nearestBeat, distributor, config);
-        
-        console.log(`Merged beat now has ${nearestBeat.stops.length} stops`);
-      }
     }
-    
-    // Yield control between iterations
-    await new Promise(resolve => setTimeout(resolve, 0));
   }
   
-  console.log(`Merge optimization completed after ${iterations} iterations`);
-  console.log(`Final number of beats: ${optimizedRoutes.length}`);
-  
-  // Report final beat sizes
-  const beatSizes = optimizedRoutes.map(route => route.stops.length);
-  const undersizedCount = beatSizes.filter(size => size < config.minOutletsPerBeat).length;
-  console.log(`Beat sizes: ${beatSizes.join(', ')}`);
-  console.log(`Remaining undersized beats: ${undersizedCount}`);
-  
-  return optimizedRoutes;
+  return balancedRoutes;
 }
 
-function calculateBeatCentroid(beat: SalesmanRoute): { latitude: number; longitude: number } {
-  if (beat.stops.length === 0) {
-    return { latitude: beat.distributorLat, longitude: beat.distributorLng };
-  }
-  
-  const totalLat = beat.stops.reduce((sum, stop) => sum + stop.latitude, 0);
-  const totalLng = beat.stops.reduce((sum, stop) => sum + stop.longitude, 0);
-  
-  return {
-    latitude: totalLat / beat.stops.length,
-    longitude: totalLng / beat.stops.length
-  };
-}
-
-async function performFastDBSCAN(
+async function performStrictProximityDBSCAN(
   customers: ClusteredCustomer[],
   eps: number,
   minPts: number
@@ -397,13 +396,7 @@ async function performFastDBSCAN(
   const visited = new Set<string>();
   const processed = new Set<string>();
   
-  // Pre-compute distance matrix for small datasets, use spatial indexing for large ones
-  const useDistanceMatrix = customers.length <= 100;
-  let distanceMatrix: number[][] = [];
-  
-  if (useDistanceMatrix) {
-    distanceMatrix = precomputeDistanceMatrix(customers);
-  }
+  console.log(`Performing strict proximity DBSCAN with eps=${eps * 1000}m, minPts=${minPts}`);
   
   for (let i = 0; i < customers.length; i++) {
     const customer = customers[i];
@@ -411,80 +404,52 @@ async function performFastDBSCAN(
     if (visited.has(customer.id) || processed.has(customer.id)) continue;
     
     visited.add(customer.id);
-    const neighbors = useDistanceMatrix 
-      ? getNeighborsFromMatrix(i, customers, distanceMatrix, eps, processed)
-      : getNeighborsFast(customer, customers, eps, processed);
+    const neighbors = getStrictProximityNeighbors(customer, customers, eps, processed);
     
     if (neighbors.length < minPts) {
       // Mark as noise but continue
       continue;
     } else {
       const cluster: ClusteredCustomer[] = [];
-      expandClusterFast(customer, neighbors, cluster, visited, customers, eps, minPts, processed, useDistanceMatrix, distanceMatrix);
-      if (cluster.length > 0) {
+      expandStrictProximityCluster(customer, neighbors, cluster, visited, customers, eps, minPts, processed);
+      
+      // Validate that the entire cluster satisfies strict proximity constraints
+      if (cluster.length > 0 && validateClusterStrictProximity(cluster, eps)) {
         clusters.push(cluster);
         // Mark all cluster members as processed
         cluster.forEach(c => processed.add(c.id));
+      } else {
+        console.warn(`Rejected cluster of ${cluster.length} customers due to proximity constraint violations`);
+        // Unmark customers so they can be processed individually
+        cluster.forEach(c => {
+          visited.delete(c.id);
+          processed.delete(c.id);
+        });
       }
     }
     
-    // Yield control every 50 customers
-    if (i % 50 === 0) {
-      // Use setTimeout with 0 delay to yield control
+    // Yield control every 25 customers
+    if (i % 25 === 0) {
       await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
   
-  // Handle remaining unprocessed customers efficiently
+  // Handle remaining unprocessed customers as individual clusters
   const unprocessedCustomers = customers.filter(c => !processed.has(c.id));
   if (unprocessedCustomers.length > 0) {
-    // Group remaining customers by proximity
-    const remainingClusters = groupRemainingCustomersEfficiently(unprocessedCustomers, eps);
-    clusters.push(...remainingClusters);
+    console.log(`Creating individual clusters for ${unprocessedCustomers.length} unprocessed customers`);
+    unprocessedCustomers.forEach(customer => {
+      clusters.push([customer]);
+      processed.add(customer.id);
+    });
   }
+  
+  console.log(`Strict proximity DBSCAN completed: ${clusters.length} valid clusters created`);
   
   return clusters;
 }
 
-function precomputeDistanceMatrix(customers: ClusteredCustomer[]): number[][] {
-  const n = customers.length;
-  const matrix: number[][] = Array(n).fill(0).map(() => Array(n).fill(0));
-  
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const distance = calculateHaversineDistance(
-        customers[i].latitude, customers[i].longitude,
-        customers[j].latitude, customers[j].longitude
-      );
-      matrix[i][j] = distance;
-      matrix[j][i] = distance;
-    }
-  }
-  
-  return matrix;
-}
-
-function getNeighborsFromMatrix(
-  customerIndex: number,
-  customers: ClusteredCustomer[],
-  distanceMatrix: number[][],
-  eps: number,
-  processed: Set<string>
-): ClusteredCustomer[] {
-  const neighbors: ClusteredCustomer[] = [];
-  
-  for (let i = 0; i < customers.length; i++) {
-    if (i !== customerIndex && !processed.has(customers[i].id)) {
-      if (distanceMatrix[customerIndex][i] <= eps) {
-        neighbors.push(customers[i]);
-      }
-    }
-  }
-  
-  return neighbors;
-}
-
-function getNeighborsFast(
+function getStrictProximityNeighbors(
   customer: ClusteredCustomer,
   customers: ClusteredCustomer[],
   eps: number,
@@ -492,24 +457,15 @@ function getNeighborsFast(
 ): ClusteredCustomer[] {
   const neighbors: ClusteredCustomer[] = [];
   
-  // Use spatial filtering to reduce distance calculations
-  const latRange = eps / 111; // Approximate degrees per km for latitude
-  const lngRange = eps / (111 * Math.cos(customer.latitude * Math.PI / 180)); // Adjust for longitude
-  
   for (const other of customers) {
     if (customer.id !== other.id && !processed.has(other.id)) {
-      // Quick spatial filter
-      if (Math.abs(other.latitude - customer.latitude) <= latRange &&
-          Math.abs(other.longitude - customer.longitude) <= lngRange) {
-        
-        const distance = calculateHaversineDistance(
-          customer.latitude, customer.longitude,
-          other.latitude, other.longitude
-        );
-        
-        if (distance <= eps) {
-          neighbors.push(other);
-        }
+      const distance = calculateHaversineDistance(
+        customer.latitude, customer.longitude,
+        other.latitude, other.longitude
+      );
+      
+      if (distance <= eps) {
+        neighbors.push(other);
       }
     }
   }
@@ -517,7 +473,7 @@ function getNeighborsFast(
   return neighbors;
 }
 
-function expandClusterFast(
+function expandStrictProximityCluster(
   customer: ClusteredCustomer,
   neighbors: ClusteredCustomer[],
   cluster: ClusteredCustomer[],
@@ -525,15 +481,13 @@ function expandClusterFast(
   customers: ClusteredCustomer[],
   eps: number,
   minPts: number,
-  processed: Set<string>,
-  useDistanceMatrix: boolean,
-  distanceMatrix: number[][]
+  processed: Set<string>
 ): void {
   cluster.push(customer);
   processed.add(customer.id);
   
-  // Limit expansion to prevent excessive processing
-  const maxExpansion = Math.min(neighbors.length, 200);
+  // Limit expansion to prevent excessive processing and maintain strict proximity
+  const maxExpansion = Math.min(neighbors.length, 50);
   
   for (let i = 0; i < Math.min(neighbors.length, maxExpansion); i++) {
     const neighbor = neighbors[i];
@@ -541,89 +495,243 @@ function expandClusterFast(
     if (!visited.has(neighbor.id)) {
       visited.add(neighbor.id);
       
-      const neighborIndex = customers.findIndex(c => c.id === neighbor.id);
-      const neighborNeighbors = useDistanceMatrix && neighborIndex !== -1
-        ? getNeighborsFromMatrix(neighborIndex, customers, distanceMatrix, eps, processed)
-        : getNeighborsFast(neighbor, customers, eps, processed);
+      const neighborNeighbors = getStrictProximityNeighbors(neighbor, customers, eps, processed);
       
       if (neighborNeighbors.length >= minPts) {
-        // Add only new neighbors to prevent duplicates
+        // Only add neighbors that maintain strict proximity with ALL existing cluster members
         neighborNeighbors.forEach(nn => {
           if (!neighbors.some(existing => existing.id === nn.id)) {
-            neighbors.push(nn);
+            const maintainsProximity = cluster.every(clusterMember => {
+              const distance = calculateHaversineDistance(
+                nn.latitude, nn.longitude,
+                clusterMember.latitude, clusterMember.longitude
+              );
+              return distance <= eps;
+            });
+            
+            if (maintainsProximity) {
+              neighbors.push(nn);
+            }
           }
         });
       }
     }
     
     if (!cluster.some(c => c.id === neighbor.id) && !processed.has(neighbor.id)) {
-      cluster.push(neighbor);
-      processed.add(neighbor.id);
-    }
-  }
-}
-
-function groupRemainingCustomersEfficiently(
-  customers: ClusteredCustomer[],
-  eps: number
-): ClusteredCustomer[][] {
-  const groups: ClusteredCustomer[][] = [];
-  const remaining = [...customers];
-  
-  while (remaining.length > 0) {
-    const group = [remaining.shift()!];
-    
-    // Find nearby customers to add to this group (limited search)
-    for (let i = remaining.length - 1; i >= 0 && group.length < 50; i--) {
-      const customer = remaining[i];
-      const isNearby = group.some(groupMember => {
+      // Verify that adding this neighbor maintains strict proximity with ALL cluster members
+      const maintainsProximity = cluster.every(clusterMember => {
         const distance = calculateHaversineDistance(
-          customer.latitude, customer.longitude,
-          groupMember.latitude, groupMember.longitude
+          neighbor.latitude, neighbor.longitude,
+          clusterMember.latitude, clusterMember.longitude
         );
-        return distance <= eps * 1.5; // Allow some flexibility
+        return distance <= eps;
       });
       
-      if (isNearby) {
-        group.push(customer);
-        remaining.splice(i, 1);
+      if (maintainsProximity) {
+        cluster.push(neighbor);
+        processed.add(neighbor.id);
       }
     }
-    
-    groups.push(group);
   }
-  
-  return groups;
 }
 
-function splitLargeClusterEfficiently(
-  cluster: ClusteredCustomer[],
+function validateClusterStrictProximity(cluster: ClusteredCustomer[], eps: number): boolean {
+  // Validate that ALL pairs of customers in the cluster are within the proximity constraint
+  for (let i = 0; i < cluster.length; i++) {
+    for (let j = i + 1; j < cluster.length; j++) {
+      const distance = calculateHaversineDistance(
+        cluster[i].latitude, cluster[i].longitude,
+        cluster[j].latitude, cluster[j].longitude
+      );
+      
+      if (distance > eps) {
+        return false; // Strict proximity constraint violated
+      }
+    }
+  }
+  return true; // All pairs satisfy the constraint
+}
+
+function buildProximityConstrainedGroup(
+  customers: ClusteredCustomer[],
+  proximityConstraint: number,
   maxSize: number
+): ClusteredCustomer[] {
+  if (customers.length === 0) return [];
+  
+  const group = [customers[0]];
+  
+  // Add customers that satisfy proximity constraint with ALL existing group members
+  for (let i = 1; i < customers.length && group.length < maxSize; i++) {
+    const candidate = customers[i];
+    
+    const satisfiesProximity = group.every(groupMember => {
+      const distance = calculateHaversineDistance(
+        candidate.latitude, candidate.longitude,
+        groupMember.latitude, groupMember.longitude
+      );
+      return distance <= proximityConstraint;
+    });
+    
+    if (satisfiesProximity) {
+      group.push(candidate);
+    }
+  }
+  
+  return group;
+}
+
+function splitClusterWithProximityConstraint(
+  cluster: ClusteredCustomer[],
+  maxSize: number,
+  proximityConstraint: number
 ): ClusteredCustomer[][] {
   if (cluster.length <= maxSize) return [cluster];
   
   const subClusters: ClusteredCustomer[][] = [];
   const remaining = [...cluster];
   
-  // Simple but effective chunking
   while (remaining.length > 0) {
-    const chunkSize = Math.min(maxSize, remaining.length);
-    const chunk = remaining.splice(0, chunkSize);
-    subClusters.push(chunk);
+    const subCluster = buildProximityConstrainedGroup(remaining, proximityConstraint, maxSize);
+    
+    if (subCluster.length > 0) {
+      subClusters.push(subCluster);
+      // Remove assigned customers from remaining
+      subCluster.forEach(customer => {
+        const index = remaining.findIndex(c => c.id === customer.id);
+        if (index !== -1) remaining.splice(index, 1);
+      });
+    } else {
+      // If no group can be formed, take individual customers
+      subClusters.push([remaining.shift()!]);
+    }
   }
   
   return subClusters;
 }
 
-function createRouteFromCustomers(
+function findMovableCustomersWithProximityConstraint(
+  route: SalesmanRoute,
+  maxToMove: number,
+  proximityConstraint: number
+): { id: string; latitude: number; longitude: number }[] {
+  const movableCustomers: { id: string; latitude: number; longitude: number }[] = [];
+  
+  // Find customers that can be removed while maintaining proximity in the remaining route
+  for (let i = 0; i < route.stops.length && movableCustomers.length < maxToMove; i++) {
+    const customer = route.stops[i];
+    
+    // Check if removing this customer would still maintain proximity in the remaining route
+    const remainingStops = route.stops.filter((_, index) => index !== i);
+    
+    if (remainingStops.length <= 1 || validateStopsStrictProximity(remainingStops, proximityConstraint)) {
+      movableCustomers.push({
+        id: customer.customerId,
+        latitude: customer.latitude,
+        longitude: customer.longitude
+      });
+    }
+  }
+  
+  return movableCustomers;
+}
+
+function canAddCustomerWithProximityConstraint(
+  route: SalesmanRoute,
+  customer: { id: string; latitude: number; longitude: number },
+  proximityConstraint: number
+): boolean {
+  // Check if customer satisfies proximity constraint with ALL customers in the route
+  return route.stops.every(stop => {
+    const distance = calculateHaversineDistance(
+      customer.latitude, customer.longitude,
+      stop.latitude, stop.longitude
+    );
+    return distance <= proximityConstraint;
+  });
+}
+
+function validateStopsStrictProximity(stops: RouteStop[], proximityConstraint: number): boolean {
+  for (let i = 0; i < stops.length; i++) {
+    for (let j = i + 1; j < stops.length; j++) {
+      const distance = calculateHaversineDistance(
+        stops[i].latitude, stops[i].longitude,
+        stops[j].latitude, stops[j].longitude
+      );
+      
+      if (distance > proximityConstraint) {
+        return false; // Proximity constraint violated
+      }
+    }
+  }
+  return true; // All pairs satisfy the constraint
+}
+
+function findStrictlyCompatibleRoute(
+  customer: ClusteredCustomer,
+  routes: SalesmanRoute[],
+  proximityConstraint: number,
+  maxOutletsPerBeat: number
+): SalesmanRoute | null {
+  for (const route of routes) {
+    // Check if route has space
+    if (route.stops.length >= maxOutletsPerBeat) continue;
+    
+    // Check if customer satisfies strict proximity constraint with ALL customers in the route
+    const satisfiesProximity = route.stops.every(stop => {
+      const distance = calculateHaversineDistance(
+        customer.latitude, customer.longitude,
+        stop.latitude, stop.longitude
+      );
+      return distance <= proximityConstraint;
+    });
+    
+    if (satisfiesProximity) {
+      return route;
+    }
+  }
+  
+  return null;
+}
+
+function validateStrictProximityConstraints(routes: SalesmanRoute[], proximityConstraint: number): number {
+  let violations = 0;
+  
+  routes.forEach(route => {
+    for (let i = 0; i < route.stops.length; i++) {
+      for (let j = i + 1; j < route.stops.length; j++) {
+        const distance = calculateHaversineDistance(
+          route.stops[i].latitude, route.stops[i].longitude,
+          route.stops[j].latitude, route.stops[j].longitude
+        );
+        
+        if (distance > proximityConstraint) {
+          violations++;
+          console.error(`STRICT PROXIMITY VIOLATION in beat ${route.salesmanId}: ${distance.toFixed(3)}km > ${proximityConstraint}km between outlets ${route.stops[i].customerId} and ${route.stops[j].customerId}`);
+        }
+      }
+    }
+  });
+  
+  return violations;
+}
+
+function createRouteFromCustomersWithValidation(
   customers: ClusteredCustomer[],
   salesmanId: number,
   clusterId: number,
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
-  assignedIds: Set<string>
+  assignedIds: Set<string>,
+  proximityConstraint: number
 ): SalesmanRoute | null {
   if (customers.length === 0) return null;
+  
+  // Validate that all customers satisfy strict proximity constraint
+  if (!validateClusterStrictProximity(customers, proximityConstraint)) {
+    console.warn(`Rejected route creation: customers do not satisfy strict proximity constraint`);
+    return null;
+  }
   
   const route: SalesmanRoute = {
     salesmanId,

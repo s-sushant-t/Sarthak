@@ -71,6 +71,11 @@ const AlgorithmCard: React.FC<AlgorithmCardProps> = ({
               {new Set(result.routes.flatMap(r => r.clusterIds)).size}
             </span>
           </div>
+          {type === 'dbscan' && (
+            <div className="text-xs text-blue-600 bg-blue-50 p-2 rounded">
+              ✓ 200m proximity constraint enforced
+            </div>
+          )}
           {isCustom && improvement && (
             <div className={`text-sm ${improvement > 0 ? 'text-green-600' : 'text-red-600'}`}>
               {improvement > 0 
@@ -100,17 +105,17 @@ const AlgorithmSelector: React.FC<AlgorithmSelectorProps> = ({ results, selected
     {
       type: 'nearest-neighbor' as AlgorithmType,
       name: 'Nearest Neighbor',
-      description: 'Cluster-based approach that builds routes by selecting the closest unvisited customer within each cluster'
+      description: 'Creates beats with outlets within 200m proximity using nearest neighbor approach for equal distribution'
     },
     {
       type: 'simulated-annealing' as AlgorithmType,
       name: 'Simulated Annealing',
-      description: 'Advanced optimization technique that refines cluster-based routes through controlled randomization'
+      description: 'Advanced optimization that maintains 200m proximity constraints while optimizing beat formation through controlled randomization'
     },
     {
       type: 'dbscan' as AlgorithmType,
       name: 'DBSCAN Beat Formation',
-      description: 'Density-based clustering that forms beats of outlets within 200m radius, creating compact geographical groups'
+      description: 'Density-based clustering that strictly enforces 200m proximity constraint - no outlet is more than 200m from any other outlet in the same beat'
     }
   ];
 
@@ -134,6 +139,13 @@ const AlgorithmSelector: React.FC<AlgorithmSelectorProps> = ({ results, selected
   return (
     <div className="space-y-3">
       <h3 className="font-medium text-gray-800">Select Algorithm</h3>
+      
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+        <div className="text-sm text-yellow-800">
+          <strong>Proximity Constraint:</strong> All algorithms enforce a strict 200m proximity constraint - 
+          no outlet in a beat will be more than 200m away from any other outlet in the same beat.
+        </div>
+      </div>
       
       <div className="space-y-3">
         {algorithms.map(algo => (
@@ -164,7 +176,7 @@ const AlgorithmSelector: React.FC<AlgorithmSelectorProps> = ({ results, selected
           <AlgorithmCard
             type="custom"
             name="Custom Route"
-            description="Manually optimized cluster-based route through drag-and-drop customization"
+            description="Manually optimized proximity-constrained route through drag-and-drop customization (maintains 200m constraint)"
             result={results.custom}
             isSelected={selectedAlgorithm === 'custom'}
             onSelect={() => onSelect('custom')}
