@@ -37,14 +37,14 @@ export const dbscan = async (
     const routes: SalesmanRoute[] = [];
     let currentSalesmanId = 1;
     
-    // Process each cluster with STRICT isolation enforcement
+    // Process each cluster with GUARANTEED customer distribution and STRICT isolation
     for (const [clusterId, clusterCustomers] of Object.entries(customersByCluster)) {
       const clusterAssignedIds = new Set<string>();
       
-      console.log(`Processing cluster ${clusterId} with STRICT 50m isolation`);
+      console.log(`Processing cluster ${clusterId} with GUARANTEED distribution and STRICT 50m isolation`);
       
-      // Create exactly beatsPerCluster beats with STRICT isolation
-      const clusterRoutes = await createStrictlyIsolatedBeatsDBSCAN(
+      // Create beats with GUARANTEED customer distribution (no empty beats)
+      const clusterRoutes = await createGuaranteedDistributionBeatsDBSCAN(
         clusterCustomers,
         distributor,
         config,
@@ -138,7 +138,7 @@ export const dbscan = async (
   }
 };
 
-async function createStrictlyIsolatedBeatsDBSCAN(
+async function createGuaranteedDistributionBeatsDBSCAN(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
@@ -151,9 +151,20 @@ async function createStrictlyIsolatedBeatsDBSCAN(
   
   if (customers.length === 0) return [];
   
-  console.log(`Creating ${targetBeats} STRICTLY isolated beats (50m) for cluster ${clusterId}`);
+  console.log(`Creating ${targetBeats} beats with GUARANTEED distribution (no empty beats) for cluster ${clusterId}`);
   
-  // Initialize beats
+  // STEP 1: Calculate guaranteed distribution
+  const customersPerBeat = Math.floor(customers.length / targetBeats);
+  const extraCustomers = customers.length % targetBeats;
+  
+  console.log(`Distribution plan: ${customersPerBeat} customers per beat, ${extraCustomers} beats get +1 extra`);
+  
+  // STEP 2: Sort customers by geographical position for better spatial distribution
+  const sortedCustomers = [...customers].sort((a, b) => {
+    return (a.latitude + a.longitude) - (b.latitude + b.longitude);
+  });
+  
+  // STEP 3: Create beats and distribute customers using round-robin with isolation checks
   const routes: SalesmanRoute[] = [];
   for (let i = 0; i < targetBeats; i++) {
     routes.push({
@@ -167,21 +178,19 @@ async function createStrictlyIsolatedBeatsDBSCAN(
     });
   }
   
-  // Sort customers by geographical position for better spatial distribution
-  const sortedCustomers = [...customers].sort((a, b) => {
-    return (a.latitude + a.longitude) - (b.latitude + b.longitude);
-  });
+  // STEP 4: GUARANTEED distribution - assign customers in round-robin fashion
+  let customerIndex = 0;
+  let beatIndex = 0;
   
-  // STRICT assignment: Only assign if NO violations
-  for (const customer of sortedCustomers) {
-    if (assignedIds.has(customer.id)) continue;
-    
-    let assigned = false;
-    
-    // Try each beat in order, assign to FIRST beat with NO violations
-    for (const route of routes) {
-      if (canAddCustomerWithStrictIsolation(customer, route, routes, isolationDistance)) {
-        route.stops.push({
+  // First pass: Give each beat its guaranteed minimum customers
+  for (let round = 0; round < customersPerBeat; round++) {
+    for (let beat = 0; beat < targetBeats && customerIndex < sortedCustomers.length; beat++) {
+      const customer = sortedCustomers[customerIndex];
+      const targetRoute = routes[beat];
+      
+      // Try to assign with isolation check
+      if (canAddCustomerWithStrictIsolation(customer, targetRoute, routes, isolationDistance)) {
+        targetRoute.stops.push({
           customerId: customer.id,
           latitude: customer.latitude,
           longitude: customer.longitude,
@@ -192,14 +201,68 @@ async function createStrictlyIsolatedBeatsDBSCAN(
           outletName: customer.outletName
         });
         assignedIds.add(customer.id);
-        assigned = true;
-        console.log(`✅ Assigned customer ${customer.id} to beat ${route.salesmanId} (NO violations)`);
-        break;
+        console.log(`✅ Round ${round + 1}: Assigned customer ${customer.id} to beat ${targetRoute.salesmanId} (NO violations)`);
+        customerIndex++;
+      } else {
+        // Find alternative beat with no violations
+        let alternativeBeat = findBestAlternativeBeat(customer, routes, isolationDistance, beat);
+        
+        if (alternativeBeat) {
+          alternativeBeat.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: config.customerVisitTimeMinutes,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          assignedIds.add(customer.id);
+          console.log(`🔄 Round ${round + 1}: Assigned customer ${customer.id} to alternative beat ${alternativeBeat.salesmanId}`);
+          customerIndex++;
+        } else {
+          // Force assign to beat with minimum conflicts
+          const bestBeat = findBeatWithMinimumConflicts(customer, routes, isolationDistance);
+          bestBeat.stops.push({
+            customerId: customer.id,
+            latitude: customer.latitude,
+            longitude: customer.longitude,
+            distanceToNext: 0,
+            timeToNext: 0,
+            visitTime: config.customerVisitTimeMinutes,
+            clusterId: customer.clusterId,
+            outletName: customer.outletName
+          });
+          assignedIds.add(customer.id);
+          console.log(`⚠️ Round ${round + 1}: Force-assigned customer ${customer.id} to beat ${bestBeat.salesmanId} (minimum conflicts)`);
+          customerIndex++;
+        }
       }
     }
+  }
+  
+  // STEP 5: Distribute extra customers to first N beats
+  for (let extra = 0; extra < extraCustomers && customerIndex < sortedCustomers.length; extra++) {
+    const customer = sortedCustomers[customerIndex];
+    const targetRoute = routes[extra]; // Give extra to first N beats
     
-    // If no violation-free assignment possible, assign to beat with minimum conflicts
-    if (!assigned) {
+    // Try to assign with isolation check
+    if (canAddCustomerWithStrictIsolation(customer, targetRoute, routes, isolationDistance)) {
+      targetRoute.stops.push({
+        customerId: customer.id,
+        latitude: customer.latitude,
+        longitude: customer.longitude,
+        distanceToNext: 0,
+        timeToNext: 0,
+        visitTime: config.customerVisitTimeMinutes,
+        clusterId: customer.clusterId,
+        outletName: customer.outletName
+      });
+      assignedIds.add(customer.id);
+      console.log(`✅ Extra: Assigned customer ${customer.id} to beat ${targetRoute.salesmanId} (NO violations)`);
+    } else {
+      // Find best alternative for extra customer
       const bestBeat = findBeatWithMinimumConflicts(customer, routes, isolationDistance);
       bestBeat.stops.push({
         customerId: customer.id,
@@ -212,13 +275,58 @@ async function createStrictlyIsolatedBeatsDBSCAN(
         outletName: customer.outletName
       });
       assignedIds.add(customer.id);
-      console.log(`⚠️ Force-assigned customer ${customer.id} to beat ${bestBeat.salesmanId} (minimum conflicts)`);
+      console.log(`⚠️ Extra: Force-assigned customer ${customer.id} to beat ${bestBeat.salesmanId} (minimum conflicts)`);
+    }
+    customerIndex++;
+  }
+  
+  // STEP 6: Verify no empty beats and all customers assigned
+  const emptyBeats = routes.filter(route => route.stops.length === 0);
+  if (emptyBeats.length > 0) {
+    console.error(`❌ CRITICAL: ${emptyBeats.length} empty beats detected! This should not happen with guaranteed distribution.`);
+    
+    // Emergency redistribution from largest beats to empty beats
+    const nonEmptyBeats = routes.filter(route => route.stops.length > 0);
+    nonEmptyBeats.sort((a, b) => b.stops.length - a.stops.length); // Largest first
+    
+    for (const emptyBeat of emptyBeats) {
+      if (nonEmptyBeats.length > 0 && nonEmptyBeats[0].stops.length > 1) {
+        // Move one customer from largest beat to empty beat
+        const largestBeat = nonEmptyBeats[0];
+        const customerToMove = largestBeat.stops.pop();
+        
+        if (customerToMove) {
+          emptyBeat.stops.push(customerToMove);
+          console.log(`🚑 Emergency: Moved customer ${customerToMove.customerId} from beat ${largestBeat.salesmanId} to empty beat ${emptyBeat.salesmanId}`);
+        }
+        
+        // Re-sort after moving
+        nonEmptyBeats.sort((a, b) => b.stops.length - a.stops.length);
+      }
     }
   }
   
-  console.log(`Cluster ${clusterId}: Initial assignment complete. Beat sizes: ${routes.map(r => r.stops.length).join(', ')}`);
+  console.log(`Cluster ${clusterId}: GUARANTEED distribution complete. Beat sizes: ${routes.map(r => r.stops.length).join(', ')}`);
   
   return routes;
+}
+
+function findBestAlternativeBeat(
+  customer: ClusteredCustomer,
+  routes: SalesmanRoute[],
+  isolationDistance: number,
+  excludeBeatIndex: number
+): SalesmanRoute | null {
+  // Try all other beats to find one without violations
+  for (let i = 0; i < routes.length; i++) {
+    if (i === excludeBeatIndex) continue;
+    
+    const route = routes[i];
+    if (canAddCustomerWithStrictIsolation(customer, route, routes, isolationDistance)) {
+      return route;
+    }
+  }
+  return null;
 }
 
 function canAddCustomerWithStrictIsolation(
@@ -238,7 +346,6 @@ function canAddCustomerWithStrictIsolation(
       );
       
       if (distance < minDistance) {
-        console.log(`❌ Violation: Customer ${customer.id} would be ${(distance * 1000).toFixed(0)}m from customer ${stop.customerId} in beat ${otherBeat.salesmanId}`);
         return false; // STRICT: Any violation = rejection
       }
     }
