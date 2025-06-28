@@ -51,7 +51,7 @@ export const dbscan = async (
       const clusterAssignedIds = new Set<string>();
       
       // Create exactly beatsPerCluster beats using DBSCAN-based geographical isolation
-      const clusterRoutes = await createDBSCANBeatsWithStrictCount(
+      const clusterRoutes = await createGeographicallyIsolatedBeats(
         clusterCustomers,
         distributor,
         config,
@@ -154,13 +154,16 @@ export const dbscan = async (
       });
     }
     
+    // CRITICAL: Apply final geographical isolation enforcement between beats
+    const isolatedRoutes = await enforceInterBeatIsolation(routes, config);
+    
     // Update route metrics for all routes
-    routes.forEach(route => {
+    isolatedRoutes.forEach(route => {
       updateRouteMetrics(route, distributor, config);
     });
     
     // Reassign beat IDs sequentially
-    const finalRoutes = routes.map((route, index) => ({
+    const finalRoutes = isolatedRoutes.map((route, index) => ({
       ...route,
       salesmanId: index + 1
     }));
@@ -175,6 +178,10 @@ export const dbscan = async (
     console.log(`- Expected customers: ${totalCustomers}`);
     console.log(`- Total beats created: ${finalRoutes.length}`);
     console.log(`- Target beats: ${TARGET_TOTAL_BEATS}`);
+    
+    // Verify geographical isolation between beats
+    const isolationReport = verifyBeatIsolation(finalRoutes);
+    console.log('Beat isolation verification:', isolationReport);
     
     // Report beats per cluster
     const beatsByCluster = finalRoutes.reduce((acc, route) => {
@@ -209,7 +216,7 @@ export const dbscan = async (
   }
 };
 
-async function createDBSCANBeatsWithStrictCount(
+async function createGeographicallyIsolatedBeats(
   customers: ClusteredCustomer[],
   distributor: { latitude: number; longitude: number },
   config: ClusteringConfig,
@@ -220,16 +227,17 @@ async function createDBSCANBeatsWithStrictCount(
 ): Promise<SalesmanRoute[]> {
   if (customers.length === 0) return [];
   
-  console.log(`Creating exactly ${targetBeats} DBSCAN-based beats for cluster ${clusterId} with ${customers.length} customers`);
+  console.log(`Creating exactly ${targetBeats} geographically isolated beats for cluster ${clusterId} with ${customers.length} customers`);
   
   // Step 1: Apply DBSCAN to find geographically isolated groups within the cluster
   const EPS = 0.2; // 200 meters in kilometers
   const MIN_PTS = Math.max(2, Math.floor(config.minOutletsPerBeat * 0.3)); // Flexible minimum
+  const ISOLATION_BUFFER = 0.5; // 500 meters minimum separation between beats
   
   const dbscanGroups = await performDBSCANWithinCluster(customers, EPS, MIN_PTS);
   console.log(`DBSCAN found ${dbscanGroups.length} geographically isolated groups in cluster ${clusterId}`);
   
-  // Step 2: Create exactly targetBeats number of beats by intelligently distributing DBSCAN groups
+  // Step 2: Create exactly targetBeats number of beats using spatial partitioning
   const routes: SalesmanRoute[] = [];
   let salesmanId = startingSalesmanId;
   
@@ -246,69 +254,103 @@ async function createDBSCANBeatsWithStrictCount(
     });
   }
   
-  // Step 3: Distribute DBSCAN groups to beats ensuring geographical isolation within beats
-  const unassignedCustomers = [...customers];
+  // Step 3: Use spatial partitioning to ensure geographical isolation between beats
+  const spatiallyPartitionedBeats = await createSpatiallyPartitionedBeats(
+    customers, 
+    routes, 
+    dbscanGroups, 
+    ISOLATION_BUFFER,
+    config,
+    assignedIds
+  );
   
-  // First, assign complete DBSCAN groups to beats
-  dbscanGroups.forEach((group, groupIndex) => {
-    const targetBeatIndex = groupIndex % targetBeats;
-    const targetBeat = routes[targetBeatIndex];
-    
-    // Check if adding this group would violate geographical isolation within the beat
-    if (targetBeat.stops.length === 0 || isGeographicallyCompatible(group, targetBeat.stops, EPS)) {
-      // Add all customers from this group to the target beat
-      group.forEach(customer => {
-        if (!assignedIds.has(customer.id)) {
-          targetBeat.stops.push({
-            customerId: customer.id,
-            latitude: customer.latitude,
-            longitude: customer.longitude,
-            distanceToNext: 0,
-            timeToNext: 0,
-            visitTime: config.customerVisitTimeMinutes,
-            clusterId: customer.clusterId,
-            outletName: customer.outletName
-          });
-          assignedIds.add(customer.id);
+  console.log(`Cluster ${clusterId}: Created exactly ${spatiallyPartitionedBeats.length} geographically isolated beats`);
+  
+  // Log beat sizes and isolation metrics for verification
+  const beatSizes = spatiallyPartitionedBeats.map(route => route.stops.length);
+  console.log(`Beat sizes in cluster ${clusterId}: ${beatSizes.join(', ')}`);
+  
+  // Verify isolation between beats
+  const isolationViolations = checkBeatIsolation(spatiallyPartitionedBeats, ISOLATION_BUFFER);
+  if (isolationViolations > 0) {
+    console.warn(`Cluster ${clusterId}: ${isolationViolations} isolation violations detected`);
+  } else {
+    console.log(`Cluster ${clusterId}: All beats are geographically isolated`);
+  }
+  
+  return spatiallyPartitionedBeats;
+}
+
+async function createSpatiallyPartitionedBeats(
+  customers: ClusteredCustomer[],
+  emptyBeats: SalesmanRoute[],
+  dbscanGroups: ClusteredCustomer[][],
+  isolationBuffer: number,
+  config: ClusteringConfig,
+  assignedIds: Set<string>
+): Promise<SalesmanRoute[]> {
+  console.log(`Creating spatially partitioned beats with ${isolationBuffer}km isolation buffer`);
+  
+  // Step 1: Calculate spatial bounds of all customers
+  const bounds = calculateSpatialBounds(customers);
+  
+  // Step 2: Create spatial grid for beat assignment
+  const gridSize = Math.ceil(Math.sqrt(emptyBeats.length));
+  const spatialGrid = createSpatialGrid(bounds, gridSize);
+  
+  // Step 3: Assign DBSCAN groups to grid cells ensuring isolation
+  const groupAssignments = assignGroupsToGrid(dbscanGroups, spatialGrid, emptyBeats.length);
+  
+  // Step 4: Distribute groups to beats based on spatial assignments
+  groupAssignments.forEach((groupIndices, beatIndex) => {
+    if (beatIndex < emptyBeats.length) {
+      const targetBeat = emptyBeats[beatIndex];
+      
+      groupIndices.forEach(groupIndex => {
+        if (groupIndex < dbscanGroups.length) {
+          const group = dbscanGroups[groupIndex];
           
-          // Remove from unassigned list
-          const unassignedIndex = unassignedCustomers.findIndex(c => c.id === customer.id);
-          if (unassignedIndex !== -1) {
-            unassignedCustomers.splice(unassignedIndex, 1);
-          }
+          group.forEach(customer => {
+            if (!assignedIds.has(customer.id)) {
+              targetBeat.stops.push({
+                customerId: customer.id,
+                latitude: customer.latitude,
+                longitude: customer.longitude,
+                distanceToNext: 0,
+                timeToNext: 0,
+                visitTime: config.customerVisitTimeMinutes,
+                clusterId: customer.clusterId,
+                outletName: customer.outletName
+              });
+              assignedIds.add(customer.id);
+            }
+          });
         }
       });
-      
-      console.log(`Assigned DBSCAN group ${groupIndex} (${group.length} customers) to beat ${targetBeat.salesmanId}`);
     }
   });
   
-  // Step 4: Distribute remaining unassigned customers while maintaining geographical isolation
+  // Step 5: Handle any remaining unassigned customers
+  const unassignedCustomers = customers.filter(c => !assignedIds.has(c.id));
+  
   unassignedCustomers.forEach(customer => {
-    if (assignedIds.has(customer.id)) return;
-    
-    // Find the beat with the least customers that can accommodate this customer geographically
+    // Find the beat with minimum isolation violations
     let bestBeat: SalesmanRoute | null = null;
-    let minSize = Infinity;
+    let minViolations = Infinity;
     
-    for (const beat of routes) {
-      if (beat.stops.length < config.maxOutletsPerBeat) {
-        // Check geographical compatibility
-        if (beat.stops.length === 0 || isCustomerCompatibleWithBeat(customer, beat.stops, EPS)) {
-          if (beat.stops.length < minSize) {
-            minSize = beat.stops.length;
-            bestBeat = beat;
-          }
-        }
+    for (const beat of emptyBeats) {
+      const violations = calculateIsolationViolations(customer, beat, emptyBeats, isolationBuffer);
+      if (violations < minViolations) {
+        minViolations = violations;
+        bestBeat = beat;
       }
     }
     
-    // If no geographically compatible beat found, assign to the smallest beat anyway
+    // If no beat found without violations, assign to smallest beat
     if (!bestBeat) {
-      bestBeat = routes.reduce((min, route) => 
+      bestBeat = emptyBeats.reduce((min, route) => 
         route.stops.length < min.stops.length ? route : min
       );
-      console.warn(`Customer ${customer.id} assigned to beat ${bestBeat.salesmanId} without geographical isolation`);
     }
     
     if (bestBeat) {
@@ -326,13 +368,324 @@ async function createDBSCANBeatsWithStrictCount(
     }
   });
   
-  console.log(`Cluster ${clusterId}: Created exactly ${routes.length} beats as required`);
+  return emptyBeats;
+}
+
+function calculateSpatialBounds(customers: ClusteredCustomer[]): {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+} {
+  return {
+    minLat: Math.min(...customers.map(c => c.latitude)),
+    maxLat: Math.max(...customers.map(c => c.latitude)),
+    minLng: Math.min(...customers.map(c => c.longitude)),
+    maxLng: Math.max(...customers.map(c => c.longitude))
+  };
+}
+
+function createSpatialGrid(bounds: any, gridSize: number): {
+  cellWidth: number;
+  cellHeight: number;
+  gridSize: number;
+  bounds: any;
+} {
+  const cellWidth = (bounds.maxLng - bounds.minLng) / gridSize;
+  const cellHeight = (bounds.maxLat - bounds.minLat) / gridSize;
   
-  // Log beat sizes for verification
-  const beatSizes = routes.map(route => route.stops.length);
-  console.log(`Beat sizes in cluster ${clusterId}: ${beatSizes.join(', ')}`);
+  return {
+    cellWidth,
+    cellHeight,
+    gridSize,
+    bounds
+  };
+}
+
+function assignGroupsToGrid(
+  dbscanGroups: ClusteredCustomer[][],
+  spatialGrid: any,
+  numBeats: number
+): Map<number, number[]> {
+  const assignments = new Map<number, number[]>();
   
-  return routes;
+  // Initialize assignments for each beat
+  for (let i = 0; i < numBeats; i++) {
+    assignments.set(i, []);
+  }
+  
+  // Assign each group to a grid cell and then to a beat
+  dbscanGroups.forEach((group, groupIndex) => {
+    // Calculate centroid of the group
+    const centroid = {
+      latitude: group.reduce((sum, c) => sum + c.latitude, 0) / group.length,
+      longitude: group.reduce((sum, c) => sum + c.longitude, 0) / group.length
+    };
+    
+    // Determine grid cell
+    const cellX = Math.floor((centroid.longitude - spatialGrid.bounds.minLng) / spatialGrid.cellWidth);
+    const cellY = Math.floor((centroid.latitude - spatialGrid.bounds.minLat) / spatialGrid.cellHeight);
+    
+    // Map grid cell to beat index
+    const beatIndex = (cellY * spatialGrid.gridSize + cellX) % numBeats;
+    
+    assignments.get(beatIndex)!.push(groupIndex);
+  });
+  
+  return assignments;
+}
+
+function calculateIsolationViolations(
+  customer: ClusteredCustomer,
+  targetBeat: SalesmanRoute,
+  allBeats: SalesmanRoute[],
+  isolationBuffer: number
+): number {
+  let violations = 0;
+  
+  // Check against all other beats
+  for (const otherBeat of allBeats) {
+    if (otherBeat.salesmanId === targetBeat.salesmanId) continue;
+    
+    // Check distance to all stops in other beats
+    for (const stop of otherBeat.stops) {
+      const distance = calculateHaversineDistance(
+        customer.latitude, customer.longitude,
+        stop.latitude, stop.longitude
+      );
+      
+      if (distance < isolationBuffer) {
+        violations++;
+      }
+    }
+  }
+  
+  return violations;
+}
+
+async function enforceInterBeatIsolation(
+  routes: SalesmanRoute[],
+  config: ClusteringConfig
+): Promise<SalesmanRoute[]> {
+  console.log('Enforcing geographical isolation between all beats...');
+  
+  const ISOLATION_DISTANCE = 0.5; // 500 meters minimum separation
+  const MAX_ITERATIONS = 5;
+  
+  let isolatedRoutes = [...routes];
+  let iteration = 0;
+  
+  while (iteration < MAX_ITERATIONS) {
+    const violations = findIsolationViolations(isolatedRoutes, ISOLATION_DISTANCE);
+    
+    if (violations.length === 0) {
+      console.log(`Beat isolation achieved after ${iteration} iterations`);
+      break;
+    }
+    
+    console.log(`Iteration ${iteration + 1}: Found ${violations.length} isolation violations`);
+    
+    // Resolve violations by moving customers to less conflicted beats
+    for (const violation of violations) {
+      const { customer, fromBeatId, toBeatId, distance } = violation;
+      
+      // Find alternative beats for the customer
+      const alternativeBeats = isolatedRoutes.filter(route => 
+        route.salesmanId !== fromBeatId && 
+        route.clusterIds.some(id => customer.clusterId === id)
+      );
+      
+      if (alternativeBeats.length > 0) {
+        // Find the beat with least isolation conflicts
+        let bestBeat = alternativeBeats[0];
+        let minConflicts = Infinity;
+        
+        for (const altBeat of alternativeBeats) {
+          const conflicts = calculateBeatConflicts(customer, altBeat, isolatedRoutes, ISOLATION_DISTANCE);
+          if (conflicts < minConflicts) {
+            minConflicts = conflicts;
+            bestBeat = altBeat;
+          }
+        }
+        
+        // Move customer if it reduces conflicts
+        if (minConflicts < 1) {
+          moveCustomerBetweenBeats(customer, fromBeatId, bestBeat.salesmanId, isolatedRoutes);
+          console.log(`Moved customer ${customer.customerId} from beat ${fromBeatId} to beat ${bestBeat.salesmanId}`);
+        }
+      }
+    }
+    
+    iteration++;
+  }
+  
+  const finalViolations = findIsolationViolations(isolatedRoutes, ISOLATION_DISTANCE);
+  if (finalViolations.length > 0) {
+    console.warn(`Could not resolve all isolation violations: ${finalViolations.length} remaining`);
+  }
+  
+  return isolatedRoutes;
+}
+
+function findIsolationViolations(
+  routes: SalesmanRoute[],
+  minDistance: number
+): Array<{
+  customer: RouteStop;
+  fromBeatId: number;
+  toBeatId: number;
+  distance: number;
+}> {
+  const violations: Array<{
+    customer: RouteStop;
+    fromBeatId: number;
+    toBeatId: number;
+    distance: number;
+  }> = [];
+  
+  // Check all pairs of beats for proximity violations
+  for (let i = 0; i < routes.length; i++) {
+    for (let j = i + 1; j < routes.length; j++) {
+      const beat1 = routes[i];
+      const beat2 = routes[j];
+      
+      // Check all customers in beat1 against all customers in beat2
+      for (const customer1 of beat1.stops) {
+        for (const customer2 of beat2.stops) {
+          const distance = calculateHaversineDistance(
+            customer1.latitude, customer1.longitude,
+            customer2.latitude, customer2.longitude
+          );
+          
+          if (distance < minDistance) {
+            violations.push({
+              customer: customer1,
+              fromBeatId: beat1.salesmanId,
+              toBeatId: beat2.salesmanId,
+              distance
+            });
+          }
+        }
+      }
+    }
+  }
+  
+  return violations;
+}
+
+function calculateBeatConflicts(
+  customer: RouteStop,
+  targetBeat: SalesmanRoute,
+  allBeats: SalesmanRoute[],
+  minDistance: number
+): number {
+  let conflicts = 0;
+  
+  for (const otherBeat of allBeats) {
+    if (otherBeat.salesmanId === targetBeat.salesmanId) continue;
+    
+    for (const stop of otherBeat.stops) {
+      const distance = calculateHaversineDistance(
+        customer.latitude, customer.longitude,
+        stop.latitude, stop.longitude
+      );
+      
+      if (distance < minDistance) {
+        conflicts++;
+      }
+    }
+  }
+  
+  return conflicts;
+}
+
+function moveCustomerBetweenBeats(
+  customer: RouteStop,
+  fromBeatId: number,
+  toBeatId: number,
+  routes: SalesmanRoute[]
+): void {
+  const fromBeat = routes.find(r => r.salesmanId === fromBeatId);
+  const toBeat = routes.find(r => r.salesmanId === toBeatId);
+  
+  if (fromBeat && toBeat) {
+    // Remove from source beat
+    const customerIndex = fromBeat.stops.findIndex(s => s.customerId === customer.customerId);
+    if (customerIndex !== -1) {
+      fromBeat.stops.splice(customerIndex, 1);
+    }
+    
+    // Add to target beat
+    toBeat.stops.push(customer);
+  }
+}
+
+function checkBeatIsolation(routes: SalesmanRoute[], minDistance: number): number {
+  let violations = 0;
+  
+  for (let i = 0; i < routes.length; i++) {
+    for (let j = i + 1; j < routes.length; j++) {
+      const beat1 = routes[i];
+      const beat2 = routes[j];
+      
+      for (const stop1 of beat1.stops) {
+        for (const stop2 of beat2.stops) {
+          const distance = calculateHaversineDistance(
+            stop1.latitude, stop1.longitude,
+            stop2.latitude, stop2.longitude
+          );
+          
+          if (distance < minDistance) {
+            violations++;
+          }
+        }
+      }
+    }
+  }
+  
+  return violations;
+}
+
+function verifyBeatIsolation(routes: SalesmanRoute[]): {
+  totalViolations: number;
+  minDistanceBetweenBeats: number;
+  averageDistanceBetweenBeats: number;
+} {
+  const ISOLATION_DISTANCE = 0.5; // 500 meters
+  let violations = 0;
+  let minDistance = Infinity;
+  let totalDistance = 0;
+  let distanceCount = 0;
+  
+  for (let i = 0; i < routes.length; i++) {
+    for (let j = i + 1; j < routes.length; j++) {
+      const beat1 = routes[i];
+      const beat2 = routes[j];
+      
+      for (const stop1 of beat1.stops) {
+        for (const stop2 of beat2.stops) {
+          const distance = calculateHaversineDistance(
+            stop1.latitude, stop1.longitude,
+            stop2.latitude, stop2.longitude
+          );
+          
+          if (distance < ISOLATION_DISTANCE) {
+            violations++;
+          }
+          
+          minDistance = Math.min(minDistance, distance);
+          totalDistance += distance;
+          distanceCount++;
+        }
+      }
+    }
+  }
+  
+  return {
+    totalViolations: violations,
+    minDistanceBetweenBeats: minDistance === Infinity ? 0 : minDistance,
+    averageDistanceBetweenBeats: distanceCount > 0 ? totalDistance / distanceCount : 0
+  };
 }
 
 async function performDBSCANWithinCluster(
@@ -443,51 +796,6 @@ function expandDBSCANGroup(
       processed.add(neighbor.id);
     }
   }
-}
-
-function isGeographicallyCompatible(
-  newGroup: ClusteredCustomer[],
-  existingStops: RouteStop[],
-  maxDistance: number
-): boolean {
-  // Check if the new group can be added while maintaining geographical isolation
-  for (const newCustomer of newGroup) {
-    for (const existingStop of existingStops) {
-      const distance = calculateHaversineDistance(
-        newCustomer.latitude, newCustomer.longitude,
-        existingStop.latitude, existingStop.longitude
-      );
-      
-      // If any customer in the new group is too far from existing stops, it's not compatible
-      if (distance > maxDistance * 2) { // Allow some flexibility for beat formation
-        return false;
-      }
-    }
-  }
-  
-  return true;
-}
-
-function isCustomerCompatibleWithBeat(
-  customer: ClusteredCustomer,
-  beatStops: RouteStop[],
-  maxDistance: number
-): boolean {
-  // Check if customer can be added to beat while maintaining geographical isolation
-  if (beatStops.length === 0) return true;
-  
-  // Find the closest stop in the beat
-  let minDistance = Infinity;
-  for (const stop of beatStops) {
-    const distance = calculateHaversineDistance(
-      customer.latitude, customer.longitude,
-      stop.latitude, stop.longitude
-    );
-    minDistance = Math.min(minDistance, distance);
-  }
-  
-  // Customer is compatible if it's within reasonable distance of the beat
-  return minDistance <= maxDistance * 3; // Allow some flexibility for beat formation
 }
 
 function updateRouteMetrics(
